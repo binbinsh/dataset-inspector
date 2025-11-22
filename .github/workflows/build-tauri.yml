@@ -1,0 +1,100 @@
+name: Build LitData Viewer
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    concurrency:
+      group: build-${{ matrix.os }}-${{ github.ref_name }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            label: macOS
+            args: "--bundles dmg"
+          - os: ubuntu-24.04
+            label: Ubuntu
+            args: "--bundles appimage,deb,rpm"
+          - os: windows-latest
+            label: Windows
+            args: "--bundles msi"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system deps (Ubuntu)
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          git fetch --tags --force
+          SHA="${{ github.sha }}"
+          TAG=$(git describe --tags --exact-match "$SHA" 2>/dev/null || true)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build only
+        if: ${{ steps.tag.outputs.tag == '' }}
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: .
+          args: ${{ matrix.args }}
+
+      - name: Build & Release
+        if: ${{ steps.tag.outputs.tag != '' }}
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: .
+          args: ${{ matrix.args }}
+          tagName: ${{ steps.tag.outputs.tag }}
+          releaseName: LitData Viewer ${{ steps.tag.outputs.tag }}
+          releaseBody: See attached assets for this release.
+          releaseDraft: false
+          prerelease: false

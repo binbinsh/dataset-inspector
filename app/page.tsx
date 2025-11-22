@@ -65,7 +65,6 @@ export default function Page() {
             <div className="space-y-2">
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-2xl font-semibold text-slate-900">LitData Viewer</h1>
-                {indexMeta?.rootDir ? <Badge variant="secondary">Root: {indexMeta.rootDir}</Badge> : null}
               </div>
               <p className="text-sm text-slate-600">
                 Browse chunked .bin shards like tar files. Double-click a field to open with native apps.

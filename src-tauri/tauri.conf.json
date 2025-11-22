@@ -1,13 +1,25 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "LitData Viewer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "ai.superplanner.litdata-viewer",
   "build": {
     "beforeDevCommand": "npm run dev -- --hostname 127.0.0.1 --port 3000",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../out",
     "devUrl": "http://localhost:3000"
+  },
+  "bundle": {
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "resources": ["icons/App.icon"],
+    "targets": ["dmg", "app", "appimage", "deb", "rpm", "msi", "nsis"]
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": ["https://my.app.updater/{{target}}/{{current_version}}"],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk1REY3NUEzQjRBNkJENUQKUldSZHZhYTBvM1hmbFFwVzJ4Tjd2MXRMb0NodWw5d0lFbzdQMmdHamlJUDVTU3JFb1BoaVBmeTEK"
+    }
   },
   "app": {
     "security": {
