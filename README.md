@@ -1,0 +1,38 @@
+<p align="center">
+  <img src="src-tauri/icons/icon.png" alt="LitData Viewer Icon" width="128">
+</p>
+
+<h1 align="center">LitData Viewer</h1>
+
+<p align="center">
+  <a href="https://github.com/binbinsh/litdata-viewer/actions/workflows/tauri-build-macos.yml">
+    <img src="https://github.com/binbinsh/litdata-viewer/actions/workflows/tauri-build-macos.yml/badge.svg?branch=main&label=macOS&logo=apple&logoColor=white" alt="macOS build">
+  </a>
+  <a href="https://github.com/binbinsh/litdata-viewer/actions/workflows/tauri-build-ubuntu.yml">
+    <img src="https://github.com/binbinsh/litdata-viewer/actions/workflows/tauri-build-ubuntu.yml/badge.svg?branch=main&label=Ubuntu&logo=ubuntu&logoColor=white" alt="Ubuntu build">
+  </a>
+  <a href="https://github.com/binbinsh/litdata-viewer/actions/workflows/tauri-build-windows.yml">
+    <img src="https://github.com/binbinsh/litdata-viewer/actions/workflows/tauri-build-windows.yml/badge.svg?branch=main&label=Windows&logo=windows&logoColor=white" alt="Windows build">
+  </a>
+</p>
+
+## About
+<p align="center">
+  <img src="screenshot.png" alt="LitData Viewer preview" width="800">
+</p>
+
+LitData Viewer is a desktop UI for browsing [Lightning-AI/litData](https://github.com/Lightning-AI/litData) chunked `.bin` shards and inspecting fields.
+
+## Usage
+1. Download installers/bundles: https://github.com/binbinsh/litdata-viewer/releases
+2. Launch the app and provide an absolute path to a litdata `index.json`, or select chunk `.bin/.zst` files via **Choose**.
+3. Click a chunk to list items, then select an item to see its fields.
+4. Double-click a field (or use **Open**) to write a temp file and open with your default app.
+5. Preview pane shows text or a hex snippet; statuses/errors appear below.
+6. Report issues/feature requests: https://github.com/binbinsh/litdata-viewer/issues
+
+## Development
+- **Install deps:** `npm install` (Node 20+ recommended).
+- **Dev (web + Tauri):** `npm run tauri dev` (starts Next.js and opens the Tauri window).
+- **Build web export:** `npm run build` (outputs static site to `out/`).
+- **Build desktop app:** `npm run tauri build` (creates platform installer/bundle).
