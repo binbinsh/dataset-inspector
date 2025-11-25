@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { dirname } from "@tauri-apps/api/path";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Store } from "@tauri-apps/plugin-store";
 
@@ -54,6 +55,19 @@ async function getStore(): Promise<Store> {
 
 const isTauri = () => typeof window !== "undefined" && Boolean((window as any).__TAURI__);
 
+async function resolveDefaultDialogPath(path: string): Promise<string | undefined> {
+  const trimmed = path.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.endsWith("/") || trimmed.endsWith("\\")) return trimmed;
+  const looksLikeFile = /\.(json|bin|zst)$/i.test(trimmed);
+  if (!looksLikeFile) return trimmed;
+  try {
+    return await dirname(trimmed);
+  } catch {
+    return trimmed;
+  }
+}
+
 type State = {
   indexPath: string;
   indexMeta: IndexSummary | null;
@@ -101,6 +115,9 @@ export const useViewerStore = create<State>((set, get) => ({
       set({ error: "Tauri runtime is required for file dialogs." });
       return;
     }
+    const defaultPath =
+      (await resolveDefaultDialogPath(get().indexPath)) ||
+      (await resolveDefaultDialogPath(get().indexMeta?.rootDir ?? ""));
     const picked = await openDialog({
       title: "Select litdata index.json or chunk .bin",
       multiple: true,
@@ -109,6 +126,7 @@ export const useViewerStore = create<State>((set, get) => ({
         { name: "LitData chunk", extensions: ["bin", "zst"] },
         { name: "All supported", extensions: ["json", "bin", "zst"] },
       ],
+      ...(defaultPath ? { defaultPath } : {}),
     });
     if (Array.isArray(picked) && picked.length > 1) {
       set({ indexPath: picked[0] });
