@@ -25,14 +25,14 @@ LitData Viewer is a desktop UI for browsing [Lightning-AI/litData](https://githu
 
 ## Usage
 1. Download installers/bundles: https://github.com/binbinsh/litdata-viewer/releases
-2. Launch the app and select a litdata `index.json`, or select chunk `.bin/.zst` files via **Choose**.
-3. Click a chunk to list items, then select an item to see its fields.
-4. Double-click a field (or use **Open**) to write a temp file and open with your default app.
-5. Preview pane shows text or a hex snippet; statuses/errors appear below.
-6. Report issues/feature requests: https://github.com/binbinsh/litdata-viewer/issues
+2. Click **Choose** to select an `index.json` or chunk `.bin/.zst` file, then press **Load**.
+3. Pick a chunk → item → field; double-click a field (or hit **Open**) to write a temp file and launch it with your default app.
+4. Preview pane shows text or a hex snippet; statuses/errors appear below.
+5. Report issues/feature requests: https://github.com/binbinsh/litdata-viewer/issues
 
 ## Development
 - **Install deps:** `npm install` (Node 20+ recommended).
 - **Dev (web + Tauri):** `npm run tauri dev` (starts Next.js and opens the Tauri window).
 - **Build web export:** `npm run build` (outputs static site to `out/`).
 - **Build desktop app:** `npm run tauri build` (creates platform installer/bundle).
+

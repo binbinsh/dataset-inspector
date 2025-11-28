@@ -1,6 +1,22 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-display), "Space Grotesk", "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --color-ink: #0b1221;
+  --color-ink-muted: #475569;
+  --color-surface: #f4f7fb;
+  --color-card: #ffffff;
+  --color-accent: #0bb6a7;
+  --shadow-soft: 0 20px 60px -38px rgba(0, 0, 0, 0.3);
+  --radius-xl: 18px;
+  --radius-lg: 14px;
+}
+
+:root {
+  color: var(--color-ink);
+  background: linear-gradient(125deg, #ecfdf3 0%, #e8f7ff 60%, #f0f7ff 100%);
+}
 
 * {
   box-sizing: border-box;
@@ -8,4 +24,13 @@
 
 body {
   margin: 0;
+  font-family: var(--font-sans);
+  background-color: transparent;
+  color: var(--color-ink);
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background-color: #cffafe;
+  color: var(--color-ink);
 }

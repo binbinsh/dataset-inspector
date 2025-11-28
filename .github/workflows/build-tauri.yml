@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Ref (branch or tag) to build"
+        required: false
+        default: ""
 
 permissions:
   contents: write

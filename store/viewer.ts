@@ -1,275 +1,68 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
-import { dirname } from "@tauri-apps/api/path";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Store } from "@tauri-apps/plugin-store";
 
-type ChunkSummary = {
-  filename: string;
-  path: string;
-  chunkSize: number;
-  chunkBytes: number;
-  dim?: number | null;
-  exists: boolean;
-};
+type LoadMode =
+  | { kind: "index"; indexPath: string; requestId: number }
+  | { kind: "chunks"; paths: string[]; requestId: number };
 
-type IndexSummary = {
+type ViewerState = {
   indexPath: string;
-  rootDir: string;
-  dataFormat: string[];
-  compression?: string | null;
-  chunkSize?: number | null;
-  chunkBytes?: number | null;
-  configRaw?: Record<string, any> | null;
-  chunks: ChunkSummary[];
-};
-
-type FieldMeta = {
-  fieldIndex: number;
-  size: number;
-};
-
-type ItemMeta = {
-  itemIndex: number;
-  totalBytes: number;
-  fields: FieldMeta[];
-};
-
-type FieldPreview = {
-  previewText?: string | null;
-  hexSnippet: string;
-  guessedExt?: string | null;
-  isBinary: boolean;
-  size: number;
-};
-
-const STORE_NAME = "litdata-viewer.bin";
-const STORE_LAST_INDEX = "last_index";
-let storeInstance: Store | null = null;
-
-async function getStore(): Promise<Store> {
-  if (storeInstance) return storeInstance;
-  storeInstance = await Store.load(STORE_NAME);
-  return storeInstance;
-}
-
-const isTauri = () => typeof window !== "undefined" && Boolean((window as any).__TAURI__);
-
-async function resolveDefaultDialogPath(path: string): Promise<string | undefined> {
-  const trimmed = path.trim();
-  if (!trimmed) return undefined;
-  if (trimmed.endsWith("/") || trimmed.endsWith("\\")) return trimmed;
-  const looksLikeFile = /\.(json|bin|zst)$/i.test(trimmed);
-  if (!looksLikeFile) return trimmed;
-  try {
-    return await dirname(trimmed);
-  } catch {
-    return trimmed;
-  }
-}
-
-type State = {
-  indexPath: string;
-  indexMeta: IndexSummary | null;
-  items: ItemMeta[];
-  selectedChunk: ChunkSummary | null;
-  selectedItem: ItemMeta | null;
-  selectedField: FieldMeta | null;
-  fieldPreview: FieldPreview | null;
-  status: string | null;
-  error: string | null;
-  busy: boolean;
   chunkSelection: string[];
+  mode: LoadMode | null;
+  selectedChunkName: string | null;
+  selectedItemIndex: number | null;
+  selectedFieldIndex: number | null;
+  statusMessage: string | null;
   setIndexPath: (path: string) => void;
-  chooseIndex: () => Promise<void>;
-  loadIndex: (path?: string) => Promise<void>;
-  loadChunks: (paths: string[]) => Promise<void>;
-  selectChunk: (chunk: ChunkSummary) => Promise<void>;
-  selectItem: (item: ItemMeta) => void;
-  selectField: (field: FieldMeta) => Promise<void>;
-  openField: (field: FieldMeta, item: ItemMeta) => Promise<void>;
-  hydrate: () => Promise<void>;
+  setChunkSelection: (paths: string[]) => void;
+  triggerLoad: (mode: "index" | "chunks", payload?: string[]) => void;
+  selectChunk: (filename: string | null) => void;
+  selectItem: (idx: number | null) => void;
+  selectField: (idx: number | null) => void;
+  setStatusMessage: (message: string | null) => void;
+  clearMode: () => void;
 };
 
-export const useViewerStore = create<State>((set, get) => ({
+export const useViewerStore = create<ViewerState>((set, get) => ({
   indexPath: "",
-  indexMeta: null,
-  items: [],
-  selectedChunk: null,
-  selectedItem: null,
-  selectedField: null,
-  fieldPreview: null,
-  status: null,
-  error: null,
-  busy: false,
   chunkSelection: [],
+  mode: null,
+  selectedChunkName: null,
+  selectedItemIndex: null,
+  selectedFieldIndex: null,
+  statusMessage: null,
   setIndexPath: (path) => set({ indexPath: path }),
-  hydrate: async () => {
-    if (!isTauri()) return;
-    const store = await getStore();
-    const last = await store.get<string>(STORE_LAST_INDEX);
-    if (last) set({ indexPath: last });
-  },
-  chooseIndex: async () => {
-    if (!isTauri()) {
-      set({ error: "Tauri runtime is required for file dialogs." });
-      return;
-    }
-    const defaultPath =
-      (await resolveDefaultDialogPath(get().indexPath)) ||
-      (await resolveDefaultDialogPath(get().indexMeta?.rootDir ?? ""));
-    const picked = await openDialog({
-      title: "Select litdata index.json or chunk .bin",
-      multiple: true,
-      filters: [
-        { name: "LitData index", extensions: ["json"] },
-        { name: "LitData chunk", extensions: ["bin", "zst"] },
-        { name: "All supported", extensions: ["json", "bin", "zst"] },
-      ],
-      ...(defaultPath ? { defaultPath } : {}),
-    });
-    if (Array.isArray(picked) && picked.length > 1) {
-      set({ indexPath: picked[0] });
-      await get().loadChunks(picked);
-    } else {
-      const first = Array.isArray(picked) ? picked[0] : picked;
-      if (typeof first === "string") {
-        if (first.endsWith(".bin") || first.endsWith(".zst") || first.includes(".bin")) {
-          set({ indexPath: first });
-          await get().loadChunks([first]);
-        } else {
-          set({ indexPath: first });
-          await get().loadIndex(first);
-        }
-      }
-    }
-  },
-  loadIndex: async (path) => {
-    const indexPath = (path ?? get().indexPath).trim();
-    if (!indexPath) return;
-    if (!isTauri()) {
-      set({ error: "Tauri runtime is required to load index." });
-      return;
-    }
-    try {
-      set({ busy: true, error: null, status: null });
-      const meta = await invoke<IndexSummary>("load_index", { indexPath });
+  setChunkSelection: (paths) => set({ chunkSelection: paths }),
+  triggerLoad: (mode, payload) => {
+    const requestId = Date.now();
+    if (mode === "index") {
+      const indexPath = get().indexPath.trim();
+      if (!indexPath) return;
       set({
-        indexPath,
-        indexMeta: meta,
-        items: [],
-        selectedChunk: null,
-        selectedItem: null,
-        selectedField: null,
-        fieldPreview: null,
-        chunkSelection: [],
-        status: `Loaded ${meta.chunks.length} chunk(s)`,
+        mode: { kind: "index", indexPath, requestId },
+        selectedChunkName: null,
+        selectedItemIndex: null,
+        selectedFieldIndex: null,
       });
-      const store = await getStore();
-      await store.set(STORE_LAST_INDEX, indexPath);
-      await store.save();
-    } catch (err: any) {
-      set({ error: String(err) });
-    } finally {
-      set({ busy: false });
+      return;
     }
-  },
-  loadChunks: async (paths: string[]) => {
+    const paths = payload ?? get().chunkSelection;
     if (!paths.length) return;
-    if (!isTauri()) {
-      set({ error: "Tauri runtime is required to load chunks." });
-      return;
-    }
-    try {
-      set({ busy: true, error: null, status: null });
-      const meta = await invoke<IndexSummary>("load_chunk_list", { paths });
-      set({
-        indexPath: meta.indexPath,
-        indexMeta: meta,
-        items: [],
-        selectedChunk: null,
-        selectedItem: null,
-        selectedField: null,
-        fieldPreview: null,
-        chunkSelection: paths,
-        status: `Loaded ${meta.chunks.length} chunk(s)`,
-      });
-    } catch (err: any) {
-      set({ error: String(err) });
-    } finally {
-      set({ busy: false });
-    }
+    set({
+      mode: { kind: "chunks", paths, requestId },
+      selectedChunkName: null,
+      selectedItemIndex: null,
+      selectedFieldIndex: null,
+    });
   },
-  selectChunk: async (chunk) => {
-    const indexPath = get().indexPath.trim();
-    if (!indexPath) return;
-    if (!isTauri()) {
-      set({ error: "Tauri runtime is required to read chunk." });
-      return;
-    }
-    try {
-      set({ busy: true, error: null, status: `Parsing ${chunk.filename}` });
-      const items = await invoke<ItemMeta[]>("list_chunk_items", {
-        indexPath,
-        chunkFilename: chunk.filename,
-      });
-      set({
-        selectedChunk: chunk,
-        items,
-        selectedItem: items[0] ?? null,
-        selectedField: null,
-        fieldPreview: null,
-        status: `Loaded ${items.length} item(s)`,
-      });
-    } catch (err: any) {
-      set({ error: String(err) });
-    } finally {
-      set({ busy: false });
-    }
-  },
-  selectItem: (item) => set({ selectedItem: item, selectedField: null, fieldPreview: null }),
-  selectField: async (field) => {
-    const { selectedItem, selectedChunk, indexPath } = get();
-    if (!selectedItem || !selectedChunk || !indexPath.trim()) return;
-    if (!isTauri()) {
-      set({ error: "Tauri runtime is required to preview." });
-      return;
-    }
-    try {
-      set({ busy: true, error: null });
-      const preview = await invoke<FieldPreview>("peek_field", {
-        indexPath: indexPath.trim(),
-        chunkFilename: selectedChunk.filename,
-        itemIndex: selectedItem.itemIndex,
-        fieldIndex: field.fieldIndex,
-      });
-      set({ selectedField: field, fieldPreview: preview });
-    } catch (err: any) {
-      set({ error: String(err) });
-    } finally {
-      set({ busy: false });
-    }
-  },
-  openField: async (field, item) => {
-    const { selectedChunk, indexPath } = get();
-    if (!selectedChunk || !indexPath.trim()) return;
-    if (!isTauri()) {
-      set({ error: "Tauri runtime is required to open files." });
-      return;
-    }
-    try {
-      set({ busy: true, error: null });
-      const opened = await invoke<string>("open_leaf", {
-        indexPath: indexPath.trim(),
-        chunkFilename: selectedChunk.filename,
-        itemIndex: item.itemIndex,
-        fieldIndex: field.fieldIndex,
-      });
-      set({ status: `Opened: ${opened}` });
-    } catch (err: any) {
-      set({ error: String(err) });
-    } finally {
-      set({ busy: false });
-    }
-  },
+  selectChunk: (filename) => set({ selectedChunkName: filename, selectedItemIndex: null, selectedFieldIndex: null }),
+  selectItem: (idx) => set({ selectedItemIndex: idx, selectedFieldIndex: null }),
+  selectField: (idx) => set({ selectedFieldIndex: idx }),
+  setStatusMessage: (message) => set({ statusMessage: message }),
+  clearMode: () =>
+    set({
+      mode: null,
+      selectedChunkName: null,
+      selectedItemIndex: null,
+      selectedFieldIndex: null,
+    }),
 }));

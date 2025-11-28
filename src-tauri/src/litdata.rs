@@ -1,21 +1,21 @@
 use hex::encode as hex_encode;
-use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
+use tauri::async_runtime::spawn_blocking;
 use thiserror::Error;
 
 const PREVIEW_BYTES: usize = 2048;
 const MAX_CACHE_BYTES: usize = 128 * 1024 * 1024;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ChunkCache {
-    inner: Mutex<HashMap<String, Vec<u8>>>,
+    inner: Arc<Mutex<HashMap<String, Vec<u8>>>>,
 }
 
 impl ChunkCache {
@@ -32,8 +32,11 @@ impl ChunkCache {
     }
 }
 
-#[derive(Error, Debug)]
-enum AppError {
+pub type AppResult<T> = Result<T, AppError>;
+
+#[derive(Error, Debug, Serialize)]
+#[serde(tag = "code", content = "message")]
+pub enum AppError {
     #[error("invalid request: {0}")]
     Invalid(String),
     #[error("not found: {0}")]
@@ -42,8 +45,23 @@ enum AppError {
     UnsupportedCompression(String),
     #[error("malformed chunk")]
     MalformedChunk,
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    #[error("io error: {0}")]
+    Io(String),
+    #[error("task error: {0}")]
+    Task(String),
+    #[error("open error: {0}")]
+    Open(String),
+}
+
+impl From<std::io::Error> for AppError {
+    fn from(value: std::io::Error) -> Self {
+        AppError::Io(value.to_string())
+    }
+}
+
+fn read_le_u32(bytes: &[u8]) -> AppResult<u32> {
+    let buf: [u8; 4] = bytes.try_into().map_err(|_| AppError::MalformedChunk)?;
+    Ok(u32::from_le_bytes(buf))
 }
 
 #[derive(Deserialize)]
@@ -132,7 +150,7 @@ enum ChunkAccess {
 }
 
 impl ChunkAccess {
-    fn read_exact_at(&self, offset: u64, len: usize) -> Result<Vec<u8>, AppError> {
+    fn read_exact_at(&self, offset: u64, len: usize) -> AppResult<Vec<u8>> {
         match self {
             ChunkAccess::File(path) => {
                 let mut fp = File::open(path)?;
@@ -154,8 +172,7 @@ impl ChunkAccess {
     }
 }
 
-fn parse_index(index_path: &Path) -> Result<ParsedIndex, AppError> {
-    // If user chose a raw chunk, try neighboring index.json first.
+fn parse_index(index_path: &Path) -> AppResult<ParsedIndex> {
     if is_chunk_path(index_path) {
         if let Some(found) = find_neighbor_index(index_path) {
             return parse_index(&found);
@@ -182,7 +199,7 @@ fn parse_index(index_path: &Path) -> Result<ParsedIndex, AppError> {
     })
 }
 
-fn parse_chunk_only(index_path: &Path) -> Result<ParsedIndex, AppError> {
+fn parse_chunk_only(index_path: &Path) -> AppResult<ParsedIndex> {
     let root_dir = index_path
         .parent()
         .map(|p| p.to_path_buf())
@@ -190,12 +207,10 @@ fn parse_chunk_only(index_path: &Path) -> Result<ParsedIndex, AppError> {
     let mut file = File::open(index_path)?;
     let size = file.metadata()?.len();
 
-    // Read num_items and minimal offsets header to expose item count.
     let mut num_buf = [0u8; 4];
     file.read_exact(&mut num_buf)?;
-    let num_items = u32::from_le_bytes(num_buf);
-    // Skip offsets payload; we don't need all entries for summary, only count.
-    // For safety, read and discard to validate.
+    let num_items = read_le_u32(&num_buf)?;
+
     let offsets_len = (num_items as usize + 1) * 4;
     let mut offsets = vec![0u8; offsets_len];
     file.read_exact(&mut offsets)?;
@@ -210,24 +225,18 @@ fn parse_chunk_only(index_path: &Path) -> Result<ParsedIndex, AppError> {
         chunk_size: num_items.max(1),
         dim: None,
     };
+    let fallback_config = IndexConfig {
+        compression: None,
+        chunk_size: Some(num_items.max(1)),
+        chunk_bytes: Some(size),
+        data_format: Some(vec!["bytes".into()]),
+        data_spec: None,
+    };
     Ok(ParsedIndex {
         root_dir,
         source: index_path.to_path_buf(),
-        config: IndexConfig {
-            compression: None,
-            chunk_size: Some(num_items.max(1)),
-            chunk_bytes: Some(size),
-            data_format: Some(vec!["bytes".into()]),
-            data_spec: None,
-        },
-        config_raw: serde_json::to_value(IndexConfig {
-            compression: None,
-            chunk_size: Some(num_items.max(1)),
-            chunk_bytes: Some(size),
-            data_format: Some(vec!["bytes".into()]),
-            data_spec: None,
-        })
-        .unwrap_or(serde_json::Value::Null),
+        config: fallback_config.clone(),
+        config_raw: serde_json::to_value(fallback_config).unwrap_or(serde_json::Value::Null),
         chunks: vec![chunk],
     })
 }
@@ -240,8 +249,8 @@ fn is_chunk_path(path: &Path) -> bool {
         || path
             .file_name()
             .and_then(|f| f.to_str())
-        .map(|name| name.contains(".bin"))
-        .unwrap_or(false)
+            .map(|name| name.contains(".bin"))
+            .unwrap_or(false)
 }
 
 fn find_neighbor_index(chunk_path: &Path) -> Option<PathBuf> {
@@ -260,7 +269,6 @@ fn find_neighbor_index(chunk_path: &Path) -> Option<PathBuf> {
             return Some(candidate);
         }
     }
-    // fallback: any *.index.json* in the folder
     let mut globbed: Vec<PathBuf> = std::fs::read_dir(parent)
         .ok()?
         .filter_map(|e| e.ok().map(|e2| e2.path()))
@@ -275,7 +283,7 @@ fn find_neighbor_index(chunk_path: &Path) -> Option<PathBuf> {
     globbed.into_iter().next()
 }
 
-fn resolve_index_path(path: &Path) -> Result<PathBuf, AppError> {
+fn resolve_index_path(path: &Path) -> AppResult<PathBuf> {
     if path.is_file() {
         return Ok(path.to_path_buf());
     }
@@ -288,7 +296,6 @@ fn resolve_index_path(path: &Path) -> Result<PathBuf, AppError> {
             "0.index.json.zstd",
             "0.index.json.zst",
         ];
-        // Also consider any *.index.json* in the folder (litdata may emit numbered indexes).
         let mut globbed: Vec<PathBuf> = std::fs::read_dir(path)
             .ok()
             .into_iter()
@@ -312,16 +319,15 @@ fn resolve_index_path(path: &Path) -> Result<PathBuf, AppError> {
             return Ok(first.to_path_buf());
         }
     } else if let Some(parent) = path.parent() {
-        // try sibling extensions
         let base = path.file_stem().and_then(|s| s.to_str()).unwrap_or("index");
         let candidates = [
-          path.to_path_buf(),
-          path.with_extension("json"),
-          path.with_extension("json.zstd"),
-          path.with_extension("json.zst"),
-          parent.join(format!("{base}.json")),
-          parent.join(format!("{base}.json.zstd")),
-          parent.join(format!("{base}.json.zst")),
+            path.to_path_buf(),
+            path.with_extension("json"),
+            path.with_extension("json.zstd"),
+            path.with_extension("json.zst"),
+            parent.join(format!("{base}.json")),
+            parent.join(format!("{base}.json.zstd")),
+            parent.join(format!("{base}.json.zst")),
         ];
         for candidate in candidates {
             if candidate.exists() {
@@ -332,8 +338,12 @@ fn resolve_index_path(path: &Path) -> Result<PathBuf, AppError> {
     Err(AppError::Missing(path.display().to_string()))
 }
 
-fn read_index_file(path: &Path) -> Result<String, AppError> {
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+fn read_index_file(path: &Path) -> AppResult<String> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
     if ext.contains("zst") {
         let file = File::open(path)?;
         let mut decoder = zstd::stream::Decoder::new(file)?;
@@ -345,13 +355,16 @@ fn read_index_file(path: &Path) -> Result<String, AppError> {
     }
 }
 
-fn parse_index_file(path: &Path) -> Result<ParsedIndex, AppError> {
+fn parse_index_file(path: &Path) -> AppResult<ParsedIndex> {
     let content = read_index_file(path)?;
-    let parsed: IndexFile =
-        serde_json::from_str(&content).map_err(|e| AppError::Invalid(format!("index.json parse error: {e}")))?;
+    let parsed: IndexFile = serde_json::from_str(&content)
+        .map_err(|e| AppError::Invalid(format!("index.json parse error: {e}")))?;
     let config = parsed.config.clone();
     let config_raw = serde_json::to_value(&config).unwrap_or(serde_json::Value::Null);
-    let root_dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
+    let root_dir = path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
     Ok(ParsedIndex {
         root_dir,
         source: path.to_path_buf(),
@@ -362,17 +375,22 @@ fn parse_index_file(path: &Path) -> Result<ParsedIndex, AppError> {
 }
 
 #[tauri::command]
-pub fn load_index(index_path: String) -> Result<IndexSummary, String> {
-    let path = PathBuf::from(&index_path);
-    parse_index(&path)
-        .and_then(|parsed| {
-            let ParsedIndex {
-                root_dir,
-                source,
-                config,
-                config_raw,
-                chunks,
-            } = parsed;
+pub async fn load_index(index_path: String) -> AppResult<IndexSummary> {
+    let path = PathBuf::from(index_path);
+    spawn_blocking(move || load_index_sync(path))
+        .await
+        .map_err(|e| AppError::Task(e.to_string()))?
+}
+
+fn load_index_sync(index_path: PathBuf) -> AppResult<IndexSummary> {
+    parse_index(&index_path).and_then(
+        |ParsedIndex {
+             root_dir,
+             source,
+             config,
+             config_raw,
+             chunks,
+         }| {
             let data_format = config.data_format.clone().unwrap_or_default();
             let mut summaries = Vec::with_capacity(chunks.len());
             for c in chunks {
@@ -397,141 +415,136 @@ pub fn load_index(index_path: String) -> Result<IndexSummary, String> {
                 config_raw,
                 chunks: summaries,
             })
-        })
-        .map_err(|e| e.to_string())
+        },
+    )
 }
 
 #[tauri::command]
-pub fn load_chunk_list(paths: Vec<String>) -> Result<IndexSummary, String> {
-    (|| -> Result<IndexSummary, AppError> {
-        if paths.is_empty() {
-            return Err(AppError::Invalid("no chunk paths provided".into()));
-        }
-        let mut raw_chunks: Vec<RawChunk> = Vec::new();
-        let mut root_dir = None;
-        let mut name_to_path: HashMap<String, PathBuf> = HashMap::new();
-        let mut index_path: Option<PathBuf> = None;
-        let mut data_format: Vec<String> = vec!["bytes".into()];
-        let mut compression: Option<String> = None;
-        let mut chunk_size: Option<u32> = None;
-        let mut chunk_bytes: Option<u64> = None;
-        let mut config_raw: Option<serde_json::Value> = None;
-        for p in &paths {
-            let path = PathBuf::from(p);
-            if root_dir.is_none() {
-                root_dir = path.parent().map(|pp| pp.to_path_buf());
-            }
-            if let Some(name) = path
-                .file_name()
-                .and_then(|f| f.to_str())
-                .map(|s| s.to_string())
-            {
-                name_to_path.insert(name, path.clone());
-            }
-        }
-        // Try to use neighbor index for richer metadata, but only include selected chunks.
-        if let Some(found_index_path) = find_neighbor_index(Path::new(&paths[0])) {
-            let parsed = parse_index_file(&found_index_path)?;
-            data_format = parsed
-                .config
-                .data_format
-                .clone()
-                .unwrap_or_else(|| data_format.clone());
-            compression = parsed.config.compression.clone();
-            chunk_size = parsed.config.chunk_size;
-            chunk_bytes = parsed.config.chunk_bytes;
-            config_raw = Some(parsed.config_raw.clone());
-            index_path = Some(found_index_path);
-            root_dir = Some(parsed.root_dir.clone());
-            let selected: HashSet<String> = name_to_path.keys().cloned().collect();
-            for c in parsed.chunks {
-                if selected.contains(&c.filename) {
-                    raw_chunks.push(c);
-                }
-            }
-        }
+pub async fn load_chunk_list(paths: Vec<String>) -> AppResult<IndexSummary> {
+    spawn_blocking(move || load_chunk_list_sync(paths))
+        .await
+        .map_err(|e| AppError::Task(e.to_string()))?
+}
 
-        let root_dir = root_dir.unwrap_or_else(|| PathBuf::from("."));
-
-        // For any paths not covered, fall back to per-file header read.
-        let covered: HashSet<String> = raw_chunks.iter().map(|c| c.filename.clone()).collect();
-        for (name, path) in &name_to_path {
-            if covered.contains(name) {
-                continue;
-            }
-            let info = fs::metadata(path)?;
-            let size = info.len();
-            let mut file = File::open(path)?;
-            let mut num_buf = [0u8; 4];
-            file.read_exact(&mut num_buf)?;
-            let num_items = u32::from_le_bytes(num_buf).max(1);
-            let offsets_len = (num_items as usize + 1) * 4;
-            let mut offsets = vec![0u8; offsets_len];
-            file.read_exact(&mut offsets)?;
-            raw_chunks.push(RawChunk {
-                filename: name.clone(),
-                chunk_bytes: size,
-                chunk_size: num_items,
-                dim: None,
-            });
+fn load_chunk_list_sync(paths: Vec<String>) -> AppResult<IndexSummary> {
+    if paths.is_empty() {
+        return Err(AppError::Invalid("no chunk paths provided".into()));
+    }
+    let mut raw_chunks: Vec<RawChunk> = Vec::new();
+    let mut root_dir = None;
+    let mut name_to_path: HashMap<String, PathBuf> = HashMap::new();
+    let mut index_path: Option<PathBuf> = None;
+    let mut data_format: Vec<String> = vec!["bytes".into()];
+    let mut compression: Option<String> = None;
+    let mut chunk_size: Option<u32> = None;
+    let mut chunk_bytes: Option<u64> = None;
+    let mut config_raw: Option<serde_json::Value> = None;
+    for p in &paths {
+        let path = PathBuf::from(p);
+        if root_dir.is_none() {
+            root_dir = path.parent().map(|pp| pp.to_path_buf());
         }
+        if let Some(name) = path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .map(|s| s.to_string())
+        {
+            name_to_path.insert(name, path.clone());
+        }
+    }
+    if let Some(found_index_path) = find_neighbor_index(Path::new(&paths[0])) {
+        let parsed = parse_index_file(&found_index_path)?;
+        data_format = parsed
+            .config
+            .data_format
+            .clone()
+            .unwrap_or_else(|| data_format.clone());
+        compression = parsed.config.compression.clone();
+        chunk_size = parsed.config.chunk_size;
+        chunk_bytes = parsed.config.chunk_bytes;
+        config_raw = Some(parsed.config_raw.clone());
+        index_path = Some(found_index_path);
+        root_dir = Some(parsed.root_dir.clone());
+        let selected: HashSet<String> = name_to_path.keys().cloned().collect();
+        for c in parsed.chunks {
+            if selected.contains(&c.filename) {
+                raw_chunks.push(c);
+            }
+        }
+    }
 
-        let config_raw_default_fmt = data_format.clone();
-        let config_raw = config_raw.unwrap_or_else(|| {
-            serde_json::json!({
-                "source": "multi-bin",
-                "data_format": config_raw_default_fmt,
-            })
+    let root_dir = root_dir.unwrap_or_else(|| PathBuf::from("."));
+
+    let covered: HashSet<String> = raw_chunks.iter().map(|c| c.filename.clone()).collect();
+    for (name, path) in &name_to_path {
+        if covered.contains(name) {
+            continue;
+        }
+        let info = fs::metadata(path)?;
+        let size = info.len();
+        let mut file = File::open(path)?;
+        let mut num_buf = [0u8; 4];
+        file.read_exact(&mut num_buf)?;
+        let num_items = read_le_u32(&num_buf)?.max(1);
+        let offsets_len = (num_items as usize + 1) * 4;
+        let mut offsets = vec![0u8; offsets_len];
+        file.read_exact(&mut offsets)?;
+        raw_chunks.push(RawChunk {
+            filename: name.clone(),
+            chunk_bytes: size,
+            chunk_size: num_items,
+            dim: None,
         });
+    }
 
-        let resolved_index_path = index_path.unwrap_or_else(|| PathBuf::from(&paths[0]));
-
-        // Build summary with only selected chunks.
-        Ok(IndexSummary {
-            index_path: resolved_index_path.display().to_string(),
-            root_dir: root_dir.display().to_string(),
-            data_format,
-            compression,
-            chunk_size,
-            chunk_bytes,
-            config_raw,
-            chunks: raw_chunks
-                .into_iter()
-                .map(|c| {
-                    let path = name_to_path
-                        .get(&c.filename)
-                        .cloned()
-                        .unwrap_or_else(|| root_dir.join(&c.filename));
-                    ChunkSummary {
-                        filename: c.filename,
-                        path: path.display().to_string(),
-                        chunk_size: c.chunk_size,
-                        chunk_bytes: c.chunk_bytes,
-                        dim: c.dim,
-                        exists: true,
-                    }
-                })
-                .collect(),
+    let config_raw_default_fmt = data_format.clone();
+    let config_raw = config_raw.unwrap_or_else(|| {
+        serde_json::json!({
+            "source": "multi-bin",
+            "data_format": config_raw_default_fmt,
         })
-    })()
-    .map_err(|e| e.to_string())
+    });
+
+    let resolved_index_path = index_path.unwrap_or_else(|| PathBuf::from(&paths[0]));
+
+    Ok(IndexSummary {
+        index_path: resolved_index_path.display().to_string(),
+        root_dir: root_dir.display().to_string(),
+        data_format,
+        compression,
+        chunk_size,
+        chunk_bytes,
+        config_raw,
+        chunks: raw_chunks
+            .into_iter()
+            .map(|c| {
+                let path = name_to_path
+                    .get(&c.filename)
+                    .cloned()
+                    .unwrap_or_else(|| root_dir.join(&c.filename));
+                ChunkSummary {
+                    filename: c.filename,
+                    path: path.display().to_string(),
+                    chunk_size: c.chunk_size,
+                    chunk_bytes: c.chunk_bytes,
+                    dim: c.dim,
+                    exists: true,
+                }
+            })
+            .collect(),
+    })
 }
 
 fn load_chunk_access(
     parsed: &ParsedIndex,
     chunk_filename: &str,
     cache: &ChunkCache,
-) -> Result<ChunkAccess, AppError> {
+) -> AppResult<ChunkAccess> {
     let chunk_path = parsed.root_dir.join(chunk_filename);
     if !chunk_path.exists() {
         return Err(AppError::Missing(chunk_path.display().to_string()));
     }
-    match parsed
-        .config
-        .compression
-        .as_ref()
-        .map(|c| c.to_lowercase())
-    {
+    match parsed.config.compression.as_ref().map(|c| c.to_lowercase()) {
         Some(ref c) if c == "zstd" => {
             let key = chunk_path.display().to_string();
             if let Some(buf) = cache.fetch(&key) {
@@ -542,8 +555,7 @@ fn load_chunk_access(
             let mut buf = Vec::new();
             decoder
                 .read_to_end(&mut buf)
-                .context("decompressing chunk")
-                .map_err(|e| AppError::Invalid(e.to_string()))?;
+                .map_err(|e| AppError::Invalid(format!("decompressing chunk: {e}")))?;
             cache.maybe_store(&key, buf.clone());
             Ok(ChunkAccess::Memory(buf))
         }
@@ -552,75 +564,97 @@ fn load_chunk_access(
     }
 }
 
-fn parse_offsets(access: &ChunkAccess) -> Result<(u32, Vec<u32>), AppError> {
+fn parse_offsets(access: &ChunkAccess) -> AppResult<(u32, Vec<u32>)> {
     let num_buf = access.read_exact_at(0, 4)?;
-    let num_items = u32::from_le_bytes(num_buf.try_into().unwrap());
+    let num_items = read_le_u32(&num_buf)?;
     let offsets_len = (num_items as usize + 1) * 4;
     let offsets_buf = access.read_exact_at(4, offsets_len)?;
     let mut offsets = Vec::with_capacity(num_items as usize + 1);
     for chunk in offsets_buf.chunks_exact(4) {
-        offsets.push(u32::from_le_bytes(chunk.try_into().unwrap()));
+        offsets.push(read_le_u32(chunk)?);
     }
     Ok((num_items, offsets))
 }
 
 #[tauri::command]
-pub fn list_chunk_items(
+pub async fn list_chunk_items(
     index_path: String,
     chunk_filename: String,
-    cache: tauri::State<ChunkCache>,
-) -> Result<Vec<ItemMeta>, String> {
-    let path = PathBuf::from(&index_path);
-    (|| -> Result<Vec<ItemMeta>, AppError> {
-        let parsed = parse_index(&path)?;
-        let access = load_chunk_access(&parsed, &chunk_filename, &cache)?;
-        let format_len = parsed.config.data_format.as_ref().map(|v| v.len()).unwrap_or(0);
-        let header_len = format_len * 4;
-        let (num_items, offsets) = parse_offsets(&access)?;
-        let mut items = Vec::with_capacity(num_items as usize);
-        for item_idx in 0..num_items {
-            let start = offsets[item_idx as usize];
-            let end = offsets[item_idx as usize + 1];
-            if end < start {
-                return Err(AppError::MalformedChunk);
-            }
-            let mut sizes = Vec::new();
-            if header_len > 0 {
-                let head = access.read_exact_at(start as u64, header_len)?;
-                for j in 0..format_len {
-                    let pos = j * 4;
-                    sizes.push(u32::from_le_bytes(
-                        head[pos..pos + 4].try_into().unwrap(),
-                    ));
-                }
-            }
-            items.push(ItemMeta {
-                item_index: item_idx,
-                total_bytes: (end - start) as u64,
-                fields: sizes
-                    .into_iter()
-                    .enumerate()
-                    .map(|(idx, size)| FieldMeta {
-                        field_index: idx,
-                        size,
-                    })
-                    .collect(),
-            });
+    cache: tauri::State<'_, ChunkCache>,
+) -> AppResult<Vec<ItemMeta>> {
+    let path = PathBuf::from(index_path);
+    let cache_handle = (*cache).clone();
+    spawn_blocking(move || list_chunk_items_sync(path, chunk_filename, &cache_handle))
+        .await
+        .map_err(|e| AppError::Task(e.to_string()))?
+}
+
+fn list_chunk_items_sync(
+    index_path: PathBuf,
+    chunk_filename: String,
+    cache: &ChunkCache,
+) -> AppResult<Vec<ItemMeta>> {
+    let parsed = parse_index(&index_path)?;
+    let access = load_chunk_access(&parsed, &chunk_filename, cache)?;
+    let format_len = parsed
+        .config
+        .data_format
+        .as_ref()
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let header_len = format_len * 4;
+    let (num_items, offsets) = parse_offsets(&access)?;
+    let mut items = Vec::with_capacity(num_items as usize);
+    for item_idx in 0..num_items {
+        let start = offsets[item_idx as usize];
+        let end = offsets[item_idx as usize + 1];
+        if end < start {
+            return Err(AppError::MalformedChunk);
         }
-        Ok(items)
-    })()
-    .map_err(|e| e.to_string())
+        let mut sizes = Vec::new();
+        if header_len > 0 {
+            let head = access.read_exact_at(start as u64, header_len)?;
+            for j in 0..format_len {
+                let pos = j * 4;
+                sizes.push(read_le_u32(&head[pos..pos + 4])?);
+            }
+        }
+        items.push(ItemMeta {
+            item_index: item_idx,
+            total_bytes: (end - start) as u64,
+            fields: sizes
+                .into_iter()
+                .enumerate()
+                .map(|(idx, size)| FieldMeta {
+                    field_index: idx,
+                    size,
+                })
+                .collect(),
+        });
+    }
+    Ok(items)
 }
 
 #[tauri::command]
-pub fn peek_field(
+pub async fn peek_field(
     index_path: String,
     chunk_filename: String,
     item_index: u32,
     field_index: usize,
-    cache: tauri::State<ChunkCache>,
-) -> Result<FieldPreview, String> {
-    preview_field(&index_path, &chunk_filename, item_index, field_index, &cache).map_err(|e| e.to_string())
+    cache: tauri::State<'_, ChunkCache>,
+) -> AppResult<FieldPreview> {
+    let cache_handle = (*cache).clone();
+    spawn_blocking(move || {
+        preview_field(
+            &index_path,
+            &chunk_filename,
+            item_index,
+            field_index,
+            &cache_handle,
+        )
+    })
+    .await
+    .map_err(|e| AppError::Task(e.to_string()))?
 }
 
 fn preview_field(
@@ -629,11 +663,17 @@ fn preview_field(
     item_index: u32,
     field_index: usize,
     cache: &ChunkCache,
-) -> Result<FieldPreview, AppError> {
+) -> AppResult<FieldPreview> {
     let parsed = parse_index(Path::new(index_path))?;
     let fmt = parsed.config.data_format.clone().unwrap_or_default();
     let access = load_chunk_access(&parsed, chunk_filename, cache)?;
-    let (data, size) = read_field_bytes(&access, item_index, field_index, fmt.len(), Some(PREVIEW_BYTES))?;
+    let (data, size) = read_field_bytes(
+        &access,
+        item_index,
+        field_index,
+        fmt.len(),
+        Some(PREVIEW_BYTES),
+    )?;
     let text = String::from_utf8(data.clone()).ok();
     let guessed_ext = guess_ext(fmt.get(field_index), &data);
     let hex_snippet = hex_encode(data.iter().take(48).copied().collect::<Vec<u8>>());
@@ -647,34 +687,52 @@ fn preview_field(
 }
 
 #[tauri::command]
-pub fn open_leaf(
+pub async fn open_leaf(
     index_path: String,
     chunk_filename: String,
     item_index: u32,
     field_index: usize,
-    cache: tauri::State<ChunkCache>,
-) -> Result<String, String> {
-    let path = PathBuf::from(&index_path);
-    (|| -> Result<String, AppError> {
-        let parsed = parse_index(&path)?;
-        let fmt = parsed.config.data_format.clone().unwrap_or_default();
-        let access = load_chunk_access(&parsed, &chunk_filename, &cache)?;
-        let (data, size) = read_field_bytes(&access, item_index, field_index, fmt.len(), None)?;
-        let ext = guess_ext(fmt.get(field_index), &data).unwrap_or_else(|| "bin".into());
-        let temp_dir = std::env::temp_dir().join("litdata-viewer");
-        fs::create_dir_all(&temp_dir)?;
-        let out = temp_dir.join(format!(
-            "{}-i{}-f{}.{}",
-            sanitize(&chunk_filename),
+    cache: tauri::State<'_, ChunkCache>,
+) -> AppResult<String> {
+    let cache_handle = (*cache).clone();
+    spawn_blocking(move || {
+        let path = PathBuf::from(&index_path);
+        open_leaf_inner(
+            &path,
+            &chunk_filename,
             item_index,
             field_index,
-            ext
-        ));
-        fs::write(&out, data)?;
-        open::that_detached(&out)?;
-        Ok(format!("{} ({} bytes)", out.display(), size))
-    })()
-    .map_err(|e| e.to_string())
+            &cache_handle,
+        )
+    })
+    .await
+    .map_err(|e| AppError::Task(e.to_string()))?
+}
+
+fn open_leaf_inner(
+    index_path: &Path,
+    chunk_filename: &str,
+    item_index: u32,
+    field_index: usize,
+    cache: &ChunkCache,
+) -> AppResult<String> {
+    let parsed = parse_index(index_path)?;
+    let fmt = parsed.config.data_format.clone().unwrap_or_default();
+    let access = load_chunk_access(&parsed, chunk_filename, cache)?;
+    let (data, size) = read_field_bytes(&access, item_index, field_index, fmt.len(), None)?;
+    let ext = guess_ext(fmt.get(field_index), &data).unwrap_or_else(|| "bin".into());
+    let temp_dir = std::env::temp_dir().join("litdata-viewer");
+    fs::create_dir_all(&temp_dir)?;
+    let out = temp_dir.join(format!(
+        "{}-i{}-f{}.{}",
+        sanitize(chunk_filename),
+        item_index,
+        field_index,
+        ext
+    ));
+    fs::write(&out, data)?;
+    open::that_detached(&out).map_err(|e| AppError::Open(e.to_string()))?;
+    Ok(format!("{} ({} bytes)", out.display(), size))
 }
 
 fn read_field_bytes(
@@ -683,7 +741,7 @@ fn read_field_bytes(
     field_index: usize,
     format_len: usize,
     limit: Option<usize>,
-) -> Result<(Vec<u8>, u32), AppError> {
+) -> AppResult<(Vec<u8>, u32)> {
     let header_len = format_len * 4;
     let (num_items, offsets) = parse_offsets(access)?;
     if item_index >= num_items {
@@ -703,9 +761,7 @@ fn read_field_bytes(
     if let Some(head) = header {
         for j in 0..format_len {
             let pos = j * 4;
-            sizes.push(u32::from_le_bytes(
-                head[pos..pos + 4].try_into().unwrap(),
-            ));
+            sizes.push(read_le_u32(&head[pos..pos + 4])?);
         }
     }
     if field_index >= sizes.len() {
@@ -726,7 +782,6 @@ fn read_field_bytes(
 fn guess_ext(data_format: Option<&String>, data: &[u8]) -> Option<String> {
     if let Some(fmt) = data_format {
         let fmt_lower = fmt.to_lowercase();
-        // Treat generic binary types by preferring magic detection first.
         if fmt_lower == "bytes" || fmt_lower == "bin" {
             if let Some(magic) = detect_magic_ext(data) {
                 return Some(magic);
@@ -776,7 +831,10 @@ fn guess_ext(data_format: Option<&String>, data: &[u8]) -> Option<String> {
     if let Some(magic_ext) = detect_magic_ext(data) {
         return Some(magic_ext);
     }
-    if std::str::from_utf8(data).map(|s| s.trim().len() > 0).unwrap_or(false) {
+    if std::str::from_utf8(data)
+        .map(|s| s.trim().len() > 0)
+        .unwrap_or(false)
+    {
         return Some("txt".into());
     }
     infer::get(data).map(|t| t.extension().to_string())
