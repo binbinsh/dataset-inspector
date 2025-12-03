@@ -1,6 +1,6 @@
 [package]
 name = "litdata-viewer"
-version = "0.3.0"
+version = "0.3.1"
 description = "Tauri + Next.js LitData Viewer"
 edition = "2021"
 

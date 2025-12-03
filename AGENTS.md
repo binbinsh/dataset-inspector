@@ -18,7 +18,7 @@
 ### Core Tech Stack
 - Platform: Tauri v2
 - Backend: Rust (Async with Tokio)
-- Frontend: Next.js 16 (Static Export)
+- Frontend: Next.js v16 (Static Export)
 - Styling: Tailwind CSS v4
 - UI Library: shadcn/ui
 - Icons: Lucide React
