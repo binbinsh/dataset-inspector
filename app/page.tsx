@@ -259,7 +259,7 @@ export default function Page() {
                   variant="outline"
                   className="border-emerald-200 bg-white/80 text-emerald-700 hover:bg-emerald-50"
                   onClick={handleChoose}
-                  disabled={busy || !isTauri()}
+                  disabled={busy}
                 >
                   <FolderOpen className="mr-2 h-4 w-4" />
                   Choose

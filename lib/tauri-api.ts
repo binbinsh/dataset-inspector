@@ -47,7 +47,20 @@ const STORE_LAST_INDEX = "last_index";
 
 let storeInstance: Store | null = null;
 
-export const isTauri = () => typeof window !== "undefined" && Boolean((window as any).__TAURI__);
+export const isTauri = () => {
+  if (typeof window === "undefined") return false;
+  const w = window as any;
+  const ua = String(w.navigator?.userAgent || "").toLowerCase();
+  return Boolean(
+    w.__TAURI_INTERNALS__ ||
+      w.__TAURI__ ||
+      w.__TAURI_METADATA__ ||
+      w.__TAURI_IPC__ ||
+      ua.includes("tauri") ||
+      w.location?.protocol === "tauri:" ||
+      (typeof w.location?.href === "string" && w.location.href.startsWith("tauri://"))
+  );
+};;;
 
 async function requireTauri(task: string) {
   if (!isTauri()) {
