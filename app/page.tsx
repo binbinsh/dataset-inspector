@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
   BadgeInfo,
+  Copy,
   FolderOpen,
   HardDrive,
   Loader2,
@@ -21,14 +22,18 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   chooseIndexSource,
+  chooseOpenerApp,
   isTauri,
   listChunkItems,
   loadChunkList,
   loadIndex,
   openLeaf,
+  openPathWithApp,
   peekField,
+  readPreferredOpenerForExt,
   readLastIndex,
   saveLastIndex,
+  savePreferredOpenerForExt,
   type FieldPreview,
   type IndexSummary,
   type ItemMeta,
@@ -179,19 +184,42 @@ export default function Page() {
     staleTime: 60 * 1000,
   });
 
+  const openWithAppMutation = useMutation({
+    mutationFn: (params: { path: string; appPath: string }) => openPathWithApp(params),
+    onSuccess: (message) => setStatusMessage(message),
+    onError: (err: unknown) =>
+      setStatusMessage(err instanceof Error ? err.message : "Unable to open the selected file with the chosen app."),
+  });
+
   const openFieldMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!indexQuery.data || !selectedChunk || !selectedItem || !selectedField) {
         throw new Error("Select a field to open.");
       }
+      const guessedExt = (previewQuery.data?.guessedExt ?? "").trim().replace(/^\./, "");
+      const openerAppPath = guessedExt ? await readPreferredOpenerForExt(guessedExt) : null;
       return openLeaf({
         indexPath: indexQuery.data.indexPath,
         chunkFilename: selectedChunk.filename,
         itemIndex: selectedItem.itemIndex,
         fieldIndex: selectedField.fieldIndex,
+        openerAppPath,
       });
     },
-    onSuccess: (message) => setStatusMessage(message),
+    onSuccess: (result) => {
+      setStatusMessage(result.message);
+      if (!result.needsOpener) return;
+      void (async () => {
+        const picked = await chooseOpenerApp();
+        if (!picked) return;
+        const extLabel = (result.ext ?? "").trim().replace(/^\./, "") || "bin";
+        const remember = window.confirm(`Remember this app for .${extLabel} files?`);
+        if (remember) {
+          await savePreferredOpenerForExt(extLabel, picked);
+        }
+        openWithAppMutation.mutate({ path: result.path, appPath: picked });
+      })();
+    },
     onError: (err: unknown) =>
       setStatusMessage(err instanceof Error ? err.message : "Unable to open the selected field."),
   });
@@ -202,12 +230,54 @@ export default function Page() {
       0,
     ) ?? 0;
 
+  const totalItems =
+    indexQuery.data?.chunks?.reduce(
+      (acc, chunk) => acc + (Number.isFinite(chunk.chunkSize) ? chunk.chunkSize : 0),
+      0,
+    ) ?? 0;
+
   const busy =
-    indexQuery.isFetching || itemsQuery.isFetching || previewQuery.isFetching || openFieldMutation.isPending;
+    indexQuery.isFetching ||
+    itemsQuery.isFetching ||
+    previewQuery.isFetching ||
+    openFieldMutation.isPending ||
+    openWithAppMutation.isPending;
   const latestError =
-    indexQuery.error || itemsQuery.error || previewQuery.error || openFieldMutation.error || undefined;
+    indexQuery.error ||
+    itemsQuery.error ||
+    previewQuery.error ||
+    openFieldMutation.error ||
+    openWithAppMutation.error ||
+    undefined;
   const errorMessage = latestError instanceof Error ? latestError.message : null;
-  const formatList = (indexQuery.data?.dataFormat ?? []).join(" · ");
+
+  const copyText = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    try {
+      await navigator.clipboard.writeText(trimmed);
+      setStatusMessage("Copied to clipboard.");
+      return;
+    } catch {
+      // Fall back to execCommand for older WebViews / permissions.
+    }
+
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = trimmed;
+      textarea.setAttribute("readonly", "true");
+      textarea.style.position = "fixed";
+      textarea.style.top = "-9999px";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      setStatusMessage("Copied to clipboard.");
+    } catch {
+      setStatusMessage("Copy failed.");
+    }
+  };
 
   const handleLoad = () => {
     setStatusMessage(null);
@@ -296,7 +366,7 @@ export default function Page() {
             <div className="grid grid-cols-3 gap-2">
               <StatPill label="Chunks" value={indexQuery.data?.chunks.length ?? 0} />
               <StatPill label="Total bytes" value={formatBytes(totalBytes)} />
-              <StatPill label="Format" value={formatList || "n/a"} />
+              <StatPill label="Total items" value={totalItems} />
             </div>
           </div>
         </section>
@@ -416,7 +486,7 @@ export default function Page() {
                 {previewQuery.isPending ? (
                   <Skeleton className="h-20 w-full" />
                 ) : previewQuery.data ? (
-                  <PreviewPanel preview={previewQuery.data} />
+                  <PreviewPanel preview={previewQuery.data} onCopy={copyText} />
                 ) : (
                   <div className="flex items-center gap-2 text-xs text-slate-500">
                     <TriangleAlert className="h-4 w-4" />
@@ -428,7 +498,7 @@ export default function Page() {
               <div className="flex items-center gap-2 text-sm">
                 {busy ? <Loader2 className="h-4 w-4 animate-spin text-emerald-600" /> : null}
                 {errorMessage ? <TriangleAlert className="h-4 w-4 text-amber-500" /> : null}
-                <span className={cn(errorMessage ? "text-amber-700" : "text-slate-600")}>
+                <span className={cn("select-text cursor-text", errorMessage ? "text-amber-700" : "text-slate-600")}>
                   {errorMessage ?? statusMessage ?? "Idle"}
                 </span>
               </div>
@@ -481,7 +551,8 @@ function DataCard({
   );
 }
 
-function PreviewPanel({ preview }: { preview: FieldPreview }) {
+function PreviewPanel({ preview, onCopy }: { preview: FieldPreview; onCopy: (text: string) => void }) {
+  const copyPayload = preview.previewText ? preview.previewText : preview.hexSnippet ? `Hex: ${preview.hexSnippet}` : "";
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
@@ -489,17 +560,32 @@ function PreviewPanel({ preview }: { preview: FieldPreview }) {
           <Sparkles className="h-4 w-4 text-emerald-600" />
           Preview
         </div>
-        <Badge variant="secondary">
-          {preview.guessedExt ? `.${preview.guessedExt}` : "unknown"} · {formatBytes(preview.size)}
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant="secondary">
+            {preview.guessedExt ? `.${preview.guessedExt}` : "unknown"} · {formatBytes(preview.size)}
+          </Badge>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-8 w-8 p-0 text-slate-600 hover:bg-slate-100"
+            onClick={() => onCopy(copyPayload)}
+            aria-label="Copy preview"
+          >
+            <Copy className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
       {preview.previewText ? (
-        <pre className="max-h-60 whitespace-pre-wrap break-all rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-800 shadow-inner">
+        <pre className="max-h-60 whitespace-pre-wrap break-all rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-800 shadow-inner select-text cursor-text">
           {preview.previewText}
         </pre>
       ) : (
-        <div className="text-xs text-slate-600 break-all">
-          Hex: <span className="font-mono text-slate-800 break-all whitespace-pre-wrap">{preview.hexSnippet}</span>
+        <div className="text-xs text-slate-600 break-all select-text cursor-text">
+          Hex:{" "}
+          <span className="font-mono text-slate-800 break-all whitespace-pre-wrap select-text cursor-text">
+            {preview.hexSnippet}
+          </span>
         </div>
       )}
     </div>
