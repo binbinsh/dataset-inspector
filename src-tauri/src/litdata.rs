@@ -8,7 +8,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tauri::async_runtime::spawn_blocking;
-use thiserror::Error;
+
+use crate::audio;
+
+use crate::app_error::{AppError, AppResult};
+use crate::open_with;
 
 const PREVIEW_BYTES: usize = 2048;
 const MAX_CACHE_BYTES: usize = 128 * 1024 * 1024;
@@ -29,33 +33,6 @@ impl ChunkCache {
                 guard.insert(key.to_string(), data);
             }
         }
-    }
-}
-
-pub type AppResult<T> = Result<T, AppError>;
-
-#[derive(Error, Debug, Serialize)]
-#[serde(tag = "code", content = "message")]
-pub enum AppError {
-    #[error("invalid request: {0}")]
-    Invalid(String),
-    #[error("not found: {0}")]
-    Missing(String),
-    #[error("unsupported compression: {0}")]
-    UnsupportedCompression(String),
-    #[error("malformed chunk")]
-    MalformedChunk,
-    #[error("io error: {0}")]
-    Io(String),
-    #[error("task error: {0}")]
-    Task(String),
-    #[error("open error: {0}")]
-    Open(String),
-}
-
-impl From<std::io::Error> for AppError {
-    fn from(value: std::io::Error) -> Self {
-        AppError::Io(value.to_string())
     }
 }
 
@@ -142,6 +119,17 @@ pub struct FieldPreview {
     guessed_ext: Option<String>,
     is_binary: bool,
     size: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenLeafResponse {
+    path: String,
+    size: u32,
+    ext: String,
+    opened: bool,
+    needs_opener: bool,
+    message: String,
 }
 
 enum ChunkAccess {
@@ -692,8 +680,9 @@ pub async fn open_leaf(
     chunk_filename: String,
     item_index: u32,
     field_index: usize,
+    opener_app_path: Option<String>,
     cache: tauri::State<'_, ChunkCache>,
-) -> AppResult<String> {
+) -> AppResult<OpenLeafResponse> {
     let cache_handle = (*cache).clone();
     spawn_blocking(move || {
         let path = PathBuf::from(&index_path);
@@ -702,6 +691,7 @@ pub async fn open_leaf(
             &chunk_filename,
             item_index,
             field_index,
+            opener_app_path.as_deref(),
             &cache_handle,
         )
     })
@@ -714,8 +704,9 @@ fn open_leaf_inner(
     chunk_filename: &str,
     item_index: u32,
     field_index: usize,
+    opener_app_path: Option<&str>,
     cache: &ChunkCache,
-) -> AppResult<String> {
+) -> AppResult<OpenLeafResponse> {
     let parsed = parse_index(index_path)?;
     let fmt = parsed.config.data_format.clone().unwrap_or_default();
     let access = load_chunk_access(&parsed, chunk_filename, cache)?;
@@ -723,16 +714,71 @@ fn open_leaf_inner(
     let ext = guess_ext(fmt.get(field_index), &data).unwrap_or_else(|| "bin".into());
     let temp_dir = std::env::temp_dir().join("litdata-viewer");
     fs::create_dir_all(&temp_dir)?;
-    let out = temp_dir.join(format!(
-        "{}-i{}-f{}.{}",
+    let base_name = format!(
+        "{}-i{}-f{}",
         sanitize(chunk_filename),
         item_index,
-        field_index,
-        ext
-    ));
-    fs::write(&out, data)?;
-    open::that_detached(&out).map_err(|e| AppError::Open(e.to_string()))?;
-    Ok(format!("{} ({} bytes)", out.display(), size))
+        field_index
+    );
+
+    let mut out = temp_dir.join(format!("{base_name}.{ext}"));
+    fs::write(&out, &data)?;
+
+    // Default `.sph` support: decode to a WAV and open that.
+    let mut ext = ext;
+    if ext == "sph" {
+        let wav_out = temp_dir.join(format!("{base_name}.wav"));
+        match audio::write_sph_as_wav_with_fallback(&data, &out, &wav_out) {
+            Ok(()) => {
+                out = wav_out;
+                ext = "wav".into();
+            }
+            Err(err) => {
+                // Fallback to the raw `.sph` file and let the user pick an opener if desired.
+                let base = format!("{} ({} bytes)", out.display(), size);
+                return Ok(OpenLeafResponse {
+                    path: out.display().to_string(),
+                    size,
+                    ext,
+                    opened: false,
+                    needs_opener: true,
+                    message: format!("{base} · sph decode failed: {err} · choose an app to open it"),
+                });
+            }
+        }
+    }
+
+    let mut opened = false;
+    let mut open_error = None::<String>;
+    if let Some(app_path) = opener_app_path {
+        match open_with::open_with_app_detached(&out, app_path) {
+            Ok(()) => opened = true,
+            Err(err) => open_error = Some(err),
+        }
+    }
+    if !opened {
+        if let Err(err) = open::that_detached(&out) {
+            open_error = Some(err.to_string());
+        } else {
+            opened = true;
+        }
+    }
+
+    let base = format!("{} ({} bytes)", out.display(), size);
+    let mut message = base;
+    let needs_opener = !opened && open_error.is_some();
+    if needs_opener {
+        message.push_str(" · no default app found, choose an app to open it");
+    }
+
+    Ok(OpenLeafResponse {
+        path: out.display().to_string(),
+        size,
+        ext,
+        opened,
+        needs_opener,
+        message,
+    })
 }
 
 fn read_field_bytes(
@@ -813,10 +859,15 @@ fn guess_ext(data_format: Option<&String>, data: &[u8]) -> Option<String> {
             ("float", "txt"),
             ("bool", "txt"),
             ("bytes", "bin"),
-            ("audio", "wav"),
         ];
         if let Some((_, ext)) = map.iter().find(|(k, _)| *k == fmt_lower) {
             return Some((*ext).into());
+        }
+        if fmt_lower == "audio" {
+            if let Some(magic) = detect_magic_ext(data) {
+                return Some(magic);
+            }
+            return Some("wav".into());
         }
         if fmt_lower.contains("wav") {
             return Some("wav".into());
@@ -848,6 +899,11 @@ fn sanitize(input: &str) -> String {
 }
 
 fn detect_magic_ext(data: &[u8]) -> Option<String> {
+    // NIST SPHERE audio files start with an ASCII "NIST_1A" marker.
+    // Example: "NIST_1A\n   1024\n"
+    if audio::is_sphere_file(data) {
+        return Some("sph".into());
+    }
     if data.len() >= 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WAVE" {
         return Some("wav".into());
     }

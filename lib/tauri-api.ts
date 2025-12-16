@@ -42,8 +42,18 @@ export type FieldPreview = {
   size: number;
 };
 
+export type OpenLeafResponse = {
+  path: string;
+  size: number;
+  ext: string;
+  opened: boolean;
+  needsOpener: boolean;
+  message: string;
+};
+
 const STORE_NAME = "litdata-viewer.bin";
 const STORE_LAST_INDEX = "last_index";
+const STORE_OPENERS_BY_EXT = "openers_by_ext";
 
 let storeInstance: Store | null = null;
 
@@ -60,7 +70,7 @@ export const isTauri = () => {
       w.location?.protocol === "tauri:" ||
       (typeof w.location?.href === "string" && w.location.href.startsWith("tauri://"))
   );
-};;;
+};
 
 async function requireTauri(task: string) {
   if (!isTauri()) {
@@ -86,6 +96,47 @@ export async function readLastIndex(): Promise<string | null> {
   if (!isTauri()) return null;
   const store = await getStore();
   return (await store.get<string>(STORE_LAST_INDEX)) ?? null;
+}
+
+type OpenersByExt = Record<string, string>;
+
+export async function readPreferredOpenerForExt(ext: string): Promise<string | null> {
+  if (!isTauri()) return null;
+  const normalized = ext.trim().replace(/^\./, "").toLowerCase();
+  if (!normalized) return null;
+  const store = await getStore();
+  const map = (await store.get<OpenersByExt>(STORE_OPENERS_BY_EXT)) ?? {};
+  return map[normalized] ?? null;
+}
+
+export async function savePreferredOpenerForExt(ext: string, appPath: string) {
+  if (!isTauri()) return;
+  const normalized = ext.trim().replace(/^\./, "").toLowerCase();
+  const trimmedPath = appPath.trim();
+  if (!normalized || !trimmedPath) return;
+  const store = await getStore();
+  const map = (await store.get<OpenersByExt>(STORE_OPENERS_BY_EXT)) ?? {};
+  map[normalized] = trimmedPath;
+  await store.set(STORE_OPENERS_BY_EXT, map);
+  await store.save();
+}
+
+export async function chooseOpenerApp(): Promise<string | null> {
+  await requireTauri("Choosing an application");
+  const ua = typeof navigator === "undefined" ? "" : String(navigator.userAgent || "");
+  const isMac = /Macintosh|Mac OS X/i.test(ua);
+  const picked = await openDialog({
+    title: isMac ? "Choose an application (.app)" : "Choose an application",
+    multiple: false,
+    ...(isMac
+      ? {
+          filters: [{ name: "Applications", extensions: ["app"] }],
+          defaultPath: "/Applications",
+        }
+      : {}),
+  });
+  if (!picked || Array.isArray(picked)) return null;
+  return typeof picked === "string" ? picked : null;
 }
 
 async function resolveDefaultDialogPath(path?: string, rootDir?: string): Promise<string | undefined> {
@@ -165,7 +216,17 @@ export async function openLeaf(params: {
   chunkFilename: string;
   itemIndex: number;
   fieldIndex: number;
-}): Promise<string> {
+  openerAppPath?: string | null;
+}): Promise<OpenLeafResponse> {
   await requireTauri("Opening field");
-  return invoke<string>("open_leaf", params);
+  return invoke<OpenLeafResponse>("open_leaf", params);
+}
+
+export async function openPathWithApp(params: { path: string; appPath: string }): Promise<string> {
+  await requireTauri("Opening with app");
+  const path = params.path.trim();
+  const appPath = params.appPath.trim();
+  if (!path) throw new Error("Missing file path to open.");
+  if (!appPath) throw new Error("Missing app path to open with.");
+  return invoke<string>("open_path_with_app", { path, appPath });
 }
