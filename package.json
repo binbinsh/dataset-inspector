@@ -1,6 +1,6 @@
 {
-  "name": "litdata-viewer",
-  "version": "0.5.1",
+  "name": "dataset-inspector",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",

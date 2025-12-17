@@ -16,6 +16,8 @@ pub enum AppError {
     MalformedChunk,
     #[error("io error: {0}")]
     Io(String),
+    #[error("remote error: {0}")]
+    Remote(String),
     #[error("task error: {0}")]
     Task(String),
     #[error("open error: {0}")]
