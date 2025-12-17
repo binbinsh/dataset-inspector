@@ -663,7 +663,7 @@ export default function Page() {
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 <Input
-                  className="w-full min-w-[280px] rounded-full border-slate-200 bg-white/70 backdrop-blur sm:w-[520px]"
+                  className="w-full min-w-[280px] rounded-full border-slate-200 bg-white/70 backdrop-blur sm:max-w-[420px]"
                   placeholder="/abs/path/to/index.json  OR  https://huggingface.co/datasets/<namespace>/<dataset-name>"
                   value={sourceInput}
                   onChange={(e) => setSourceInput(e.target.value)}
@@ -1326,14 +1326,13 @@ function PreviewPanel({
         </div>
       </div>
 
-      {supportsAudio ? (
-        <div className="space-y-2">
-          {ext === "sph" ? <div className="text-xs text-slate-500">SPH → WAV on demand</div> : null}
-          <div
-            className={cn("relative rounded-xl border border-slate-200 bg-white/70 p-2", !audioSource ? "cursor-pointer" : "")}
-            onClick={() => {
-              if (!audioSource) void prepareAndPlayAudio();
-            }}
+	      {supportsAudio ? (
+	        <div className="space-y-2">
+	          <div
+	            className={cn("relative rounded-xl border border-slate-200 bg-white/70 p-2", !audioSource ? "cursor-pointer" : "")}
+	            onClick={() => {
+	              if (!audioSource) void prepareAndPlayAudio();
+	            }}
           >
             <audio
               ref={audioRef}
