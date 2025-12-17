@@ -1,6 +1,6 @@
 [package]
 name = "dataset-inspector"
-version = "1.1.0"
+version = "1.2.0"
 description = "Tauri + Next.js Dataset Inspector"
 edition = "2021"
 
@@ -24,3 +24,5 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 url = "2"
 zstd = { version = "0.13", default-features = false, features = ["experimental", "thin"] }
 hound = "3"
+tar = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

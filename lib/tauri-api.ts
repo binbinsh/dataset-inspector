@@ -61,6 +61,44 @@ export type PreparedFileResponse = {
 
 export type PickResult = { kind: "index"; indexPath: string };
 
+export type LocalDatasetDetectResponse =
+  | { kind: "litdata-index"; indexPath: string }
+  | { kind: "mds-index"; indexPath: string }
+  | { kind: "webdataset-dir"; dirPath: string };
+
+export type WdsShardSummary = {
+  filename: string;
+  path: string;
+  bytes: number;
+  exists: boolean;
+};
+
+export type WdsDirSummary = {
+  dirPath: string;
+  shards: WdsShardSummary[];
+};
+
+export type WdsFieldInfo = {
+  name: string;
+  memberPath: string;
+  size: number;
+};
+
+export type WdsSampleInfo = {
+  sampleIndex: number;
+  key: string;
+  totalBytes: number;
+  fields: WdsFieldInfo[];
+};
+
+export type WdsSampleListResponse = {
+  offset: number;
+  length: number;
+  numSamplesTotal?: number | null;
+  partial: boolean;
+  samples: WdsSampleInfo[];
+};
+
 export type HfConfigSummary = {
   config: string;
   splits: string[];
@@ -222,7 +260,7 @@ async function resolveDefaultDialogPath(path?: string, rootDir?: string): Promis
   const fallbackRoot = (rootDir ?? "").trim();
   const candidate = trimmed || fallbackRoot;
   if (!candidate) return undefined;
-  const looksLikeFile = /\.(json|bin|zst)$/i.test(candidate);
+  const looksLikeFile = /\.(json|bin|mds|zst|zstd)$/i.test(candidate);
   if (!looksLikeFile) return candidate;
   try {
     return await dirname(candidate);
@@ -235,7 +273,7 @@ export async function chooseIndexSource(currentPath: string, lastRoot?: string):
   await requireTauri("Choosing a folder");
   const defaultPath = (await resolveDefaultDialogPath(currentPath, lastRoot)) ?? undefined;
   const picked = await openDialog({
-    title: "Select a LitData folder (contains index.json and chunks)",
+    title: "Select a dataset folder (LitData, MosaicML MDS, or WebDataset)",
     directory: true,
     multiple: false,
     ...(defaultPath ? { defaultPath } : {}),
@@ -243,6 +281,13 @@ export async function chooseIndexSource(currentPath: string, lastRoot?: string):
   if (!picked || Array.isArray(picked)) return null;
   if (typeof picked !== "string") return null;
   return { kind: "index", indexPath: picked };
+}
+
+export async function detectLocalDataset(path: string): Promise<LocalDatasetDetectResponse> {
+  await requireTauri("Detecting dataset type");
+  const trimmed = path.trim();
+  if (!trimmed) throw new Error("Provide a local path to detect.");
+  return invoke<LocalDatasetDetectResponse>("detect_local_dataset", { path: trimmed });
 }
 
 export async function loadIndex(indexPath: string): Promise<IndexSummary> {
@@ -256,6 +301,49 @@ export async function loadChunkList(paths: string[]): Promise<IndexSummary> {
   await requireTauri("Loading chunks");
   if (!paths.length) throw new Error("Select at least one chunk file to load.");
   return invoke<IndexSummary>("load_chunk_list", { paths });
+}
+
+export async function mosaicmlLoadIndex(indexPath: string): Promise<IndexSummary> {
+  await requireTauri("Loading MosaicML MDS index");
+  const trimmed = indexPath.trim();
+  if (!trimmed) throw new Error("Provide an index.json path to load.");
+  return invoke<IndexSummary>("mosaicml_load_index", { indexPath: trimmed });
+}
+
+export async function mosaicmlListSamples(params: { indexPath: string; shardFilename: string }): Promise<ItemMeta[]> {
+  await requireTauri("Reading MosaicML MDS shard");
+  return invoke<ItemMeta[]>("mosaicml_list_samples", params);
+}
+
+export async function mosaicmlPeekField(params: {
+  indexPath: string;
+  shardFilename: string;
+  itemIndex: number;
+  fieldIndex: number;
+}): Promise<FieldPreview> {
+  await requireTauri("Previewing MosaicML MDS field");
+  return invoke<FieldPreview>("mosaicml_peek_field", params);
+}
+
+export async function mosaicmlOpenLeaf(params: {
+  indexPath: string;
+  shardFilename: string;
+  itemIndex: number;
+  fieldIndex: number;
+  openerAppPath?: string | null;
+}): Promise<OpenLeafResponse> {
+  await requireTauri("Opening MosaicML MDS field");
+  return invoke<OpenLeafResponse>("mosaicml_open_leaf", params);
+}
+
+export async function mosaicmlPrepareAudioPreview(params: {
+  indexPath: string;
+  shardFilename: string;
+  itemIndex: number;
+  fieldIndex: number;
+}): Promise<PreparedFileResponse> {
+  await requireTauri("Preparing a MosaicML MDS audio preview");
+  return invoke<PreparedFileResponse>("mosaicml_prepare_audio_preview", params);
 }
 
 export async function listChunkItems(params: { indexPath: string; chunkFilename: string }): Promise<ItemMeta[]> {
@@ -292,6 +380,52 @@ export async function prepareAudioPreview(params: {
 }): Promise<PreparedFileResponse> {
   await requireTauri("Preparing an audio preview");
   return invoke<PreparedFileResponse>("prepare_audio_preview", params);
+}
+
+export async function wdsLoadDir(dirPath: string): Promise<WdsDirSummary> {
+  await requireTauri("Loading WebDataset shards");
+  const trimmed = dirPath.trim();
+  if (!trimmed) throw new Error("Provide a WebDataset directory path to load.");
+  return invoke<WdsDirSummary>("wds_load_dir", { dirPath: trimmed });
+}
+
+export async function wdsListSamples(params: {
+  dirPath: string;
+  shardFilename: string;
+  offset?: number;
+  length?: number;
+  computeTotal?: boolean;
+}): Promise<WdsSampleListResponse> {
+  await requireTauri("Listing WebDataset samples");
+  return invoke<WdsSampleListResponse>("wds_list_samples", params);
+}
+
+export async function wdsPeekMember(params: {
+  dirPath: string;
+  shardFilename: string;
+  memberPath: string;
+}): Promise<FieldPreview> {
+  await requireTauri("Previewing WebDataset member");
+  return invoke<FieldPreview>("wds_peek_member", params);
+}
+
+export async function wdsOpenMember(params: {
+  dirPath: string;
+  shardFilename: string;
+  memberPath: string;
+  openerAppPath?: string | null;
+}): Promise<OpenLeafResponse> {
+  await requireTauri("Opening WebDataset member");
+  return invoke<OpenLeafResponse>("wds_open_member", params);
+}
+
+export async function wdsPrepareAudioPreview(params: {
+  dirPath: string;
+  shardFilename: string;
+  memberPath: string;
+}): Promise<PreparedFileResponse> {
+  await requireTauri("Preparing a WebDataset audio preview");
+  return invoke<PreparedFileResponse>("wds_prepare_audio_preview", params);
 }
 
 export function toFileSrc(path: string): string {

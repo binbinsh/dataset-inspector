@@ -3,6 +3,8 @@ import { create } from "zustand";
 type LoadMode =
   | { kind: "litdata-index"; indexPath: string; requestId: number }
   | { kind: "litdata-chunks"; paths: string[]; requestId: number }
+  | { kind: "mds-index"; indexPath: string; requestId: number }
+  | { kind: "webdataset-dir"; dirPath: string; requestId: number }
   | { kind: "huggingface"; input: string; requestId: number };
 
 type ViewerState = {
@@ -20,11 +22,16 @@ type ViewerState = {
   hfSelectedRowIndex: number | null;
   hfSelectedFieldName: string | null;
 
+  wdsOffset: number;
+
   statusMessage: string | null;
 
   setSourceInput: (value: string) => void;
   setChunkSelection: (paths: string[]) => void;
-  triggerLoad: (mode: "litdata-index" | "litdata-chunks" | "huggingface", payload?: string[] | string) => void;
+  triggerLoad: (
+    mode: "litdata-index" | "litdata-chunks" | "mds-index" | "webdataset-dir" | "huggingface",
+    payload?: string[] | string,
+  ) => void;
 
   selectChunk: (filename: string | null) => void;
   selectItem: (idx: number | null) => void;
@@ -34,6 +41,8 @@ type ViewerState = {
   setHfOffset: (offset: number) => void;
   selectHfRow: (rowIndex: number | null) => void;
   selectHfField: (fieldName: string | null) => void;
+
+  setWdsOffset: (offset: number) => void;
 
   setStatusMessage: (message: string | null) => void;
   clearMode: () => void;
@@ -54,6 +63,8 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   hfSelectedRowIndex: null,
   hfSelectedFieldName: null,
 
+  wdsOffset: 0,
+
   statusMessage: null,
 
   setSourceInput: (value) => set({ sourceInput: value }),
@@ -65,6 +76,24 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       if (!indexPath) return;
       set({
         mode: { kind: "litdata-index", indexPath, requestId },
+        selectedChunkName: null,
+        selectedItemIndex: null,
+        selectedFieldIndex: null,
+        hfConfigOverride: null,
+        hfSplitOverride: null,
+        hfOffset: 0,
+        hfSelectedRowIndex: null,
+        hfSelectedFieldName: null,
+        wdsOffset: 0,
+      });
+      return;
+    }
+
+    if (mode === "mds-index") {
+      const indexPath = get().sourceInput.trim();
+      if (!indexPath) return;
+      set({
+        mode: { kind: "mds-index", indexPath, requestId },
         selectedChunkName: null,
         selectedItemIndex: null,
         selectedFieldIndex: null,
@@ -90,6 +119,26 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         hfOffset: 0,
         hfSelectedRowIndex: null,
         hfSelectedFieldName: null,
+        wdsOffset: 0,
+      });
+      return;
+    }
+
+    if (mode === "webdataset-dir") {
+      const dirPath = typeof payload === "string" ? payload : get().sourceInput;
+      const trimmed = dirPath.trim();
+      if (!trimmed) return;
+      set({
+        mode: { kind: "webdataset-dir", dirPath: trimmed, requestId },
+        selectedChunkName: null,
+        selectedItemIndex: null,
+        selectedFieldIndex: null,
+        hfConfigOverride: null,
+        hfSplitOverride: null,
+        hfOffset: 0,
+        hfSelectedRowIndex: null,
+        hfSelectedFieldName: null,
+        wdsOffset: 0,
       });
       return;
     }
@@ -107,6 +156,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       hfOffset: 0,
       hfSelectedRowIndex: null,
       hfSelectedFieldName: null,
+      wdsOffset: 0,
     });
   },
 
@@ -126,6 +176,8 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   selectHfRow: (rowIndex) => set({ hfSelectedRowIndex: rowIndex }),
   selectHfField: (fieldName) => set({ hfSelectedFieldName: fieldName }),
 
+  setWdsOffset: (offset) => set({ wdsOffset: Math.max(0, offset | 0) }),
+
   setStatusMessage: (message) => set({ statusMessage: message }),
   clearMode: () =>
     set({
@@ -138,6 +190,6 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       hfOffset: 0,
       hfSelectedRowIndex: null,
       hfSelectedFieldName: null,
+      wdsOffset: 0,
     }),
 }));
-

@@ -7,18 +7,107 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Ref (branch or tag) to build"
+        description: "Ref (branch, tag, or sha) to build"
         required: false
         default: ""
 
 permissions:
   contents: write
 
+env:
+  NODE_VERSION: 20
+
 jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      ref: ${{ steps.ref.outputs.ref }}
+      is_tag: ${{ steps.ref.outputs.is_tag }}
+      tag_name: ${{ steps.ref.outputs.tag_name }}
+      release_id: ${{ steps.release_id.outputs.release_id }}
+    steps:
+      - name: Checkout (for tag detection)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve ref
+        id: ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF="${{ github.event.inputs.ref || github.ref }}"
+
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          TAG=""
+          if [[ "$REF" == refs/tags/* ]]; then
+            TAG="${REF#refs/tags/}"
+          else
+            TAG="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
+          fi
+
+          if [[ -n "$TAG" ]]; then
+            echo "is_tag=true" >> "$GITHUB_OUTPUT"
+            echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_tag=false" >> "$GITHUB_OUTPUT"
+            echo "tag_name=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release (auto notes)
+        id: release
+        if: ${{ steps.ref.outputs.is_tag == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ref.outputs.tag_name }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+
+      - name: Export release id
+        id: release_id
+        shell: bash
+        run: |
+          echo "release_id=${{ steps.release.outputs.id }}" >> "$GITHUB_OUTPUT"
+
+  frontend:
+    runs-on: ubuntu-24.04
+    needs: prepare
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Disable Next.js telemetry
+        run: npx next telemetry disable
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-out
+          path: out
+          if-no-files-found: error
+
   build:
     runs-on: ${{ matrix.os }}
+    needs: [prepare, frontend]
     concurrency:
-      group: build-${{ matrix.os }}-${{ github.ref_name }}
+      group: build-${{ matrix.os }}-${{ needs.prepare.outputs.ref }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
@@ -38,12 +127,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ needs.prepare.outputs.ref }}
           fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -51,6 +141,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ contains(matrix.os, 'macos') && 'aarch64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri -> target
 
       - name: Install system deps (Ubuntu)
         if: matrix.os == 'ubuntu-24.04'
@@ -68,23 +164,30 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      - name: Disable Next.js telemetry
-        run: npx next telemetry disable
+      - name: Download frontend dist
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-out
+          path: out
 
-      - name: Build frontend
-        run: npm run build
+      - name: Build (no release)
+        if: ${{ needs.prepare.outputs.is_tag != 'true' }}
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+        with:
+          projectPath: .
+          includeUpdaterJson: false
+          args: ${{ matrix.args }} --config src-tauri/tauri.ci.build.conf.json
 
-      - name: Resolve tag
-        id: tag
-        shell: bash
-        run: |
-          git fetch --tags --force
-          SHA="${{ github.sha }}"
-          TAG=$(git describe --tags --exact-match "$SHA" 2>/dev/null || true)
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Build only
-        if: ${{ steps.tag.outputs.tag == '' }}
+      - name: Build & Upload to Release
+        if: ${{ needs.prepare.outputs.is_tag == 'true' }}
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -98,28 +201,6 @@ jobs:
           APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
         with:
           projectPath: .
-          args: ${{ matrix.args }}
           includeUpdaterJson: true
-
-      - name: Build & Release
-        if: ${{ steps.tag.outputs.tag != '' }}
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
-        with:
-          projectPath: .
-          args: ${{ matrix.args }}
-          includeUpdaterJson: true
-          tagName: ${{ steps.tag.outputs.tag }}
-          releaseName: Dataset Inspector ${{ steps.tag.outputs.tag }}
-          releaseBody: See attached assets for this release.
-          releaseDraft: false
-          prerelease: false
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          args: ${{ matrix.args }} --config src-tauri/tauri.ci.release.conf.json

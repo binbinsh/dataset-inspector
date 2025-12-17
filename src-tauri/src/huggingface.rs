@@ -5,7 +5,7 @@ use tauri::State;
 use url::Url;
 
 use crate::app_error::{AppError, AppResult};
-use crate::litdata::OpenLeafResponse;
+use crate::ipc_types::OpenLeafResponse;
 use crate::open_with;
 
 const DATASETS_SERVER_BASE: &str = "https://datasets-server.huggingface.co/";
@@ -170,14 +170,22 @@ fn pick_default_split(splits: &BTreeSet<String>) -> String {
     if let Some(found) = splits.iter().find(|s| s.starts_with("train")) {
         return found.to_string();
     }
-    splits.iter().next().cloned().unwrap_or_else(|| "train".into())
+    splits
+        .iter()
+        .next()
+        .cloned()
+        .unwrap_or_else(|| "train".into())
 }
 
 fn feature_dtype_label(ty: &serde_json::Value) -> Option<String> {
     ty.get("dtype")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .or_else(|| ty.get("_type").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .or_else(|| {
+            ty.get("_type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
 }
 
 async fn get_json<T: DeserializeOwned>(
@@ -215,7 +223,13 @@ async fn get_json<T: DeserializeOwned>(
 fn sanitize(value: &str) -> String {
     value
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -282,7 +296,10 @@ fn extract_asset(value: &serde_json::Value) -> Option<(Url, Option<String>)> {
                 return None;
             }
             let url = Url::parse(src).ok()?;
-            let mime = map.get("type").and_then(|v| v.as_str()).map(|s| s.trim().to_string());
+            let mime = map
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string());
             Some((url, mime))
         }
         serde_json::Value::Array(arr) => arr.iter().find_map(extract_asset),
@@ -290,7 +307,11 @@ fn extract_asset(value: &serde_json::Value) -> Option<(Url, Option<String>)> {
     }
 }
 
-async fn download_bytes(client: &reqwest::Client, url: Url, token: Option<&str>) -> AppResult<Vec<u8>> {
+async fn download_bytes(
+    client: &reqwest::Client,
+    url: Url,
+    token: Option<&str>,
+) -> AppResult<Vec<u8>> {
     if !allowed_asset_url(&url) {
         return Err(AppError::Invalid("Blocked asset URL host/scheme.".into()));
     }
@@ -330,7 +351,9 @@ pub async fn hf_dataset_preview(
     let mut splits_url = Url::parse(DATASETS_SERVER_BASE)
         .map_err(|e| AppError::Remote(format!("invalid datasets-server base url: {e}")))?;
     splits_url.set_path("splits");
-    splits_url.query_pairs_mut().append_pair("dataset", &dataset);
+    splits_url
+        .query_pairs_mut()
+        .append_pair("dataset", &dataset);
     let splits_resp: SplitsResponse = get_json(&client.http, splits_url, token).await?;
 
     let mut configs_map: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -351,7 +374,9 @@ pub async fn hf_dataset_preview(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| configs_map.keys().next().cloned().unwrap_or_default());
     let splits_for_config = configs_map.get(&selected_config).ok_or_else(|| {
-        AppError::Invalid(format!("Unknown config '{selected_config}' for dataset {dataset}."))
+        AppError::Invalid(format!(
+            "Unknown config '{selected_config}' for dataset {dataset}."
+        ))
     })?;
 
     let selected_split = split
@@ -467,7 +492,11 @@ pub async fn hf_open_field(
     if let Some((asset_url, mime)) = extract_asset(&value) {
         let bytes = download_bytes(&client.http, asset_url.clone(), token).await?;
         let ext = ext_from_url(&asset_url)
-            .or_else(|| mime.as_deref().and_then(ext_from_mime).map(|s| s.to_string()))
+            .or_else(|| {
+                mime.as_deref()
+                    .and_then(ext_from_mime)
+                    .map(|s| s.to_string())
+            })
             .or_else(|| infer::get(&bytes).map(|t| t.extension().to_string()))
             .unwrap_or_else(|| "bin".into());
         let size = bytes.len().min(u32::MAX as usize) as u32;

@@ -223,7 +223,11 @@ pub fn write_sph_as_wav(sph_bytes: &[u8], out: &std::path::Path) -> Result<(), S
     Ok(())
 }
 
-pub fn write_sph_as_wav_with_fallback(sph_bytes: &[u8], sph_path: &Path, wav_path: &Path) -> Result<(), String> {
+pub fn write_sph_as_wav_with_fallback(
+    sph_bytes: &[u8],
+    sph_path: &Path,
+    wav_path: &Path,
+) -> Result<(), String> {
     // Fast path: non-shorten SPHERE can be decoded in pure Rust.
     if write_sph_as_wav(sph_bytes, wav_path).is_ok() {
         return Ok(());
@@ -242,7 +246,9 @@ pub fn write_sph_as_wav_with_fallback(sph_bytes: &[u8], sph_path: &Path, wav_pat
     #[cfg(target_os = "windows")]
     {
         let _ = (sph_path, wav_path);
-        return Err("Shorten-compressed SPHERE audio is not supported on Windows builds.".to_string());
+        return Err(
+            "Shorten-compressed SPHERE audio is not supported on Windows builds.".to_string(),
+        );
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -252,13 +258,15 @@ pub fn write_sph_as_wav_with_fallback(sph_bytes: &[u8], sph_path: &Path, wav_pat
         let sph_path_str = sph_path
             .to_str()
             .ok_or_else(|| "Input path is not valid UTF-8.".to_string())?;
-        let sph_c = CString::new(sph_path_str).map_err(|_| "Input path contains NUL bytes.".to_string())?;
+        let sph_c =
+            CString::new(sph_path_str).map_err(|_| "Input path contains NUL bytes.".to_string())?;
 
         let pcm_path = wav_path.with_extension("pcm16le");
         let pcm_path_str = pcm_path
             .to_str()
             .ok_or_else(|| "PCM path is not valid UTF-8.".to_string())?;
-        let pcm_c = CString::new(pcm_path_str).map_err(|_| "PCM path contains NUL bytes.".to_string())?;
+        let pcm_c =
+            CString::new(pcm_path_str).map_err(|_| "PCM path contains NUL bytes.".to_string())?;
 
         let rc = unsafe {
             litdata_sph_shorten_to_pcm16le(sph_c.as_ptr(), header_bytes as _, pcm_c.as_ptr())
