@@ -1,7 +1,9 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { dirname } from "@tauri-apps/api/path";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { Store } from "@tauri-apps/plugin-store";
+import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
 
 export type ChunkSummary = {
   filename: string;
@@ -109,6 +111,25 @@ async function requireTauri(task: string) {
   if (!isTauri()) {
     throw new Error(`${task} requires the Tauri runtime.`);
   }
+}
+
+export async function checkAppUpdate(): Promise<Update | null> {
+  if (!isTauri()) return null;
+  return check();
+}
+
+export async function downloadAndInstallAppUpdate(params: {
+  update: Update;
+  onProgress?: (event: DownloadEvent) => void;
+}): Promise<void> {
+  await requireTauri("Installing update");
+  await params.update.downloadAndInstall(params.onProgress);
+  await params.update.close();
+}
+
+export async function relaunchApp(): Promise<void> {
+  await requireTauri("Restarting app");
+  await relaunch();
 }
 
 async function getStore(): Promise<Store> {

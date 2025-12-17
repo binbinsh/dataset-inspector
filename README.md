@@ -24,10 +24,20 @@ Dataset Inspector (previously named LitData Viewer) is a desktop UI for inspecti
 - Preview Hugging Face datasets via streaming API (no full local download).
 - Preview text/hex/JSON, copy values, and open extracted fields with your default app.
 
-<p align="center">
-  <img src="screenshot-01.png" alt="Dataset Inspector interface" width="49%">
-  <img src="screenshot-02.png" alt="Dataset Inspector preview" width="49%">
-</p>
+<table align="center">
+  <tr>
+    <td align="center" width="50%">
+      <img src="screenshot-01.png" alt="Dataset Inspector - LitData shards" width="100%">
+      <br />
+      <sub>LitData shards</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="screenshot-02.png" alt="Dataset Inspector - Huggingface dataset" width="100%">
+      <br />
+      <sub>Huggingface dataset</sub>
+    </td>
+  </tr>
+</table>
 
 ## Usage
 1. Download Dataset Inspector installers from [Releases](https://github.com/binbinsh/dataset-inspector/releases).

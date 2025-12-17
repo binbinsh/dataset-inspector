@@ -1,4 +1,6 @@
 {
   "dialog": null,
-  "store": null
+  "process": null,
+  "store": null,
+  "updater": null
 }
