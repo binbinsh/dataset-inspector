@@ -11,8 +11,8 @@ const display = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: "LitData Viewer",
-  description: "Inspect LitData shard indexes and chunk payloads with a Tauri + Next.js desktop UI.",
+  title: "Dataset Inspector",
+  description: "Inspect LitData shards and Hugging Face streaming previews with a Tauri + Next.js desktop UI.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

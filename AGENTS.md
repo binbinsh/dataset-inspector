@@ -1,4 +1,4 @@
-# LitData Viewer
+# Dataset Inspector
 
 ## General Instructions
 - Always `use context7` for the most recent docs and best practices.
