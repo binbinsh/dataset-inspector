@@ -1,4 +1,4 @@
-name: Build LitData Viewer
+name: Build Dataset Inspector
 
 on:
   push:
@@ -115,7 +115,7 @@ jobs:
           projectPath: .
           args: ${{ matrix.args }}
           tagName: ${{ steps.tag.outputs.tag }}
-          releaseName: LitData Viewer ${{ steps.tag.outputs.tag }}
+          releaseName: Dataset Inspector ${{ steps.tag.outputs.tag }}
           releaseBody: See attached assets for this release.
           releaseDraft: false
           prerelease: false

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { dirname } from "@tauri-apps/api/path";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Store } from "@tauri-apps/plugin-store";
@@ -51,9 +51,42 @@ export type OpenLeafResponse = {
   message: string;
 };
 
-const STORE_NAME = "litdata-viewer.bin";
+export type PreparedFileResponse = {
+  path: string;
+  size: number;
+  ext: string;
+};
+
+export type PickResult = { kind: "index"; indexPath: string };
+
+export type HfConfigSummary = {
+  config: string;
+  splits: string[];
+};
+
+export type HfFeature = {
+  name: string;
+  dtype?: string | null;
+  rawType: unknown;
+};
+
+export type HfDatasetPreview = {
+  dataset: string;
+  config: string;
+  split: string;
+  configs: HfConfigSummary[];
+  offset: number;
+  length: number;
+  numRowsTotal: number;
+  partial: boolean;
+  features: HfFeature[];
+  rows: unknown[];
+};
+
+const STORE_NAME = "dataset-inspector.bin";
 const STORE_LAST_INDEX = "last_index";
 const STORE_OPENERS_BY_EXT = "openers_by_ext";
+const STORE_HF_TOKEN = "hf_token";
 
 let storeInstance: Store | null = null;
 
@@ -121,6 +154,29 @@ export async function savePreferredOpenerForExt(ext: string, appPath: string) {
   await store.save();
 }
 
+export async function readHfToken(): Promise<string | null> {
+  if (!isTauri()) return null;
+  const store = await getStore();
+  const value = (await store.get<string>(STORE_HF_TOKEN)) ?? null;
+  const trimmed = String(value ?? "").trim();
+  return trimmed ? trimmed : null;
+}
+
+export async function saveHfToken(token: string) {
+  if (!isTauri()) return;
+  const trimmed = token.trim();
+  const store = await getStore();
+  await store.set(STORE_HF_TOKEN, trimmed);
+  await store.save();
+}
+
+export async function clearHfToken() {
+  if (!isTauri()) return;
+  const store = await getStore();
+  await store.delete(STORE_HF_TOKEN);
+  await store.save();
+}
+
 export async function chooseOpenerApp(): Promise<string | null> {
   await requireTauri("Choosing an application");
   const ua = typeof navigator === "undefined" ? "" : String(navigator.userAgent || "");
@@ -154,33 +210,18 @@ async function resolveDefaultDialogPath(path?: string, rootDir?: string): Promis
   }
 }
 
-export type PickResult =
-  | { kind: "index"; indexPath: string }
-  | { kind: "chunks"; paths: string[] };
-
 export async function chooseIndexSource(currentPath: string, lastRoot?: string): Promise<PickResult | null> {
-  await requireTauri("Choosing files");
+  await requireTauri("Choosing a folder");
   const defaultPath = (await resolveDefaultDialogPath(currentPath, lastRoot)) ?? undefined;
   const picked = await openDialog({
-    title: "Select litdata index.json or chunk .bin/.zst files",
-    multiple: true,
-    filters: [
-      { name: "LitData index", extensions: ["json"] },
-      { name: "LitData chunk", extensions: ["bin", "zst"] },
-      { name: "All supported", extensions: ["json", "bin", "zst"] },
-    ],
+    title: "Select a LitData folder (contains index.json and chunks)",
+    directory: true,
+    multiple: false,
     ...(defaultPath ? { defaultPath } : {}),
   });
-  if (!picked) return null;
-  if (Array.isArray(picked) && picked.length > 1) {
-    return { kind: "chunks", paths: picked };
-  }
-  const first = Array.isArray(picked) ? picked[0] : picked;
-  if (typeof first !== "string") return null;
-  if (first.endsWith(".bin") || first.endsWith(".zst") || first.includes(".bin")) {
-    return { kind: "chunks", paths: [first] };
-  }
-  return { kind: "index", indexPath: first };
+  if (!picked || Array.isArray(picked)) return null;
+  if (typeof picked !== "string") return null;
+  return { kind: "index", indexPath: picked };
 }
 
 export async function loadIndex(indexPath: string): Promise<IndexSummary> {
@@ -222,6 +263,21 @@ export async function openLeaf(params: {
   return invoke<OpenLeafResponse>("open_leaf", params);
 }
 
+export async function prepareAudioPreview(params: {
+  indexPath: string;
+  chunkFilename: string;
+  itemIndex: number;
+  fieldIndex: number;
+}): Promise<PreparedFileResponse> {
+  await requireTauri("Preparing an audio preview");
+  return invoke<PreparedFileResponse>("prepare_audio_preview", params);
+}
+
+export function toFileSrc(path: string): string {
+  if (!isTauri()) return path;
+  return convertFileSrc(path);
+}
+
 export async function openPathWithApp(params: { path: string; appPath: string }): Promise<string> {
   await requireTauri("Opening with app");
   const path = params.path.trim();
@@ -229,4 +285,54 @@ export async function openPathWithApp(params: { path: string; appPath: string })
   if (!path) throw new Error("Missing file path to open.");
   if (!appPath) throw new Error("Missing app path to open with.");
   return invoke<string>("open_path_with_app", { path, appPath });
+}
+
+export async function hfDatasetPreview(params: {
+  input: string;
+  config?: string;
+  split?: string;
+  offset?: number;
+  length?: number;
+  token?: string | null;
+}): Promise<HfDatasetPreview> {
+  await requireTauri("Previewing Hugging Face dataset");
+  const input = params.input.trim();
+  if (!input) throw new Error("Provide a Hugging Face dataset URL or hf://datasets/... URI.");
+  return invoke<HfDatasetPreview>("hf_dataset_preview", {
+    input,
+    config: params.config,
+    split: params.split,
+    offset: params.offset,
+    length: params.length,
+    token: params.token ?? null,
+  });
+}
+
+export async function hfOpenField(params: {
+  input: string;
+  config: string;
+  split: string;
+  rowIndex: number;
+  fieldName: string;
+  openerAppPath?: string | null;
+  token?: string | null;
+}): Promise<OpenLeafResponse> {
+  await requireTauri("Opening Hugging Face field");
+  const input = params.input.trim();
+  const config = params.config.trim();
+  const split = params.split.trim();
+  const fieldName = params.fieldName.trim();
+  if (!input) throw new Error("Missing dataset input.");
+  if (!config) throw new Error("Missing config.");
+  if (!split) throw new Error("Missing split.");
+  if (!fieldName) throw new Error("Missing field name.");
+  return invoke<OpenLeafResponse>("hf_open_field", {
+    input,
+    config,
+    split,
+    rowIndex: params.rowIndex,
+    fieldName,
+    openerAppPath: params.openerAppPath ?? null,
+    token: params.token ?? null,
+  });
 }

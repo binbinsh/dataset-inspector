@@ -124,12 +124,20 @@ pub struct FieldPreview {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenLeafResponse {
-    path: String,
-    size: u32,
-    ext: String,
-    opened: bool,
-    needs_opener: bool,
-    message: String,
+    pub path: String,
+    pub size: u32,
+    pub ext: String,
+    pub opened: bool,
+    pub needs_opener: bool,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedFileResponse {
+    pub path: String,
+    pub size: u32,
+    pub ext: String,
 }
 
 enum ChunkAccess {
@@ -699,6 +707,64 @@ pub async fn open_leaf(
     .map_err(|e| AppError::Task(e.to_string()))?
 }
 
+#[tauri::command]
+pub async fn prepare_audio_preview(
+    index_path: String,
+    chunk_filename: String,
+    item_index: u32,
+    field_index: usize,
+    cache: tauri::State<'_, ChunkCache>,
+) -> AppResult<PreparedFileResponse> {
+    let cache_handle = (*cache).clone();
+    spawn_blocking(move || {
+        let path = PathBuf::from(&index_path);
+        prepare_audio_preview_inner(&path, &chunk_filename, item_index, field_index, &cache_handle)
+    })
+    .await
+    .map_err(|e| AppError::Task(e.to_string()))?
+}
+
+fn prepare_audio_preview_inner(
+    index_path: &Path,
+    chunk_filename: &str,
+    item_index: u32,
+    field_index: usize,
+    cache: &ChunkCache,
+) -> AppResult<PreparedFileResponse> {
+    let parsed = parse_index(index_path)?;
+    let fmt = parsed.config.data_format.clone().unwrap_or_default();
+    let access = load_chunk_access(&parsed, chunk_filename, cache)?;
+    let (data, size) = read_field_bytes(&access, item_index, field_index, fmt.len(), None)?;
+    let ext = guess_ext(fmt.get(field_index), &data).unwrap_or_else(|| "bin".into());
+
+    let temp_dir = std::env::temp_dir().join("dataset-inspector");
+    fs::create_dir_all(&temp_dir)?;
+    let base_name = format!(
+        "{}-i{}-f{}",
+        sanitize(chunk_filename),
+        item_index,
+        field_index
+    );
+
+    let mut out = temp_dir.join(format!("{base_name}.{ext}"));
+    fs::write(&out, &data)?;
+
+    let mut ext = ext;
+    if ext == "sph" {
+        let wav_out = temp_dir.join(format!("{base_name}.wav"));
+        audio::write_sph_as_wav_with_fallback(&data, &out, &wav_out)
+            .map_err(|e| AppError::Invalid(format!("sph decode failed: {e}")))?;
+        out = wav_out;
+        ext = "wav".into();
+    }
+
+    Ok(PreparedFileResponse {
+        path: out.display().to_string(),
+        size,
+        ext,
+    })
+}
+
 fn open_leaf_inner(
     index_path: &Path,
     chunk_filename: &str,
@@ -712,7 +778,7 @@ fn open_leaf_inner(
     let access = load_chunk_access(&parsed, chunk_filename, cache)?;
     let (data, size) = read_field_bytes(&access, item_index, field_index, fmt.len(), None)?;
     let ext = guess_ext(fmt.get(field_index), &data).unwrap_or_else(|| "bin".into());
-    let temp_dir = std::env::temp_dir().join("litdata-viewer");
+    let temp_dir = std::env::temp_dir().join("dataset-inspector");
     fs::create_dir_all(&temp_dir)?;
     let base_name = format!(
         "{}-i{}-f{}",
