@@ -1,7 +1,7 @@
 [package]
-name = "litdata-viewer"
-version = "0.5.1"
-description = "Tauri + Next.js LitData Viewer"
+name = "dataset-inspector"
+version = "1.0.0"
+description = "Tauri + Next.js Dataset Inspector"
 edition = "2021"
 
 [build-dependencies]
@@ -9,7 +9,7 @@ tauri-build = { version = "2.5.2", features = [] }
 cc = "1"
 
 [dependencies]
-tauri = { version = "2.9.3", features = ["wry"] }
+tauri = { version = "2.9.3", features = ["wry", "protocol-asset"] }
 tauri-plugin-dialog = "2.4.2"
 tauri-plugin-store = "2.4.1"
 serde = { version = "1", features = ["derive"] }
@@ -18,5 +18,7 @@ thiserror = "1"
 open = "5"
 infer = "0.19"
 hex = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+url = "2"
 zstd = { version = "0.13", default-features = false, features = ["experimental", "thin"] }
 hound = "3"
