@@ -17,34 +17,46 @@
 </p>
 
 ## About
-Dataset Inspector (previously named LitData Viewer) is a desktop UI for inspecting [Lightning-AI/litData](https://github.com/Lightning-AI/litData) chunked shards and Hugging Face streaming datasets.
+Dataset Inspector is a desktop UI for inspecting [Lightning-AI/litData](https://github.com/Lightning-AI/litData) shards, [MosaicML Streaming](https://github.com/mosaicml/streaming) (MDS) shards, [WebDataset](https://github.com/webdataset/webdataset) tar shards, and [Hugging Face streaming datasets](https://huggingface.co/blog/streaming-datasets).
 
 ## Features
 - Inspect local LitData shards (`index.json` + `.bin/.zst` chunks).
-- Preview Hugging Face datasets via streaming API (no full local download).
-- Preview text/hex/JSON, copy values, and open extracted fields with your default app.
+- Inspect local MosaicML Streaming (MDS) shards (`index.json` + `.mds/.mds.zst`).
+- Inspect local WebDataset shards (`.tar`, `.tar.gz`, `.tar.zst`).
+- Inspect Hugging Face datasets via streaming API (no full local download).
+- Preview json/audio/image, copy values, and open extracted fields with your default app.
 
 <table align="center">
   <tr>
     <td align="center" width="50%">
-      <img src="screenshot-01.png" alt="Dataset Inspector - LitData shards" width="100%">
+      <img src="images/litdata.png" alt="Local LitData shards" width="100%">
       <br />
-      <sub>LitData shards</sub>
+      <sub>Local LitData shards (index.json + .bin files)</sub>
     </td>
     <td align="center" width="50%">
-      <img src="screenshot-02.png" alt="Dataset Inspector - Huggingface dataset" width="100%">
+      <img src="images/mosaicml-mds.png" alt="Local MosaicML MDS shards" width="100%">
       <br />
-      <sub>Huggingface dataset</sub>
+      <sub>Local MosaicML Streaming (MDS) shards (index.json + .mds files)</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="images/webdataset.png" alt="Local WebDataset shards" width="100%">
+      <br />
+      <sub>Local WebDataset shards (.tar files)</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="images/huggingface.png" alt="Hugging Face dataset preview" width="100%">
+      <br />
+      <sub>Hugging Face dataset preview</sub>
     </td>
   </tr>
 </table>
 
 ## Usage
 1. Download Dataset Inspector installers from [Releases](https://github.com/binbinsh/dataset-inspector/releases).
-2. Browse a local LitData path, or a Hugging Face dataset URL / `hf://datasets/...`, then press **Load**.
-3. LitData shards: pick a chunk → item → field, then preview fields
-4. Hugging Face datasets: pick a split → row → field to preview values.
-5. Report issues/ feature requests: https://github.com/binbinsh/dataset-inspector/issues
-
-## Development
-See `docs/development.md`.
+2. Browse a local LitData/MosaicML/WebDataset folder, or a HF dataset URL, then press **Load**.
+3. LitData / MosaicML shards: pick a shard → item → field, then preview fields.
+4. WebDataset shards: pick a shard → sample → field, then preview/open files.
+5. Hugging Face datasets: pick a split → row → field to preview values.
+6. Report issues/ feature requests: https://github.com/binbinsh/dataset-inspector/issues

@@ -28,34 +28,48 @@ import {
   chooseIndexSource,
   chooseOpenerApp,
   clearHfToken,
+  detectLocalDataset,
   hfDatasetPreview,
   hfOpenField,
   isTauri,
   listChunkItems,
-	  loadChunkList,
-	  loadIndex,
-	  openLeaf,
-	  prepareAudioPreview,
-	  openPathWithApp,
-	  peekField,
-	  readHfToken,
+  loadChunkList,
+  loadIndex,
+  mosaicmlListSamples,
+  mosaicmlLoadIndex,
+  mosaicmlOpenLeaf,
+  mosaicmlPeekField,
+  mosaicmlPrepareAudioPreview,
+  openLeaf,
+  openPathWithApp,
+  peekField,
+  prepareAudioPreview,
+  readHfToken,
   readPreferredOpenerForExt,
   readLastIndex,
   saveHfToken,
   saveLastIndex,
   savePreferredOpenerForExt,
   toFileSrc,
+  wdsListSamples,
+  wdsLoadDir,
+  wdsOpenMember,
+  wdsPeekMember,
+  wdsPrepareAudioPreview,
   type HfConfigSummary,
   type FieldPreview,
   type HfDatasetPreview,
   type HfFeature,
   type IndexSummary,
   type ItemMeta,
+  type WdsDirSummary,
+  type WdsSampleListResponse,
 } from "@/lib/tauri-api";
 import { cn } from "@/lib/utils";
 import { useViewerStore } from "@/store/viewer";
 
 const HF_PAGE_SIZE = 25;
+const WDS_PAGE_SIZE = 50;
 const EMPTY_ROWS: unknown[] = [];
 const EMPTY_HF_FEATURES: HfFeature[] = [];
 
@@ -69,15 +83,6 @@ const formatBytes = (value: number) => {
     idx += 1;
   }
   return `${v.toFixed(v >= 10 || v < 1 ? 0 : 1)} ${units[idx]}`;
-};
-
-const looksLikeLocalPath = (value: string) => {
-  const v = value.trim();
-  if (!v) return false;
-  if (v.startsWith("/") || v.startsWith("~") || v.startsWith("./") || v.startsWith("../")) return true;
-  if (/^[A-Za-z]:[\\/]/.test(v)) return true;
-  if (/\.(json|bin|zst)$/i.test(v)) return true;
-  return false;
 };
 
 const looksLikeHfInput = (value: string) => {
@@ -186,6 +191,8 @@ export default function Page() {
     hfSplitOverride,
     hfOffset,
     setHfOffset,
+    wdsOffset,
+    setWdsOffset,
     setHfConfigSplit,
     hfSelectedRowIndex,
     selectHfRow,
@@ -200,8 +207,12 @@ export default function Page() {
   const [hfTokenDraft, setHfTokenDraft] = useState("");
   const [hfTokenDialogOpen, setHfTokenDialogOpen] = useState(false);
   const [hfOffsetDraft, setHfOffsetDraft] = useState(String(hfOffset));
+  
 
   const isLitdataMode = mode?.kind === "litdata-index" || mode?.kind === "litdata-chunks";
+  const isMdsMode = mode?.kind === "mds-index";
+  const isLocalIndexMode = isLitdataMode || isMdsMode;
+  const isWdsMode = mode?.kind === "webdataset-dir";
   const isHfMode = mode?.kind === "huggingface";
   const autodetectedHf = looksLikeHfInput(sourceInput) && chunkSelection.length === 0;
 
@@ -214,17 +225,23 @@ export default function Page() {
     setHfOffsetDraft(String(hfOffset));
   }, [hfOffset]);
 
+  
+
   useEffect(() => {
     if (!isTauri()) return;
-    void readLastIndex().then((last) => {
-      if (!last) return;
-      if (!latestSourceInputRef.current.trim()) setSourceInput(last);
-    });
+    void readLastIndex()
+      .then((last) => {
+        if (!last) return;
+        if (!latestSourceInputRef.current.trim()) setSourceInput(last);
+      })
+      .catch((err) => console.error("Unable to read last index:", err));
   }, [setSourceInput]);
 
   useEffect(() => {
     if (!isTauri()) return;
-    void readHfToken().then((token) => setHfToken(token));
+    void readHfToken()
+      .then((token) => setHfToken(token))
+      .catch((err) => console.error("Unable to read HF token:", err));
   }, []);
   useEffect(() => {
     setHfTokenDraft("");
@@ -232,12 +249,22 @@ export default function Page() {
 
   const indexQuery = useQuery<IndexSummary>({
     queryKey: ["index-summary", mode?.requestId ?? 0],
-    enabled: Boolean(isLitdataMode),
+    enabled: Boolean(isLocalIndexMode),
     queryFn: () => {
       if (!mode) throw new Error("No source selected.");
       if (mode.kind === "litdata-index") return loadIndex(mode.indexPath);
       if (mode.kind === "litdata-chunks") return loadChunkList(mode.paths);
-      throw new Error("Not a LitData mode.");
+      if (mode.kind === "mds-index") return mosaicmlLoadIndex(mode.indexPath);
+      throw new Error("Not a local index mode.");
+    },
+  });
+
+  const wdsDirQuery = useQuery<WdsDirSummary>({
+    queryKey: ["wds-dir", mode?.requestId ?? 0],
+    enabled: Boolean(isWdsMode),
+    queryFn: () => {
+      if (!mode || mode.kind !== "webdataset-dir") throw new Error("No WebDataset selected.");
+      return wdsLoadDir(mode.dirPath);
     },
   });
 
@@ -287,16 +314,23 @@ export default function Page() {
   }, [hfDatasetInput, hfQuery.data]);
 
   useEffect(() => {
-    if (mode?.kind === "litdata-index" && indexQuery.data?.indexPath) {
-      void saveLastIndex(indexQuery.data.indexPath);
+    if ((mode?.kind === "litdata-index" || mode?.kind === "mds-index") && indexQuery.data?.indexPath) {
+      void saveLastIndex(indexQuery.data.indexPath).catch((err) => console.error("Unable to save last index:", err));
     }
   }, [indexQuery.data?.indexPath, mode?.kind]);
 
   useEffect(() => {
     if (indexQuery.data) {
-      setStatusMessage(`Loaded ${indexQuery.data.chunks.length} chunk${indexQuery.data.chunks.length === 1 ? "" : "s"}.`);
+      const noun = isMdsMode ? "shard" : "chunk";
+      setStatusMessage(`Loaded ${indexQuery.data.chunks.length} ${noun}${indexQuery.data.chunks.length === 1 ? "" : "s"}.`);
     }
-  }, [indexQuery.data, setStatusMessage]);
+  }, [indexQuery.data, isMdsMode, setStatusMessage]);
+
+  useEffect(() => {
+    if (wdsDirQuery.data) {
+      setStatusMessage(`Loaded ${wdsDirQuery.data.shards.length} shard${wdsDirQuery.data.shards.length === 1 ? "" : "s"}.`);
+    }
+  }, [setStatusMessage, wdsDirQuery.data]);
 
   useEffect(() => {
     if (hfQuery.data) {
@@ -306,13 +340,17 @@ export default function Page() {
   }, [hfQuery.data, setStatusMessage]);
 
   useEffect(() => {
-    if (indexQuery.data && mode?.kind === "litdata-index" && chunkSelection.length) {
+    if (indexQuery.data && (mode?.kind === "litdata-index" || mode?.kind === "mds-index") && chunkSelection.length) {
       setChunkSelection([]);
     }
-  }, [chunkSelection.length, indexQuery.data, mode?.kind, setChunkSelection]);
+    if (wdsDirQuery.data && mode?.kind === "webdataset-dir" && chunkSelection.length) {
+      setChunkSelection([]);
+    }
+  }, [chunkSelection.length, indexQuery.data, mode?.kind, setChunkSelection, wdsDirQuery.data]);
 
   useEffect(() => {
-    if (!indexQuery.data || !isLitdataMode) {
+    if (!isLocalIndexMode) return;
+    if (!indexQuery.data) {
       selectChunk(null);
       return;
     }
@@ -323,26 +361,74 @@ export default function Page() {
     if (nextChunk !== selectedChunkName) {
       selectChunk(nextChunk);
     }
-  }, [indexQuery.data, isLitdataMode, selectChunk, selectedChunkName]);
+  }, [indexQuery.data, isLocalIndexMode, selectChunk, selectedChunkName]);
+
+  useEffect(() => {
+    if (!isWdsMode) return;
+    if (!wdsDirQuery.data) {
+      selectChunk(null);
+      return;
+    }
+    const nextShard =
+      wdsDirQuery.data.shards.find((shard) => shard.filename === selectedChunkName)?.filename ||
+      wdsDirQuery.data.shards[0]?.filename ||
+      null;
+    if (nextShard !== selectedChunkName) {
+      selectChunk(nextShard);
+    }
+  }, [isWdsMode, selectChunk, selectedChunkName, wdsDirQuery.data]);
 
   const selectedChunk = useMemo(
     () => indexQuery.data?.chunks.find((chunk) => chunk.filename === selectedChunkName) ?? null,
     [indexQuery.data, selectedChunkName],
   );
 
-  const itemsQuery = useQuery<ItemMeta[]>({
-    queryKey: ["chunk-items", indexQuery.data?.indexPath, selectedChunk?.filename],
-    enabled: Boolean(isLitdataMode && indexQuery.data && selectedChunk && !indexQuery.isFetching),
+  const selectedShard = useMemo(
+    () => wdsDirQuery.data?.shards.find((shard) => shard.filename === selectedChunkName) ?? null,
+    [selectedChunkName, wdsDirQuery.data],
+  );
+
+  useEffect(() => {
+    if (!isWdsMode) return;
+    setWdsOffset(0);
+    selectItem(null);
+    selectField(null);
+  }, [isWdsMode, selectField, selectItem, selectedShard?.filename, setWdsOffset]);
+
+  const wdsSamplesQuery = useQuery<WdsSampleListResponse>({
+    queryKey: ["wds-samples", wdsDirQuery.data?.dirPath, selectedShard?.filename, wdsOffset, WDS_PAGE_SIZE],
+    enabled: Boolean(isWdsMode && wdsDirQuery.data && selectedShard && !wdsDirQuery.isFetching),
     queryFn: () =>
-      listChunkItems({
-        indexPath: indexQuery.data?.indexPath ?? "",
-        chunkFilename: selectedChunk?.filename ?? "",
+      wdsListSamples({
+        dirPath: wdsDirQuery.data?.dirPath ?? "",
+        shardFilename: selectedShard?.filename ?? "",
+        offset: wdsOffset,
+        length: WDS_PAGE_SIZE,
       }),
     staleTime: 5 * 60 * 1000,
   });
 
+  const itemsQuery = useQuery<ItemMeta[]>({
+    queryKey: ["chunk-items", indexQuery.data?.indexPath, selectedChunk?.filename],
+    enabled: Boolean(isLocalIndexMode && indexQuery.data && selectedChunk && !indexQuery.isFetching),
+    queryFn: () => {
+      if (!mode) throw new Error("No source selected.");
+      if (mode.kind === "mds-index") {
+        return mosaicmlListSamples({
+          indexPath: indexQuery.data?.indexPath ?? "",
+          shardFilename: selectedChunk?.filename ?? "",
+        });
+      }
+      return listChunkItems({
+        indexPath: indexQuery.data?.indexPath ?? "",
+        chunkFilename: selectedChunk?.filename ?? "",
+      });
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
   useEffect(() => {
-    if (!isLitdataMode) return;
+    if (!isLocalIndexMode) return;
     const items = itemsQuery.data ?? [];
     if (!items.length) {
       selectItem(null);
@@ -352,7 +438,7 @@ export default function Page() {
     if (!exists) {
       selectItem(items[0].itemIndex);
     }
-  }, [isLitdataMode, itemsQuery.data, selectItem, selectedItemIndex]);
+  }, [isLocalIndexMode, itemsQuery.data, selectItem, selectedItemIndex]);
 
   const selectedItem = useMemo(
     () => itemsQuery.data?.find((item) => item.itemIndex === selectedItemIndex) ?? null,
@@ -360,7 +446,7 @@ export default function Page() {
   );
 
   useEffect(() => {
-    if (!isLitdataMode) return;
+    if (!isLocalIndexMode) return;
     if (!selectedItem) {
       selectField(null);
       return;
@@ -369,7 +455,7 @@ export default function Page() {
     if (!exists) {
       selectField(selectedItem.fields[0]?.fieldIndex ?? null);
     }
-  }, [isLitdataMode, selectField, selectedFieldIndex, selectedItem]);
+  }, [isLocalIndexMode, selectField, selectedFieldIndex, selectedItem]);
 
   const selectedField = useMemo(
     () => selectedItem?.fields.find((field) => field.fieldIndex === selectedFieldIndex) ?? null,
@@ -384,13 +470,74 @@ export default function Page() {
       selectedItem?.itemIndex,
       selectedField?.fieldIndex,
     ],
-    enabled: Boolean(isLitdataMode && indexQuery.data && selectedChunk && selectedItem && selectedField && !itemsQuery.isFetching),
-    queryFn: () =>
-      peekField({
+    enabled: Boolean(
+      isLocalIndexMode && indexQuery.data && selectedChunk && selectedItem && selectedField && !itemsQuery.isFetching,
+    ),
+    queryFn: () => {
+      if (!mode) throw new Error("No source selected.");
+      if (mode.kind === "mds-index") {
+        return mosaicmlPeekField({
+          indexPath: indexQuery.data?.indexPath ?? "",
+          shardFilename: selectedChunk?.filename ?? "",
+          itemIndex: selectedItem?.itemIndex ?? 0,
+          fieldIndex: selectedField?.fieldIndex ?? 0,
+        });
+      }
+      return peekField({
         indexPath: indexQuery.data?.indexPath ?? "",
         chunkFilename: selectedChunk?.filename ?? "",
         itemIndex: selectedItem?.itemIndex ?? 0,
         fieldIndex: selectedField?.fieldIndex ?? 0,
+      });
+    },
+    staleTime: 60 * 1000,
+  });
+
+  useEffect(() => {
+    if (!isWdsMode) return;
+    const samples = wdsSamplesQuery.data?.samples ?? [];
+    if (!samples.length) {
+      selectItem(null);
+      return;
+    }
+    const exists = samples.some((sample) => sample.sampleIndex === selectedItemIndex);
+    if (!exists) {
+      selectItem(samples[0].sampleIndex);
+    }
+  }, [isWdsMode, selectItem, selectedItemIndex, wdsSamplesQuery.data?.samples]);
+
+  const selectedWdsSample = useMemo(
+    () => wdsSamplesQuery.data?.samples.find((sample) => sample.sampleIndex === selectedItemIndex) ?? null,
+    [selectedItemIndex, wdsSamplesQuery.data?.samples],
+  );
+
+  useEffect(() => {
+    if (!isWdsMode) return;
+    if (!selectedWdsSample) {
+      selectField(null);
+      return;
+    }
+    const idx = selectedFieldIndex ?? -1;
+    if (idx < 0 || idx >= selectedWdsSample.fields.length) {
+      selectField(selectedWdsSample.fields.length ? 0 : null);
+    }
+  }, [isWdsMode, selectField, selectedFieldIndex, selectedWdsSample]);
+
+  const selectedWdsField = useMemo(() => {
+    if (!selectedWdsSample) return null;
+    const idx = selectedFieldIndex ?? -1;
+    if (idx < 0 || idx >= selectedWdsSample.fields.length) return null;
+    return selectedWdsSample.fields[idx] ?? null;
+  }, [selectedFieldIndex, selectedWdsSample]);
+
+  const wdsPreviewQuery = useQuery<FieldPreview>({
+    queryKey: ["wds-preview", wdsDirQuery.data?.dirPath, selectedShard?.filename, selectedWdsField?.memberPath],
+    enabled: Boolean(isWdsMode && wdsDirQuery.data && selectedShard && selectedWdsField && !wdsSamplesQuery.isFetching),
+    queryFn: () =>
+      wdsPeekMember({
+        dirPath: wdsDirQuery.data?.dirPath ?? "",
+        shardFilename: selectedShard?.filename ?? "",
+        memberPath: selectedWdsField?.memberPath ?? "",
       }),
     staleTime: 60 * 1000,
   });
@@ -409,6 +556,15 @@ export default function Page() {
       }
       const guessedExt = (previewQuery.data?.guessedExt ?? "").trim().replace(/^\\./, "");
       const openerAppPath = guessedExt ? await readPreferredOpenerForExt(guessedExt) : null;
+      if (mode?.kind === "mds-index") {
+        return mosaicmlOpenLeaf({
+          indexPath: indexQuery.data.indexPath,
+          shardFilename: selectedChunk.filename,
+          itemIndex: selectedItem.itemIndex,
+          fieldIndex: selectedField.fieldIndex,
+          openerAppPath,
+        });
+      }
       return openLeaf({
         indexPath: indexQuery.data.indexPath,
         chunkFilename: selectedChunk.filename,
@@ -429,7 +585,7 @@ export default function Page() {
           await savePreferredOpenerForExt(extLabel, picked);
         }
         openWithAppMutation.mutate({ path: result.path, appPath: picked });
-      })();
+      })().catch((err) => setStatusMessage(err instanceof Error ? err.message : "Unable to choose an opener app."));
     },
     onError: (err: unknown) => setStatusMessage(err instanceof Error ? err.message : "Unable to open the selected field."),
   });
@@ -438,6 +594,14 @@ export default function Page() {
     mutationFn: async () => {
       if (!indexQuery.data || !selectedChunk || !selectedItem || !selectedField) {
         throw new Error("Select an audio field to preview.");
+      }
+      if (mode?.kind === "mds-index") {
+        return mosaicmlPrepareAudioPreview({
+          indexPath: indexQuery.data.indexPath,
+          shardFilename: selectedChunk.filename,
+          itemIndex: selectedItem.itemIndex,
+          fieldIndex: selectedField.fieldIndex,
+        });
       }
       return prepareAudioPreview({
         indexPath: indexQuery.data.indexPath,
@@ -448,6 +612,53 @@ export default function Page() {
     },
     onError: (err: unknown) =>
       setStatusMessage(err instanceof Error ? err.message : "Unable to prepare the audio preview."),
+  });
+
+  const wdsOpenFieldMutation = useMutation({
+    mutationFn: async () => {
+      if (!wdsDirQuery.data || !selectedShard || !selectedWdsSample || !selectedWdsField) {
+        throw new Error("Select a field to open.");
+      }
+      const guessedExt = (wdsPreviewQuery.data?.guessedExt ?? "").trim().replace(/^\\./, "");
+      const openerAppPath = guessedExt ? await readPreferredOpenerForExt(guessedExt) : null;
+      return wdsOpenMember({
+        dirPath: wdsDirQuery.data.dirPath,
+        shardFilename: selectedShard.filename,
+        memberPath: selectedWdsField.memberPath,
+        openerAppPath,
+      });
+    },
+    onSuccess: (result) => {
+      setStatusMessage(result.message);
+      if (!result.needsOpener) return;
+      void (async () => {
+        const picked = await chooseOpenerApp();
+        if (!picked) return;
+        const extLabel = (result.ext ?? "").trim().replace(/^\\./, "") || "bin";
+        const remember = window.confirm(`Remember this app for .${extLabel} files?`);
+        if (remember) {
+          await savePreferredOpenerForExt(extLabel, picked);
+        }
+        openWithAppMutation.mutate({ path: result.path, appPath: picked });
+      })().catch((err) => setStatusMessage(err instanceof Error ? err.message : "Unable to choose an opener app."));
+    },
+    onError: (err: unknown) =>
+      setStatusMessage(err instanceof Error ? err.message : "Unable to open the selected WebDataset field."),
+  });
+
+  const wdsAudioPreviewMutation = useMutation({
+    mutationFn: async () => {
+      if (!wdsDirQuery.data || !selectedShard || !selectedWdsField) {
+        throw new Error("Select an audio field to preview.");
+      }
+      return wdsPrepareAudioPreview({
+        dirPath: wdsDirQuery.data.dirPath,
+        shardFilename: selectedShard.filename,
+        memberPath: selectedWdsField.memberPath,
+      });
+    },
+    onError: (err: unknown) =>
+      setStatusMessage(err instanceof Error ? err.message : "Unable to prepare the WebDataset audio preview."),
   });
 
   const copyText = async (text: string) => {
@@ -478,7 +689,7 @@ export default function Page() {
     }
   };
 
-  const handleLoad = () => {
+  const handleLoad = async () => {
     setStatusMessage(null);
     if (chunkSelection.length > 0) {
       triggerLoad("litdata-chunks", chunkSelection);
@@ -490,17 +701,61 @@ export default function Page() {
       triggerLoad("huggingface", trimmed);
       return;
     }
-    triggerLoad("litdata-index");
+    if (!isTauri()) {
+      setStatusMessage("Loading requires the Tauri runtime.");
+      return;
+    }
+    try {
+      const detected = await detectLocalDataset(trimmed);
+      if (detected.kind === "litdata-index") {
+        setSourceInput(detected.indexPath);
+        setChunkSelection([]);
+        triggerLoad("litdata-index");
+        return;
+      }
+      if (detected.kind === "mds-index") {
+        setSourceInput(detected.indexPath);
+        setChunkSelection([]);
+        triggerLoad("mds-index");
+        return;
+      }
+      if (detected.kind !== "webdataset-dir") {
+        setStatusMessage(`Unsupported dataset kind: ${(detected as { kind?: string }).kind ?? "unknown"}`);
+        return;
+      }
+      setSourceInput(detected.dirPath);
+      setChunkSelection([]);
+      triggerLoad("webdataset-dir", detected.dirPath);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const handleChoose = async () => {
     try {
-      const pick = await chooseIndexSource(sourceInput, indexQuery.data?.rootDir);
+      const pick = await chooseIndexSource(sourceInput, indexQuery.data?.rootDir ?? wdsDirQuery.data?.dirPath);
       if (!pick) return;
       setStatusMessage(null);
-      setSourceInput(pick.indexPath);
+      const detected = await detectLocalDataset(pick.indexPath);
+      if (detected.kind === "litdata-index") {
+        setSourceInput(detected.indexPath);
+        setChunkSelection([]);
+        triggerLoad("litdata-index");
+        return;
+      }
+      if (detected.kind === "mds-index") {
+        setSourceInput(detected.indexPath);
+        setChunkSelection([]);
+        triggerLoad("mds-index");
+        return;
+      }
+      if (detected.kind !== "webdataset-dir") {
+        setStatusMessage(`Unsupported dataset kind: ${(detected as { kind?: string }).kind ?? "unknown"}`);
+        return;
+      }
+      setSourceInput(detected.dirPath);
       setChunkSelection([]);
-      triggerLoad("litdata-index");
+      triggerLoad("webdataset-dir", detected.dirPath);
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : String(err));
     }
@@ -517,6 +772,9 @@ export default function Page() {
       (acc, chunk) => acc + (Number.isFinite(chunk.chunkSize) ? chunk.chunkSize : 0),
       0,
     ) ?? 0;
+
+  const wdsTotalBytes =
+    wdsDirQuery.data?.shards?.reduce((acc, shard) => acc + (Number.isFinite(shard.bytes) ? shard.bytes : 0), 0) ?? 0;
 
   const hfSplitPairs = useMemo(() => {
     const configs =
@@ -604,7 +862,7 @@ export default function Page() {
           await savePreferredOpenerForExt(extLabel, picked);
         }
         openWithAppMutation.mutate({ path: result.path, appPath: picked });
-      })();
+      })().catch((err) => setStatusMessage(err instanceof Error ? err.message : "Unable to choose an opener app."));
     },
     onError: (err: unknown) =>
       setStatusMessage(err instanceof Error ? err.message : "Unable to open the selected Hugging Face field."),
@@ -634,23 +892,41 @@ export default function Page() {
     selectHfRow(null);
   };
 
+  const wdsPageSamples = useMemo(() => wdsSamplesQuery.data?.samples ?? [], [wdsSamplesQuery.data?.samples]);
+  const canPaginateWds = Boolean(isWdsMode && wdsSamplesQuery.data && !wdsSamplesQuery.isFetching);
+  const wdsCanPrev = canPaginateWds && wdsOffset > 0;
+  const wdsTotal = wdsSamplesQuery.data?.numSamplesTotal ?? null;
+  const wdsCanNext =
+    canPaginateWds &&
+    (wdsTotal !== null ? wdsOffset + wdsPageSamples.length < wdsTotal : wdsPageSamples.length === WDS_PAGE_SIZE);
+
   const busy =
     indexQuery.isFetching ||
     itemsQuery.isFetching ||
     previewQuery.isFetching ||
+    wdsDirQuery.isFetching ||
+    wdsSamplesQuery.isFetching ||
+    wdsPreviewQuery.isFetching ||
     hfQuery.isFetching ||
     hfOpenMutation.isPending ||
     openFieldMutation.isPending ||
     localAudioPreviewMutation.isPending ||
+    wdsOpenFieldMutation.isPending ||
+    wdsAudioPreviewMutation.isPending ||
     openWithAppMutation.isPending;
   const latestError =
     indexQuery.error ||
     itemsQuery.error ||
     previewQuery.error ||
+    wdsDirQuery.error ||
+    wdsSamplesQuery.error ||
+    wdsPreviewQuery.error ||
     hfQuery.error ||
     hfOpenMutation.error ||
     openFieldMutation.error ||
     localAudioPreviewMutation.error ||
+    wdsOpenFieldMutation.error ||
+    wdsAudioPreviewMutation.error ||
     openWithAppMutation.error ||
     undefined;
   const errorMessage = useMemo(() => {
@@ -684,6 +960,10 @@ export default function Page() {
     if (!indexQuery.data || !selectedChunk || !selectedItem || !selectedField) return null;
     return `${indexQuery.data.indexPath}|${selectedChunk.filename}|${selectedItem.itemIndex}|${selectedField.fieldIndex}`;
   }, [indexQuery.data, selectedChunk, selectedField, selectedItem]);
+  const wdsFieldKey = useMemo(() => {
+    if (!wdsDirQuery.data || !selectedShard || !selectedWdsField) return null;
+    return `${wdsDirQuery.data.dirPath}|${selectedShard.filename}|${selectedWdsField.memberPath}`;
+  }, [selectedShard, selectedWdsField, wdsDirQuery.data]);
   return (
     <main className="h-screen w-screen overflow-hidden bg-transparent">
       <div className="mx-auto flex h-full max-w-screen-2xl flex-col gap-4 px-3 pb-3 pt-4">
@@ -693,18 +973,19 @@ export default function Page() {
             <div className="space-y-3">
               <h1 className="text-3xl font-semibold uppercase text-slate-900">Dataset Inspector</h1>
               <p className="text-sm text-slate-600">
-                Choose a local <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">LitData</code> path, or a
-                Hugging Face dataset URL, or{" "}
-                <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">hf://datasets/...</code>.
+                Choose a local <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">LitData</code> /{" "}
+                <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">MosaicML MDS</code> /{" "}
+                <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">WebDataset</code> path, or a Hugging Face
+                dataset URL.
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 <Input
                   className="w-full min-w-[280px] rounded-full border-slate-200 bg-white/70 backdrop-blur sm:max-w-[420px]"
-                  placeholder="/abs/path/to/index.json  OR  https://huggingface.co/datasets/<namespace>/<dataset-name>"
+                  placeholder="/abs/path/to/index.json  OR  /abs/path/to/mds/index.json  OR  /abs/path/to/webdataset_dir  OR  https://huggingface.co/datasets/<namespace>/<dataset-name>"
                   value={sourceInput}
                   onChange={(e) => setSourceInput(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") handleLoad();
+                    if (e.key === "Enter") void handleLoad();
                   }}
                   aria-label="Source"
                 />
@@ -717,7 +998,10 @@ export default function Page() {
                   <FolderOpen className="mr-2 h-4 w-4" />
                   Browse
                 </Button>
-                <Button onClick={handleLoad} disabled={busy || (!sourceInput.trim() && chunkSelection.length === 0) || !isTauri()}>
+                <Button
+                  onClick={() => void handleLoad()}
+                  disabled={busy || (!sourceInput.trim() && chunkSelection.length === 0) || !isTauri()}
+                >
                   {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : loadIcon}
                   {loadLabel}
                 </Button>
@@ -729,7 +1013,7 @@ export default function Page() {
                 </Badge>
                 {chunkSelection.length > 0 ? (
                   <Badge variant="secondary" className="bg-slate-100/80">
-                    {chunkSelection.length} selected chunk{chunkSelection.length > 1 ? "s" : ""}
+                    {chunkSelection.length} selected shard{chunkSelection.length > 1 ? "s" : ""}
                   </Badge>
                 ) : null}
                 {chunkSelection.length > 0 ? (
@@ -792,9 +1076,28 @@ export default function Page() {
                 </>
               ) : (
                 <>
-                  <StatPill label="Chunks" value={indexQuery.data?.chunks.length ?? "—"} />
-                  <StatPill label="Items" value={totalItems ? totalItems.toLocaleString() : "—"} />
-                  <StatPill label="Size" value={totalBytes ? formatBytes(totalBytes) : "—"} />
+                  {isWdsMode ? (
+                    <>
+                      <StatPill label="Shards" value={wdsDirQuery.data?.shards.length ?? "—"} />
+                      <StatPill
+                        label="Samples"
+                        value={
+                          wdsSamplesQuery.data
+                            ? wdsSamplesQuery.data.numSamplesTotal !== null && wdsSamplesQuery.data.numSamplesTotal !== undefined
+                              ? `${wdsSamplesQuery.data.numSamplesTotal.toLocaleString()}`
+                              : `≥ ${(wdsOffset + (wdsSamplesQuery.data.samples?.length ?? 0)).toLocaleString()}`
+                            : "—"
+                        }
+                      />
+                      <StatPill label="Size" value={wdsTotalBytes ? formatBytes(wdsTotalBytes) : "—"} />
+                    </>
+                  ) : (
+                    <>
+                      <StatPill label="Shards" value={indexQuery.data?.chunks.length ?? "—"} />
+                      <StatPill label="Items" value={totalItems ? totalItems.toLocaleString() : "—"} />
+                      <StatPill label="Size" value={totalBytes ? formatBytes(totalBytes) : "—"} />
+                    </>
+                  )}
                 </>
               )}
             </div>
@@ -830,14 +1133,18 @@ export default function Page() {
                     if (e.key !== "Enter") return;
                     const trimmed = hfTokenDraft.trim();
                     void (async () => {
-                      if (!trimmed) {
-                        await clearHfToken();
-                        setHfToken(null);
-                      } else {
-                        await saveHfToken(trimmed);
-                        setHfToken(trimmed);
+                      try {
+                        if (!trimmed) {
+                          await clearHfToken();
+                          setHfToken(null);
+                        } else {
+                          await saveHfToken(trimmed);
+                          setHfToken(trimmed);
+                        }
+                        setHfTokenDialogOpen(false);
+                      } catch (err) {
+                        setStatusMessage(err instanceof Error ? err.message : "Unable to save token.");
                       }
-                      setHfTokenDialogOpen(false);
                     })();
                   }}
                   autoFocus
@@ -848,34 +1155,42 @@ export default function Page() {
 	                  {hfToken ? (
 	                    <Button
 	                      size="sm"
-	                      variant="outline"
+                      variant="outline"
                       onClick={() => {
                         void (async () => {
-                          await clearHfToken();
-                          setHfToken(null);
-                          setHfTokenDialogOpen(false);
+                          try {
+                            await clearHfToken();
+                            setHfToken(null);
+                            setHfTokenDialogOpen(false);
+                          } catch (err) {
+                            setStatusMessage(err instanceof Error ? err.message : "Unable to clear token.");
+                          }
                         })();
                       }}
                     >
-	                      Clear
+                      Clear
 	                    </Button>
 	                  ) : null}
 	                  <Button size="sm" variant="outline" onClick={() => setHfTokenDialogOpen(false)}>
 	                    Close
 	                  </Button>
-	                  <Button
-	                    size="sm"
-	                    onClick={() => {
-	                      const trimmed = hfTokenDraft.trim();
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        const trimmed = hfTokenDraft.trim();
                       void (async () => {
-                        if (!trimmed) {
-                          await clearHfToken();
-                          setHfToken(null);
-                        } else {
-                          await saveHfToken(trimmed);
-                          setHfToken(trimmed);
+                        try {
+                          if (!trimmed) {
+                            await clearHfToken();
+                            setHfToken(null);
+                          } else {
+                            await saveHfToken(trimmed);
+                            setHfToken(trimmed);
+                          }
+                          setHfTokenDialogOpen(false);
+                        } catch (err) {
+                          setStatusMessage(err instanceof Error ? err.message : "Unable to save token.");
                         }
-                        setHfTokenDialogOpen(false);
                       })();
                     }}
                   >
@@ -1081,9 +1396,203 @@ export default function Page() {
                 </div>
               </DataCard>
             </>
+          ) : isWdsMode ? (
+            <>
+              <DataCard
+                title="Shards"
+                icon={<HardDrive className="h-4 w-4 text-emerald-600" />}
+                footerHint="Pick a shard to list its samples."
+              >
+                <div className="flex h-full flex-col">
+                  <ScrollArea className="flex-1 min-h-0 rounded-[18px] border border-slate-200/70 bg-white/80">
+                    {(wdsDirQuery.data?.shards ?? []).map((shard) => (
+                      <div
+                        key={shard.filename}
+                        className={cn(
+                          "grid cursor-pointer grid-cols-[1fr_auto] items-center gap-3 border-b border-slate-100 px-4 py-3 transition",
+                          selectedShard?.filename === shard.filename
+                            ? "border-l-[3px] border-l-emerald-500 bg-emerald-50/70"
+                            : "hover:bg-slate-50",
+                        )}
+                        onClick={() => selectChunk(shard.filename)}
+                      >
+                        <div className="font-semibold text-slate-900">{shard.filename}</div>
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                          <Badge variant="secondary">{formatBytes(shard.bytes)}</Badge>
+                        </div>
+                      </div>
+                    ))}
+                    {!wdsDirQuery.data?.shards?.length ? (
+                      <EmptyState hint="Load a WebDataset directory to list shards." />
+                    ) : null}
+                  </ScrollArea>
+                </div>
+              </DataCard>
+
+              <DataCard
+                title="Samples"
+                icon={<BadgeInfo className="h-4 w-4 text-sky-600" />}
+                footerHint="Pick a sample to inspect its fields."
+              >
+                <div className="flex h-full flex-col space-y-3 min-h-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!wdsCanPrev}
+                      onClick={() => setWdsOffset(Math.max(0, wdsOffset - WDS_PAGE_SIZE))}
+                    >
+                      <ChevronLeft className="mr-1 h-4 w-4" />
+                      Prev
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!wdsCanNext}
+                      onClick={() => setWdsOffset(wdsOffset + WDS_PAGE_SIZE)}
+                    >
+                      Next
+                      <ChevronRight className="ml-1 h-4 w-4" />
+                    </Button>
+                    <Badge variant="secondary" className="bg-slate-100/80">
+                      Offset {wdsOffset}
+                    </Badge>
+                    {wdsSamplesQuery.data?.partial ? (
+                      <Badge variant="secondary" className="bg-amber-100/80 text-amber-800">
+                        Partial
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <ScrollArea className="flex-1 min-h-0 rounded-[18px] border border-slate-200/70 bg-white/80">
+                    {wdsPageSamples.map((sample) => (
+                      <div
+                        key={`${sample.sampleIndex}:${sample.key}`}
+                        className={cn(
+                          "grid cursor-pointer grid-cols-[1fr_auto] items-center gap-3 border-b border-slate-100 px-4 py-3 transition",
+                          selectedWdsSample?.sampleIndex === sample.sampleIndex
+                            ? "border-l-[3px] border-l-sky-500 bg-sky-50/70"
+                            : "hover:bg-slate-50",
+                        )}
+                        onClick={() => selectItem(sample.sampleIndex)}
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate font-semibold text-slate-900">{sample.key}</div>
+                          <div className="text-xs text-slate-500">Sample {sample.sampleIndex}</div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                          <Badge variant="secondary">{formatBytes(sample.totalBytes)}</Badge>
+                          <Badge variant="secondary">{sample.fields.length} files</Badge>
+                        </div>
+                      </div>
+                    ))}
+                    {wdsSamplesQuery.isPending ? (
+                      <div className="p-4">
+                        <Skeleton className="h-10 w-full" />
+                      </div>
+                    ) : null}
+                    {!wdsPageSamples.length && !wdsSamplesQuery.isPending ? (
+                      <EmptyState hint={selectedShard ? "No samples found at this offset." : "Pick a shard to list its samples."} />
+                    ) : null}
+                  </ScrollArea>
+                </div>
+              </DataCard>
+
+              <DataCard
+                title="Fields"
+                icon={<Play className="h-4 w-4 text-cyan-600" />}
+                footerHint="Double-click a field to open with your default app."
+              >
+                <div className="flex h-full flex-col space-y-3 min-h-0">
+                  {selectedWdsSample ? (
+                    <ScrollArea className="flex-1 min-h-0 rounded-[18px] border border-slate-200/70 bg-white/80">
+                      {selectedWdsSample.fields.map((field, idx) => (
+                        <div
+                          key={`${field.memberPath}:${idx}`}
+                          className={cn(
+                            "grid cursor-pointer grid-cols-[1fr_auto_auto] items-center gap-2 border-b border-slate-100 px-4 py-3 transition",
+                            selectedWdsField?.memberPath === field.memberPath
+                              ? "border-l-[3px] border-l-cyan-500 bg-cyan-50/70"
+                              : "hover:bg-slate-50",
+                          )}
+                          onClick={() => selectField(idx)}
+                          onDoubleClick={() => wdsOpenFieldMutation.mutate()}
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate font-semibold text-slate-900">
+                              {field.name} · {field.memberPath}
+                            </div>
+                          </div>
+                          <div className="text-xs text-slate-500">{formatBytes(field.size)}</div>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="hover:bg-cyan-50"
+                            disabled={busy}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              wdsOpenFieldMutation.mutate();
+                            }}
+                          >
+                            <Play className="mr-1 h-4 w-4" />
+                            Open
+                          </Button>
+                        </div>
+                      ))}
+                    </ScrollArea>
+                  ) : (
+                    <EmptyState hint="Select a sample to see its fields." />
+                  )}
+
+                  <div className="rounded-[18px] border border-dashed border-slate-200/90 bg-white/80 p-3 shadow-inner">
+                    {wdsPreviewQuery.isPending ? (
+                      <Skeleton className="h-20 w-full" />
+                    ) : wdsPreviewQuery.data ? (
+                      <PreviewPanel
+                        key={wdsFieldKey ?? "wds-preview"}
+                        preview={wdsPreviewQuery.data}
+                        onCopy={copyText}
+                        onRequestAudioPreview={
+                          wdsFieldKey
+                            ? async () => {
+                                const prepared = await wdsAudioPreviewMutation.mutateAsync();
+                                return {
+                                  src: toFileSrc(prepared.path),
+                                  ext: prepared.ext,
+                                };
+                              }
+                            : null
+                        }
+                      />
+                    ) : (
+                      <div className="flex items-center gap-2 text-xs text-slate-500">
+                        <TriangleAlert className="h-4 w-4" />
+                        Pick a field to preview its bytes.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 text-sm">
+                    {busy ? <Loader2 className="h-4 w-4 animate-spin text-emerald-600" /> : null}
+                    {errorMessage ? <TriangleAlert className="h-4 w-4 text-amber-500" /> : null}
+                    <span
+                      className={cn(
+                        "select-text cursor-text whitespace-pre-wrap",
+                        errorMessage ? "text-amber-700" : "text-slate-600",
+                      )}
+                    >
+                      {logMessage}
+                    </span>
+                  </div>
+                </div>
+              </DataCard>
+            </>
           ) : (
             <>
-              <DataCard title="Chunks" icon={<HardDrive className="h-4 w-4 text-emerald-600" />} footerHint="Pick a chunk to list its items.">
+              <DataCard
+                title="Shards"
+                icon={<HardDrive className="h-4 w-4 text-emerald-600" />}
+                footerHint="Pick a shard to list its samples."
+              >
                 <div className="flex h-full flex-col">
                   <ScrollArea className="flex-1 min-h-0 rounded-[18px] border border-slate-200/70 bg-white/80">
                     {(indexQuery.data?.chunks ?? []).map((chunk) => (
@@ -1099,17 +1608,25 @@ export default function Page() {
                       >
                         <div className="font-semibold text-slate-900">{chunk.filename}</div>
                         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                          <Badge variant="secondary">{chunk.chunkSize} items</Badge>
+                          <Badge variant="secondary">
+                            {chunk.chunkSize} {isMdsMode ? "samples" : "items"}
+                          </Badge>
                           <Badge variant="secondary">{formatBytes(chunk.chunkBytes)}</Badge>
                         </div>
                       </div>
                     ))}
-                    {!indexQuery.data?.chunks?.length ? <EmptyState hint="Load a LitData index/chunk to list shards." /> : null}
+                    {!indexQuery.data?.chunks?.length ? (
+                      <EmptyState hint="Load a dataset to list shards." />
+                    ) : null}
                   </ScrollArea>
                 </div>
               </DataCard>
 
-              <DataCard title="Items" icon={<BadgeInfo className="h-4 w-4 text-sky-600" />} footerHint="Pick an item to inspect its leaves.">
+              <DataCard
+                title={isMdsMode ? "Samples" : "Items"}
+                icon={<BadgeInfo className="h-4 w-4 text-sky-600" />}
+                footerHint={isMdsMode ? "Pick a sample to inspect its fields." : "Pick an item to inspect its leaves."}
+              >
                 <div className="flex h-full flex-col">
                   <ScrollArea className="flex-1 min-h-0 rounded-[18px] border border-slate-200/70 bg-white/80">
                     {(itemsQuery.data ?? []).map((item) => (
@@ -1121,14 +1638,20 @@ export default function Page() {
                         )}
                         onClick={() => selectItem(item.itemIndex)}
                       >
-                        <div className="font-semibold text-slate-900">Item {item.itemIndex}</div>
+                        <div className="font-semibold text-slate-900">
+                          {isMdsMode ? "Sample" : "Item"} {item.itemIndex}
+                        </div>
                         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
                           <Badge variant="secondary">{formatBytes(item.totalBytes)}</Badge>
-                          <Badge variant="secondary">{item.fields.length} leaves</Badge>
+                          <Badge variant="secondary">
+                            {item.fields.length} {isMdsMode ? "fields" : "leaves"}
+                          </Badge>
                         </div>
                       </div>
                     ))}
-                    {!itemsQuery.data?.length ? <EmptyState hint="Pick a chunk to list its items." /> : null}
+                    {!itemsQuery.data?.length ? (
+                      <EmptyState hint="Pick a shard to list its samples." />
+                    ) : null}
                   </ScrollArea>
                 </div>
               </DataCard>
@@ -1291,6 +1814,7 @@ function PreviewPanel({
 }) {
   const [audioSource, setAudioSource] = useState<{ src: string; type?: string } | null>(null);
   const [audioPreparing, setAudioPreparing] = useState(false);
+  const [audioError, setAudioError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const ext = (preview.guessedExt ?? "").trim().replace(/^\./, "").toLowerCase();
@@ -1324,6 +1848,7 @@ function PreviewPanel({
       return;
     }
     setAudioPreparing(true);
+    setAudioError(null);
     try {
       const prepared = await onRequestAudioPreview();
       setAudioSource({ src: prepared.src, type: mimeForExt(prepared.ext) });
@@ -1331,6 +1856,10 @@ function PreviewPanel({
         audioRef.current?.load();
         void audioRef.current?.play().catch(() => undefined);
       }, 0);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("Audio preview failed:", err);
+      setAudioError(message || "Audio preview failed.");
     } finally {
       setAudioPreparing(false);
     }
@@ -1362,9 +1891,9 @@ function PreviewPanel({
         </div>
       </div>
 
-	      {supportsAudio ? (
-	        <div className="space-y-2">
-	          <div
+      {supportsAudio ? (
+        <div className="space-y-2">
+          <div
 	            className={cn("relative rounded-xl border border-slate-200 bg-white/70 p-2", !audioSource ? "cursor-pointer" : "")}
 	            onClick={() => {
 	              if (!audioSource) void prepareAndPlayAudio();
@@ -1379,6 +1908,7 @@ function PreviewPanel({
               {audioSource ? <source src={audioSource.src} type={audioSource.type} /> : null}
             </audio>
           </div>
+          {audioError ? <div className="text-xs text-amber-700">{audioError}</div> : null}
         </div>
       ) : null}
 

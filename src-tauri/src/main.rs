@@ -3,26 +3,39 @@
 mod app_error;
 mod audio;
 mod huggingface;
+mod ipc_types;
 mod litdata;
+mod mosaicml;
 mod open_with;
+mod webdataset;
 
-#[cfg(desktop)]
-use tauri::Emitter;
 #[cfg(all(desktop, target_os = "macos"))]
 use tauri::menu::{MenuBuilder, SubmenuBuilder};
+#[cfg(desktop)]
+use tauri::Emitter;
 
-use huggingface::{hf_dataset_preview, HfClient};
 use huggingface::hf_open_field;
+use huggingface::{hf_dataset_preview, HfClient};
 use litdata::{
-    list_chunk_items, load_chunk_list, load_index, open_leaf, peek_field, prepare_audio_preview, ChunkCache,
+    list_chunk_items, load_chunk_list, load_index, open_leaf, peek_field, prepare_audio_preview,
+    ChunkCache,
+};
+use mosaicml::{
+    mosaicml_list_samples, mosaicml_load_index, mosaicml_open_leaf, mosaicml_peek_field,
+    mosaicml_prepare_audio_preview,
 };
 use open_with::open_path_with_app;
+use webdataset::{
+    detect_local_dataset, wds_list_samples, wds_load_dir, wds_open_member, wds_peek_member,
+    wds_prepare_audio_preview, WdsScanCache,
+};
 
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
             #[cfg(desktop)]
-            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
 
             #[cfg(all(desktop, target_os = "macos"))]
             {
@@ -51,7 +64,10 @@ fn main() {
                     .select_all()
                     .build()?;
 
-                let menu = MenuBuilder::new(handle).item(&app_menu).item(&edit_menu).build()?;
+                let menu = MenuBuilder::new(handle)
+                    .item(&app_menu)
+                    .item(&edit_menu)
+                    .build()?;
                 app.set_menu(menu)?;
             }
 
@@ -66,14 +82,26 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(ChunkCache::default())
+        .manage(WdsScanCache::default())
         .manage(HfClient::default())
         .invoke_handler(tauri::generate_handler![
+            detect_local_dataset,
             load_index,
             load_chunk_list,
             list_chunk_items,
             peek_field,
             open_leaf,
             prepare_audio_preview,
+            mosaicml_load_index,
+            mosaicml_list_samples,
+            mosaicml_peek_field,
+            mosaicml_open_leaf,
+            mosaicml_prepare_audio_preview,
+            wds_load_dir,
+            wds_list_samples,
+            wds_peek_member,
+            wds_open_member,
+            wds_prepare_audio_preview,
             open_path_with_app,
             hf_dataset_preview,
             hf_open_field

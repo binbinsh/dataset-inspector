@@ -43,4 +43,3 @@ pub fn open_with_app_detached(target: &Path, app_path: &str) -> Result<(), Strin
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
-

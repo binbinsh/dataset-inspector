@@ -12,6 +12,10 @@ use tauri::async_runtime::spawn_blocking;
 use crate::audio;
 
 use crate::app_error::{AppError, AppResult};
+use crate::ipc_types::{
+    ChunkSummary, FieldMeta, FieldPreview, IndexSummary, ItemMeta, OpenLeafResponse,
+    PreparedFileResponse,
+};
 use crate::open_with;
 
 const PREVIEW_BYTES: usize = 2048;
@@ -70,74 +74,6 @@ struct ParsedIndex {
     config: IndexConfig,
     config_raw: serde_json::Value,
     chunks: Vec<RawChunk>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChunkSummary {
-    filename: String,
-    path: String,
-    chunk_size: u32,
-    chunk_bytes: u64,
-    dim: Option<u32>,
-    exists: bool,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct IndexSummary {
-    index_path: String,
-    root_dir: String,
-    data_format: Vec<String>,
-    compression: Option<String>,
-    chunk_size: Option<u32>,
-    chunk_bytes: Option<u64>,
-    config_raw: serde_json::Value,
-    chunks: Vec<ChunkSummary>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FieldMeta {
-    field_index: usize,
-    size: u32,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ItemMeta {
-    item_index: u32,
-    total_bytes: u64,
-    fields: Vec<FieldMeta>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FieldPreview {
-    preview_text: Option<String>,
-    hex_snippet: String,
-    guessed_ext: Option<String>,
-    is_binary: bool,
-    size: u32,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OpenLeafResponse {
-    pub path: String,
-    pub size: u32,
-    pub ext: String,
-    pub opened: bool,
-    pub needs_opener: bool,
-    pub message: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PreparedFileResponse {
-    pub path: String,
-    pub size: u32,
-    pub ext: String,
 }
 
 enum ChunkAccess {
@@ -718,7 +654,13 @@ pub async fn prepare_audio_preview(
     let cache_handle = (*cache).clone();
     spawn_blocking(move || {
         let path = PathBuf::from(&index_path);
-        prepare_audio_preview_inner(&path, &chunk_filename, item_index, field_index, &cache_handle)
+        prepare_audio_preview_inner(
+            &path,
+            &chunk_filename,
+            item_index,
+            field_index,
+            &cache_handle,
+        )
     })
     .await
     .map_err(|e| AppError::Task(e.to_string()))?
@@ -808,7 +750,9 @@ fn open_leaf_inner(
                     ext,
                     opened: false,
                     needs_opener: true,
-                    message: format!("{base} · sph decode failed: {err} · choose an app to open it"),
+                    message: format!(
+                        "{base} · sph decode failed: {err} · choose an app to open it"
+                    ),
                 });
             }
         }

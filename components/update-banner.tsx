@@ -119,6 +119,11 @@ export default function UpdateBanner() {
     manualCheckMutation.reset();
   }, [installMutation.isPending, manualCheckMutation]);
 
+  const isSignatureVerificationError = useMemo(() => {
+    if (downloadState.state !== "error") return false;
+    return /signature verification failed/i.test(downloadState.message);
+  }, [downloadState]);
+
   const openAndRunManualCheck = useCallback(() => {
     setDismissed(false);
     setDownloadState({ state: "idle" });
@@ -168,23 +173,6 @@ export default function UpdateBanner() {
               <CardHeader className="flex-row items-start justify-between gap-3">
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <CardTitle className="text-slate-700">Updates</CardTitle>
-                  <div className="text-sm text-slate-700">
-                    {manualCheckMutation.isPending ? (
-                      <span className="inline-flex items-center gap-2">
-                        <RefreshCw className="h-4 w-4 animate-spin text-slate-500" />
-                        Checking for updates…
-                      </span>
-                    ) : manualCheckMutation.isError ? (
-                      <span className="inline-flex items-center gap-2 text-rose-700">
-                        <TriangleAlert className="h-4 w-4" />
-                        Update check failed
-                      </span>
-                    ) : update ? (
-                      <span className="text-slate-800">Update available</span>
-                    ) : (
-                      <span className="text-slate-800">You&apos;re up to date</span>
-                    )}
-                  </div>
                 </div>
                 <Button
                   variant="ghost"
@@ -199,6 +187,24 @@ export default function UpdateBanner() {
               </CardHeader>
 
               <CardContent className="flex flex-col gap-4">
+                <div className="text-sm text-slate-700">
+                  {manualCheckMutation.isPending ? (
+                    <span className="inline-flex items-center gap-2">
+                      <RefreshCw className="h-4 w-4 animate-spin text-slate-500" />
+                      Checking for updates…
+                    </span>
+                  ) : manualCheckMutation.isError ? (
+                    <span className="inline-flex items-center gap-2 text-rose-700">
+                      <TriangleAlert className="h-4 w-4" />
+                      Update check failed
+                    </span>
+                  ) : update ? (
+                    <span className="text-slate-800">Update available</span>
+                  ) : (
+                    <span className="text-slate-800">You&apos;re up to date.</span>
+                  )}
+                </div>
+
                 {manualCheckMutation.isError ? (
                   <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
                     {manualCheckMutation.error instanceof Error
@@ -224,15 +230,18 @@ export default function UpdateBanner() {
                       <div className="mt-2 line-clamp-5 whitespace-pre-wrap text-xs text-emerald-800">{update.body}</div>
                     ) : null}
                   </div>
-                ) : (
-                  <div className="rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-700">
-                    No updates found for your current version.
-                  </div>
-                )}
+                ) : null}
 
                 {downloadState.state === "error" ? (
                   <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
-                    {downloadState.message}
+                    {isSignatureVerificationError ? (
+                      <div className="flex flex-col gap-1">
+                        <div className="font-medium">Signature verification failed.</div>
+                        <div className="text-rose-800/90">The downloaded update could not be verified.</div>
+                      </div>
+                    ) : (
+                      downloadState.message
+                    )}
                   </div>
                 ) : null}
 
@@ -260,7 +269,7 @@ export default function UpdateBanner() {
                     onClick={() => manualCheckMutation.mutate()}
                     disabled={manualCheckMutation.isPending || installMutation.isPending}
                   >
-                    <RefreshCw className={cn("mr-2 h-4 w-4", manualCheckMutation.isPending ? "animate-spin" : "")} />
+                    <RefreshCw className="mr-2 h-4 w-4" />
                     Check again
                   </Button>
                   {update ? (

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBuildCommand": "node -e \"process.exit(0)\""
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false
+  }
+}
+
