@@ -25,8 +25,8 @@ jobs:
       matrix:
         include:
           - os: macos-15
-            label: macOS
-            args: "--bundles dmg"
+            label: macOS (Apple Silicon)
+            args: "--target aarch64-apple-darwin --bundles app,dmg"
           - os: ubuntu-24.04
             label: Ubuntu
             args: "--bundles appimage,deb,rpm"
@@ -49,6 +49,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ contains(matrix.os, 'macos') && 'aarch64-apple-darwin' || '' }}
 
       - name: Install system deps (Ubuntu)
         if: matrix.os == 'ubuntu-24.04'
@@ -97,6 +99,7 @@ jobs:
         with:
           projectPath: .
           args: ${{ matrix.args }}
+          includeUpdaterJson: true
 
       - name: Build & Release
         if: ${{ steps.tag.outputs.tag != '' }}
@@ -114,6 +117,7 @@ jobs:
         with:
           projectPath: .
           args: ${{ matrix.args }}
+          includeUpdaterJson: true
           tagName: ${{ steps.tag.outputs.tag }}
           releaseName: Dataset Inspector ${{ steps.tag.outputs.tag }}
           releaseBody: See attached assets for this release.

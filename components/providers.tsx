@@ -5,6 +5,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 
 import { createQueryClient } from "@/lib/query-client";
+import UpdateBanner from "@/components/update-banner";
 
 export default function Providers({ children }: { children: ReactNode }) {
   const [client] = useState(() => createQueryClient());
@@ -12,6 +13,7 @@ export default function Providers({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={client}>
       {children}
+      <UpdateBanner />
       {process.env.NODE_ENV === "development" ? <ReactQueryDevtools initialIsOpen={false} /> : null}
     </QueryClientProvider>
   );

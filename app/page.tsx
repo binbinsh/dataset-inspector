@@ -39,17 +39,18 @@ import {
 	  openPathWithApp,
 	  peekField,
 	  readHfToken,
-	  readPreferredOpenerForExt,
-	  readLastIndex,
-	  saveHfToken,
-	  saveLastIndex,
-	  savePreferredOpenerForExt,
-	  toFileSrc,
-	  type FieldPreview,
-	  type HfDatasetPreview,
-	  type HfFeature,
-	  type IndexSummary,
-	  type ItemMeta,
+  readPreferredOpenerForExt,
+  readLastIndex,
+  saveHfToken,
+  saveLastIndex,
+  savePreferredOpenerForExt,
+  toFileSrc,
+  type HfConfigSummary,
+  type FieldPreview,
+  type HfDatasetPreview,
+  type HfFeature,
+  type IndexSummary,
+  type ItemMeta,
 } from "@/lib/tauri-api";
 import { cn } from "@/lib/utils";
 import { useViewerStore } from "@/store/viewer";
@@ -264,6 +265,26 @@ export default function Page() {
     },
     staleTime: 60 * 1000,
   });
+
+  const hfDatasetInput = isHfMode ? mode.input : null;
+  const [hfSplitsCache, setHfSplitsCache] = useState<{ input: string; configs: HfConfigSummary[] } | null>(null);
+  const [hfSelectedCache, setHfSelectedCache] = useState<{ input: string; config: string; split: string } | null>(null);
+
+  useEffect(() => {
+    if (!hfDatasetInput) {
+      setHfSplitsCache(null);
+      setHfSelectedCache(null);
+      return;
+    }
+    setHfSplitsCache((prev) => (prev?.input === hfDatasetInput ? prev : null));
+    setHfSelectedCache((prev) => (prev?.input === hfDatasetInput ? prev : null));
+  }, [hfDatasetInput]);
+
+  useEffect(() => {
+    if (!hfDatasetInput || !hfQuery.data) return;
+    setHfSplitsCache({ input: hfDatasetInput, configs: hfQuery.data.configs });
+    setHfSelectedCache({ input: hfDatasetInput, config: hfQuery.data.config, split: hfQuery.data.split });
+  }, [hfDatasetInput, hfQuery.data]);
 
   useEffect(() => {
     if (mode?.kind === "litdata-index" && indexQuery.data?.indexPath) {
@@ -498,11 +519,26 @@ export default function Page() {
     ) ?? 0;
 
   const hfSplitPairs = useMemo(() => {
-    const configs = hfQuery.data?.configs ?? [];
+    const configs =
+      hfQuery.data?.configs ?? (hfSplitsCache?.input === hfDatasetInput ? hfSplitsCache.configs : []);
     return configs.flatMap((c) => c.splits.map((s) => ({ config: c.config, split: s })));
-  }, [hfQuery.data?.configs]);
+  }, [hfDatasetInput, hfQuery.data?.configs, hfSplitsCache]);
 
-  const hfSelectedPairKey = hfQuery.data ? `${hfQuery.data.config}:${hfQuery.data.split}` : null;
+  const hfSelectedPairKey =
+    hfConfigOverride && hfSplitOverride
+      ? `${hfConfigOverride}:${hfSplitOverride}`
+      : hfQuery.data
+        ? `${hfQuery.data.config}:${hfQuery.data.split}`
+        : hfSelectedCache?.input === hfDatasetInput
+          ? `${hfSelectedCache.config}:${hfSelectedCache.split}`
+          : null;
+
+  const hfSelectedSplitLabel = useMemo(() => {
+    const selectedConfig = (hfConfigOverride ?? hfQuery.data?.config ?? hfSelectedCache?.config ?? "").trim();
+    const selectedSplit = (hfSplitOverride ?? hfQuery.data?.split ?? hfSelectedCache?.split ?? "").trim();
+    if (!selectedConfig || !selectedSplit) return "—";
+    return `${selectedConfig}/${selectedSplit}`;
+  }, [hfConfigOverride, hfQuery.data?.config, hfQuery.data?.split, hfSelectedCache?.config, hfSelectedCache?.split, hfSplitOverride]);
 
   const hfRows = useMemo(() => hfQuery.data?.rows ?? EMPTY_ROWS, [hfQuery.data?.rows]);
   const derivedSelectedRowIndex =
@@ -751,7 +787,7 @@ export default function Page() {
 	                      </Button>
 	                    }
 	                  />
-                  <StatPill label="Split" value={hfQuery.data ? `${hfQuery.data.config}/${hfQuery.data.split}` : "—"} />
+                    <StatPill label="Split" value={hfSelectedSplitLabel} />
                   <StatPill label="Rows" value={hfQuery.data?.numRowsTotal ?? "—"} />
                 </>
               ) : (
@@ -873,7 +909,7 @@ export default function Page() {
                         </div>
                       );
                     })}
-                    {hfQuery.isPending ? (
+                    {hfQuery.isPending && !hfSplitPairs.length ? (
                       <div className="p-4">
                         <Skeleton className="h-10 w-full" />
                       </div>
