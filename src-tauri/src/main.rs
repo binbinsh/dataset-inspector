@@ -8,6 +8,7 @@ mod litdata;
 mod mosaicml;
 mod open_with;
 mod webdataset;
+mod zenodo;
 
 #[cfg(all(desktop, target_os = "macos"))]
 use tauri::menu::{MenuBuilder, SubmenuBuilder};
@@ -28,6 +29,12 @@ use open_with::open_path_with_app;
 use webdataset::{
     detect_local_dataset, wds_list_samples, wds_load_dir, wds_open_member, wds_peek_member,
     wds_prepare_audio_preview, WdsScanCache,
+};
+use zenodo::{
+    zenodo_open_file, zenodo_peek_file, zenodo_record_summary, zenodo_tar_inline_entry_media,
+    zenodo_tar_list_entries_paged, zenodo_tar_open_entry, zenodo_tar_peek_entry,
+    zenodo_zip_inline_entry_media, zenodo_zip_list_entries, zenodo_zip_open_entry,
+    zenodo_zip_peek_entry, ZenodoClient, ZenodoTarScanCache, ZenodoZipIndexCache,
 };
 
 fn main() {
@@ -84,6 +91,9 @@ fn main() {
         .manage(ChunkCache::default())
         .manage(WdsScanCache::default())
         .manage(HfClient::default())
+        .manage(ZenodoClient::default())
+        .manage(ZenodoZipIndexCache::default())
+        .manage(ZenodoTarScanCache::default())
         .invoke_handler(tauri::generate_handler![
             detect_local_dataset,
             load_index,
@@ -104,7 +114,18 @@ fn main() {
             wds_prepare_audio_preview,
             open_path_with_app,
             hf_dataset_preview,
-            hf_open_field
+            hf_open_field,
+            zenodo_record_summary,
+            zenodo_peek_file,
+            zenodo_open_file,
+            zenodo_zip_list_entries,
+            zenodo_zip_peek_entry,
+            zenodo_zip_open_entry,
+            zenodo_zip_inline_entry_media,
+            zenodo_tar_list_entries_paged,
+            zenodo_tar_peek_entry,
+            zenodo_tar_open_entry,
+            zenodo_tar_inline_entry_media
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

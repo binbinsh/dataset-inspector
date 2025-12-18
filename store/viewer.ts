@@ -5,7 +5,8 @@ type LoadMode =
   | { kind: "litdata-chunks"; paths: string[]; requestId: number }
   | { kind: "mds-index"; indexPath: string; requestId: number }
   | { kind: "webdataset-dir"; dirPath: string; requestId: number }
-  | { kind: "huggingface"; input: string; requestId: number };
+  | { kind: "huggingface"; input: string; requestId: number }
+  | { kind: "zenodo"; input: string; requestId: number };
 
 type ViewerState = {
   sourceInput: string;
@@ -22,6 +23,10 @@ type ViewerState = {
   hfSelectedRowIndex: number | null;
   hfSelectedFieldName: string | null;
 
+  zenodoSelectedFileKey: string | null;
+  zenodoSelectedEntryName: string | null;
+  zenodoEntriesOffset: number;
+
   wdsOffset: number;
 
   statusMessage: string | null;
@@ -29,7 +34,7 @@ type ViewerState = {
   setSourceInput: (value: string) => void;
   setChunkSelection: (paths: string[]) => void;
   triggerLoad: (
-    mode: "litdata-index" | "litdata-chunks" | "mds-index" | "webdataset-dir" | "huggingface",
+    mode: "litdata-index" | "litdata-chunks" | "mds-index" | "webdataset-dir" | "huggingface" | "zenodo",
     payload?: string[] | string,
   ) => void;
 
@@ -41,6 +46,10 @@ type ViewerState = {
   setHfOffset: (offset: number) => void;
   selectHfRow: (rowIndex: number | null) => void;
   selectHfField: (fieldName: string | null) => void;
+
+  selectZenodoFile: (key: string | null) => void;
+  selectZenodoEntry: (name: string | null) => void;
+  setZenodoEntriesOffset: (offset: number) => void;
 
   setWdsOffset: (offset: number) => void;
 
@@ -63,6 +72,10 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   hfSelectedRowIndex: null,
   hfSelectedFieldName: null,
 
+  zenodoSelectedFileKey: null,
+  zenodoSelectedEntryName: null,
+  zenodoEntriesOffset: 0,
+
   wdsOffset: 0,
 
   statusMessage: null,
@@ -84,6 +97,8 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         hfOffset: 0,
         hfSelectedRowIndex: null,
         hfSelectedFieldName: null,
+        zenodoSelectedFileKey: null,
+        zenodoSelectedEntryName: null,
         wdsOffset: 0,
       });
       return;
@@ -102,6 +117,8 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         hfOffset: 0,
         hfSelectedRowIndex: null,
         hfSelectedFieldName: null,
+        zenodoSelectedFileKey: null,
+        zenodoSelectedEntryName: null,
       });
       return;
     }
@@ -119,6 +136,8 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         hfOffset: 0,
         hfSelectedRowIndex: null,
         hfSelectedFieldName: null,
+        zenodoSelectedFileKey: null,
+        zenodoSelectedEntryName: null,
         wdsOffset: 0,
       });
       return;
@@ -138,6 +157,30 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         hfOffset: 0,
         hfSelectedRowIndex: null,
         hfSelectedFieldName: null,
+        zenodoSelectedFileKey: null,
+        zenodoSelectedEntryName: null,
+        wdsOffset: 0,
+      });
+      return;
+    }
+
+    if (mode === "zenodo") {
+      const input = typeof payload === "string" ? payload : get().sourceInput;
+      const trimmed = input.trim();
+      if (!trimmed) return;
+      set({
+        mode: { kind: "zenodo", input: trimmed, requestId },
+        selectedChunkName: null,
+        selectedItemIndex: null,
+        selectedFieldIndex: null,
+        hfConfigOverride: null,
+        hfSplitOverride: null,
+        hfOffset: 0,
+        hfSelectedRowIndex: null,
+        hfSelectedFieldName: null,
+        zenodoSelectedFileKey: null,
+        zenodoSelectedEntryName: null,
+        zenodoEntriesOffset: 0,
         wdsOffset: 0,
       });
       return;
@@ -156,6 +199,8 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       hfOffset: 0,
       hfSelectedRowIndex: null,
       hfSelectedFieldName: null,
+      zenodoSelectedFileKey: null,
+      zenodoSelectedEntryName: null,
       wdsOffset: 0,
     });
   },
@@ -176,6 +221,10 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   selectHfRow: (rowIndex) => set({ hfSelectedRowIndex: rowIndex }),
   selectHfField: (fieldName) => set({ hfSelectedFieldName: fieldName }),
 
+  selectZenodoFile: (key) => set({ zenodoSelectedFileKey: key, zenodoSelectedEntryName: null, zenodoEntriesOffset: 0 }),
+  selectZenodoEntry: (name) => set({ zenodoSelectedEntryName: name }),
+  setZenodoEntriesOffset: (offset) => set({ zenodoEntriesOffset: Math.max(0, offset | 0) }),
+
   setWdsOffset: (offset) => set({ wdsOffset: Math.max(0, offset | 0) }),
 
   setStatusMessage: (message) => set({ statusMessage: message }),
@@ -190,6 +239,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       hfOffset: 0,
       hfSelectedRowIndex: null,
       hfSelectedFieldName: null,
+      zenodoSelectedFileKey: null,
+      zenodoSelectedEntryName: null,
+      zenodoEntriesOffset: 0,
       wdsOffset: 0,
     }),
 }));

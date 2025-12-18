@@ -59,6 +59,13 @@ export type PreparedFileResponse = {
   ext: string;
 };
 
+export type InlineMediaResponse = {
+  base64: string;
+  mime: string;
+  size: number;
+  ext: string;
+};
+
 export type PickResult = { kind: "index"; indexPath: string };
 
 export type LocalDatasetDetectResponse =
@@ -121,6 +128,54 @@ export type HfDatasetPreview = {
   partial: boolean;
   features: HfFeature[];
   rows: unknown[];
+};
+
+export type ZenodoCreator = {
+  name: string;
+  affiliation?: string | null;
+  orcid?: string | null;
+};
+
+export type ZenodoFileSummary = {
+  key: string;
+  size: number;
+  checksum?: string | null;
+  contentUrl: string;
+};
+
+export type ZenodoRecordSummary = {
+  recordId: number;
+  title: string;
+  doi?: string | null;
+  doiUrl?: string | null;
+  publicationDate?: string | null;
+  version?: string | null;
+  accessRight?: string | null;
+  recordUrl?: string | null;
+  creators: ZenodoCreator[];
+  files: ZenodoFileSummary[];
+};
+
+export type ZenodoZipEntrySummary = {
+  name: string;
+  method: number;
+  compressedSize: number;
+  uncompressedSize: number;
+  isDir: boolean;
+};
+
+export type ZenodoTarEntrySummary = {
+  name: string;
+  size: number;
+  isDir: boolean;
+};
+
+export type ZenodoTarEntryListResponse = {
+  offset: number;
+  length: number;
+  entries: ZenodoTarEntrySummary[];
+  partial: boolean;
+  numEntriesTotal?: number | null;
 };
 
 const STORE_NAME = "dataset-inspector.bin";
@@ -490,4 +545,165 @@ export async function hfOpenField(params: {
     openerAppPath: params.openerAppPath ?? null,
     token: params.token ?? null,
   });
+}
+
+export async function zenodoRecordSummary(params: { input: string }): Promise<ZenodoRecordSummary> {
+  await requireTauri("Loading Zenodo record");
+  const input = params.input.trim();
+  if (!input) throw new Error("Provide a Zenodo record URL like https://zenodo.org/records/<id>.");
+  return invoke<ZenodoRecordSummary>("zenodo_record_summary", { input });
+}
+
+export async function zenodoPeekFile(params: { contentUrl: string }): Promise<FieldPreview> {
+  await requireTauri("Previewing Zenodo file");
+  const contentUrl = params.contentUrl.trim();
+  if (!contentUrl) throw new Error("Missing Zenodo content URL.");
+  return invoke<FieldPreview>("zenodo_peek_file", { contentUrl });
+}
+
+export async function zenodoOpenFile(params: {
+  contentUrl: string;
+  filename: string;
+  openerAppPath?: string | null;
+}): Promise<OpenLeafResponse> {
+  await requireTauri("Opening Zenodo file");
+  const contentUrl = params.contentUrl.trim();
+  const filename = params.filename.trim();
+  if (!contentUrl) throw new Error("Missing Zenodo content URL.");
+  if (!filename) throw new Error("Missing filename.");
+  return invoke<OpenLeafResponse>("zenodo_open_file", {
+    contentUrl,
+    filename,
+    openerAppPath: params.openerAppPath ?? null,
+  });
+}
+
+export async function zenodoZipListEntries(params: {
+  contentUrl: string;
+  filename: string;
+}): Promise<ZenodoZipEntrySummary[]> {
+  await requireTauri("Listing ZIP entries");
+  const contentUrl = params.contentUrl.trim();
+  const filename = params.filename.trim();
+  if (!contentUrl) throw new Error("Missing Zenodo content URL.");
+  if (!filename) throw new Error("Missing filename.");
+  return invoke<ZenodoZipEntrySummary[]>("zenodo_zip_list_entries", { contentUrl, filename });
+}
+
+export async function zenodoZipPeekEntry(params: {
+  contentUrl: string;
+  filename: string;
+  entryName: string;
+}): Promise<FieldPreview> {
+  await requireTauri("Previewing ZIP entry");
+  const contentUrl = params.contentUrl.trim();
+  const filename = params.filename.trim();
+  const entryName = params.entryName.trim();
+  if (!contentUrl) throw new Error("Missing Zenodo content URL.");
+  if (!filename) throw new Error("Missing filename.");
+  if (!entryName) throw new Error("Missing ZIP entry name.");
+  return invoke<FieldPreview>("zenodo_zip_peek_entry", { contentUrl, filename, entryName });
+}
+
+export async function zenodoZipOpenEntry(params: {
+  contentUrl: string;
+  filename: string;
+  entryName: string;
+  openerAppPath?: string | null;
+}): Promise<OpenLeafResponse> {
+  await requireTauri("Opening ZIP entry");
+  const contentUrl = params.contentUrl.trim();
+  const filename = params.filename.trim();
+  const entryName = params.entryName.trim();
+  if (!contentUrl) throw new Error("Missing Zenodo content URL.");
+  if (!filename) throw new Error("Missing filename.");
+  if (!entryName) throw new Error("Missing ZIP entry name.");
+  return invoke<OpenLeafResponse>("zenodo_zip_open_entry", {
+    contentUrl,
+    filename,
+    entryName,
+    openerAppPath: params.openerAppPath ?? null,
+  });
+}
+
+export async function zenodoZipInlineEntryMedia(params: {
+  contentUrl: string;
+  filename: string;
+  entryName: string;
+}): Promise<InlineMediaResponse> {
+  await requireTauri("Previewing ZIP media");
+  const contentUrl = params.contentUrl.trim();
+  const filename = params.filename.trim();
+  const entryName = params.entryName.trim();
+  if (!contentUrl) throw new Error("Missing Zenodo content URL.");
+  if (!filename) throw new Error("Missing filename.");
+  if (!entryName) throw new Error("Missing ZIP entry name.");
+  return invoke<InlineMediaResponse>("zenodo_zip_inline_entry_media", { contentUrl, filename, entryName });
+}
+
+export async function zenodoTarListEntries(params: {
+  contentUrl: string;
+  filename: string;
+  offset?: number;
+  length?: number;
+}): Promise<ZenodoTarEntryListResponse> {
+  await requireTauri("Listing TAR entries");
+  const contentUrl = params.contentUrl.trim();
+  const filename = params.filename.trim();
+  if (!contentUrl) throw new Error("Missing Zenodo content URL.");
+  if (!filename) throw new Error("Missing filename.");
+  const offset = typeof params.offset === "number" && Number.isFinite(params.offset) ? (params.offset | 0) : 0;
+  const length = typeof params.length === "number" && Number.isFinite(params.length) ? (params.length | 0) : 50;
+  return invoke<ZenodoTarEntryListResponse>("zenodo_tar_list_entries_paged", { contentUrl, filename, offset, length });
+}
+
+export async function zenodoTarPeekEntry(params: {
+  contentUrl: string;
+  filename: string;
+  entryName: string;
+}): Promise<FieldPreview> {
+  await requireTauri("Previewing TAR entry");
+  const contentUrl = params.contentUrl.trim();
+  const filename = params.filename.trim();
+  const entryName = params.entryName.trim();
+  if (!contentUrl) throw new Error("Missing Zenodo content URL.");
+  if (!filename) throw new Error("Missing filename.");
+  if (!entryName) throw new Error("Missing TAR entry name.");
+  return invoke<FieldPreview>("zenodo_tar_peek_entry", { contentUrl, filename, entryName });
+}
+
+export async function zenodoTarOpenEntry(params: {
+  contentUrl: string;
+  filename: string;
+  entryName: string;
+  openerAppPath?: string | null;
+}): Promise<OpenLeafResponse> {
+  await requireTauri("Opening TAR entry");
+  const contentUrl = params.contentUrl.trim();
+  const filename = params.filename.trim();
+  const entryName = params.entryName.trim();
+  if (!contentUrl) throw new Error("Missing Zenodo content URL.");
+  if (!filename) throw new Error("Missing filename.");
+  if (!entryName) throw new Error("Missing TAR entry name.");
+  return invoke<OpenLeafResponse>("zenodo_tar_open_entry", {
+    contentUrl,
+    filename,
+    entryName,
+    openerAppPath: params.openerAppPath ?? null,
+  });
+}
+
+export async function zenodoTarInlineEntryMedia(params: {
+  contentUrl: string;
+  filename: string;
+  entryName: string;
+}): Promise<InlineMediaResponse> {
+  await requireTauri("Previewing TAR media");
+  const contentUrl = params.contentUrl.trim();
+  const filename = params.filename.trim();
+  const entryName = params.entryName.trim();
+  if (!contentUrl) throw new Error("Missing Zenodo content URL.");
+  if (!filename) throw new Error("Missing filename.");
+  if (!entryName) throw new Error("Missing TAR entry name.");
+  return invoke<InlineMediaResponse>("zenodo_tar_inline_entry_media", { contentUrl, filename, entryName });
 }
