@@ -22,10 +22,10 @@
           "image-name" : "icon.png",
           "name" : "icon",
           "position" : {
-            "scale" : 0.35,
+            "scale" : 0.45,
             "translation-in-points" : [
-              3.5,
-              2.1000000000000227
+              0,
+              11.1171875
             ]
           }
         }
