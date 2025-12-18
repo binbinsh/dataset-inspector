@@ -39,7 +39,7 @@ pub struct ItemMeta {
     pub fields: Vec<FieldMeta>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FieldPreview {
     pub preview_text: Option<String>,
@@ -68,3 +68,11 @@ pub struct PreparedFileResponse {
     pub ext: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InlineMediaResponse {
+    pub base64: String,
+    pub mime: String,
+    pub size: u32,
+    pub ext: String,
+}
