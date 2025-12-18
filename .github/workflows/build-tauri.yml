@@ -84,8 +84,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: package-lock.json
 
       - name: Install deps
         run: npm ci
@@ -134,19 +132,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: package-lock.json
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ contains(matrix.os, 'macos') && 'aarch64-apple-darwin' || '' }}
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            src-tauri -> target
 
       - name: Install system deps (Ubuntu)
         if: matrix.os == 'ubuntu-24.04'
