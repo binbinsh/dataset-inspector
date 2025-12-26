@@ -187,7 +187,12 @@ let storeInstance: Store | null = null;
 
 export const isTauri = () => {
   if (typeof window === "undefined") return false;
-  const w = window as any;
+  const w = window as Window & {
+    __TAURI_INTERNALS__?: unknown;
+    __TAURI__?: unknown;
+    __TAURI_METADATA__?: unknown;
+    __TAURI_IPC__?: unknown;
+  };
   const ua = String(w.navigator?.userAgent || "").toLowerCase();
   return Boolean(
     w.__TAURI_INTERNALS__ ||

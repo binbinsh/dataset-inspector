@@ -88,17 +88,14 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      - name: Disable Next.js telemetry
-        run: npx next telemetry disable
-
       - name: Build frontend
         run: npm run build
 
       - name: Upload frontend dist
         uses: actions/upload-artifact@v4
         with:
-          name: frontend-out
-          path: out
+          name: frontend-dist
+          path: dist
           if-no-files-found: error
 
   build:
@@ -157,8 +154,8 @@ jobs:
       - name: Download frontend dist
         uses: actions/download-artifact@v4
         with:
-          name: frontend-out
-          path: out
+          name: frontend-dist
+          path: dist
 
       - name: Build (no release)
         if: ${{ needs.prepare.outputs.is_tag != 'true' }}

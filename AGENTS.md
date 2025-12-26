@@ -15,41 +15,33 @@
 
 ## Tauri App Instructions
 
-### Core Tech Stack
-- Platform: Tauri v2
-- Backend: Rust (Async with Tokio)
-- Frontend: Next.js v16 (Static Export)
-- Styling: Tailwind CSS v4
-- UI Library: shadcn/ui
-- Icons: Lucide React
-- Animations: Motion
-- Data Fetching: TanStack Query (cache Tauri command results)
-- Forms: React Hook Form + Zod
+### Tech Stack
+- **Platform**: Tauri v2 + Rust (Tokio async runtime)
+- **Frontend**: React 19 + Vite + TanStack (Router, Query, Form)
+- **Styling**: Tailwind CSS v4 + NextUI
+- **Remote**: gRPC (tonic + protobuf-ts)
+- **Animations**: Motion (framer-motion)
 
-### Frontend Rule: Static Export Only
-- Config: `output: 'export'` + `images: { unoptimized: true }` in `next.config.ts`
-- No Server Features: No Server Actions, API Routes, or any server-side features
-- Client Components: Add `'use client'` to components using hooks
+### Rust Rules
+- All `#[tauri::command]` must be async
+- Use `thiserror` for errors, return `Result<T, CustomError>`
+- gRPC client lives in Rust, frontend never connects directly
 
-### Backend Rule: Async Rust
-- All `#[tauri::command]` must be `async`
-- Use `thiserror` for error types, return `Result<T, CustomError>`, never panic
-- Use `serde` to serialize all IPC data
+### Frontend Rules
+- Wrap all Tauri commands in `src/lib/tauri-api.ts`
+- Use TanStack Query for caching and state management
+- Generate types from `.proto` files, keep types in sync
 
-### Integration Rule: Type-Safe API
-- Never call `invoke()` directly in components
-- Wrap all commands in typed functions in `src/lib/tauri-api.ts`
-- Use TanStack Query to wrap Tauri commands for caching, loading states, and error handling
+### UI Rules
+- Use NextUI components first
+- Root layout: `select-none cursor-default h-screen overflow-hidden`
+- NextUI components + Motion for micro-interactions
+- Add page transitions, hover effects, skeleton loading
+- Use NextUI theming for consistent design
 
-### UI Rule: Desktop Experience
-- Use shadcn/ui components first
-- Use Motion for micro-interactions (hover, page transitions)
-- Root layout: `select-none cursor-default h-screen w-screen overflow-hidden`
-- Consider custom titlebar for frameless window
-
-### Security Rule
-- Expose only necessary commands and permissions in Tauri capabilities
-- Validate all frontend data in Rust commands
+### Security Rules
+- Minimize Tauri capabilities exposure
+- Validate all inputs in Rust layer
 
 ## The Architect's Decree
 - I want to move faster. Please execute the entire plan (Steps 1 through x) in a single pass right now. Do not stop to ask for confirmation between steps. I am comfortable reviewing a large set of changes.

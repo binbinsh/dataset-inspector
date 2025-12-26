@@ -18,8 +18,20 @@ use crate::ipc_types::{
 };
 use crate::open_with;
 
-const PREVIEW_BYTES: usize = 2048;
+const PREVIEW_BYTES: usize = 16 * 1024;
+const PREVIEW_TEXT_CHARS: usize = 8 * 1024;
 const MAX_CACHE_BYTES: usize = 128 * 1024 * 1024;
+
+fn preview_utf8_text(data: &[u8]) -> Option<String> {
+    let raw = match std::str::from_utf8(data) {
+        Ok(text) => text,
+        Err(err) if err.error_len().is_none() => {
+            std::str::from_utf8(&data[..err.valid_up_to()]).ok()?
+        }
+        Err(_) => return None,
+    };
+    Some(raw.chars().take(PREVIEW_TEXT_CHARS).collect())
+}
 
 #[derive(Clone, Default)]
 pub struct ChunkCache {
@@ -606,14 +618,15 @@ fn preview_field(
         fmt.len(),
         Some(PREVIEW_BYTES),
     )?;
-    let text = String::from_utf8(data.clone()).ok();
+    let preview_text = preview_utf8_text(&data);
+    let is_binary = preview_text.is_none();
     let guessed_ext = guess_ext(fmt.get(field_index), &data);
     let hex_snippet = hex_encode(data.iter().take(48).copied().collect::<Vec<u8>>());
     Ok(FieldPreview {
-        preview_text: text.as_ref().map(|s| s.chars().take(400).collect()),
+        preview_text,
         hex_snippet,
         guessed_ext,
-        is_binary: text.is_none(),
+        is_binary,
         size,
     })
 }
