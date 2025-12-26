@@ -29,17 +29,12 @@ Dataset Inspector is a desktop UI for inspecting local [Lightning-AI/litData](ht
 
 <table align="center">
   <tr>
-    <td align="center" width="33%">
+    <td align="center" width="50%">
       <img src="images/litdata.png" width="100%">
       <br />
       <sub>Local LitData shards</sub>
     </td>
-    <td align="center" width="33%">
-      <img src="images/mosaicml-mds.png" width="100%">
-      <br />
-      <sub>Local MosaicML Streaming shards</sub>
-    </td>
-    <td align="center" width="33%">
+    <td align="center" width="50%">
       <img src="images/webdataset.png" width="100%">
       <br />
       <sub>Local WebDataset tar shards</sub>

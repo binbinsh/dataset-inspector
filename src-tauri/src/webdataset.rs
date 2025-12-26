@@ -15,10 +15,22 @@ use crate::ipc_types::{FieldPreview, OpenLeafResponse, PreparedFileResponse};
 use crate::mosaicml;
 use crate::open_with;
 
-const PREVIEW_BYTES: usize = 2048;
+const PREVIEW_BYTES: usize = 16 * 1024;
+const PREVIEW_TEXT_CHARS: usize = 8 * 1024;
 const MAX_LISTED_SAMPLES: usize = 5000;
 const MAX_OPEN_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_TAR_META_BYTES: u64 = 1024 * 1024;
+
+fn preview_utf8_text(data: &[u8]) -> Option<String> {
+    let raw = match std::str::from_utf8(data) {
+        Ok(text) => text,
+        Err(err) if err.error_len().is_none() => {
+            std::str::from_utf8(&data[..err.valid_up_to()]).ok()?
+        }
+        Err(_) => return None,
+    };
+    Some(raw.chars().take(PREVIEW_TEXT_CHARS).collect())
+}
 
 #[derive(Clone, Default)]
 pub struct WdsScanCache {
@@ -723,14 +735,15 @@ fn wds_peek_member_sync(
         let mut buf = Vec::new();
         entry.take(PREVIEW_BYTES as u64).read_to_end(&mut buf)?;
 
-        let text = String::from_utf8(buf.clone()).ok();
+        let preview_text = preview_utf8_text(&buf);
+        let is_binary = preview_text.is_none();
         let guessed_ext = guess_ext_from_member(&normalized, &buf);
         let hex_snippet = hex_encode(buf.iter().take(48).copied().collect::<Vec<u8>>());
         return Ok(FieldPreview {
-            preview_text: text.as_ref().map(|s| s.chars().take(400).collect()),
+            preview_text,
             hex_snippet,
             guessed_ext,
-            is_binary: text.is_none(),
+            is_binary,
             size: size.min(u32::MAX as u64) as u32,
         });
     }

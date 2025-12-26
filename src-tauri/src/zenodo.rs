@@ -13,6 +13,7 @@ use crate::open_with;
 const USER_AGENT: &str = "dataset-inspector/1.2.0 (tauri)";
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 const PEEK_BYTES: usize = 64 * 1024;
+const PREVIEW_TEXT_CHARS: usize = 8 * 1024;
 const MAX_INLINE_DOWNLOAD_BYTES: u64 = 50 * 1024 * 1024;
 const ZIP_TAIL_INITIAL_BYTES: u64 = 1024 * 1024;
 const ZIP_TAIL_MAX_BYTES: u64 = 8 * 1024 * 1024;
@@ -26,6 +27,17 @@ const TAR_MAX_PAGE_SIZE: u32 = 200;
 const MAX_TAR_META_BYTES: u64 = 1024 * 1024;
 const TAR_MEDIA_CACHE_ITEM_MAX_BYTES: u64 = 32 * 1024 * 1024;
 const TAR_MEDIA_CACHE_TOTAL_MAX_BYTES: u64 = 256 * 1024 * 1024;
+
+fn preview_utf8_text(data: &[u8]) -> Option<String> {
+    let raw = match std::str::from_utf8(data) {
+        Ok(text) => text,
+        Err(err) if err.error_len().is_none() => {
+            std::str::from_utf8(&data[..err.valid_up_to()]).ok()?
+        }
+        Err(_) => return None,
+    };
+    Some(raw.chars().take(PREVIEW_TEXT_CHARS).collect())
+}
 
 #[derive(Clone)]
 pub struct ZenodoClient {
@@ -194,16 +206,17 @@ impl ZenodoTarScanState {
             if let Some(bytes) = maybe_bytes {
                 if !meta.is_dir {
                     let preview_bytes = bytes.iter().take(PEEK_BYTES).copied().collect::<Vec<u8>>();
-                    let text = String::from_utf8(preview_bytes.clone()).ok();
+                    let preview_text = preview_utf8_text(&preview_bytes);
                     let guessed_ext = ext_from_filename(&meta.path)
                         .or_else(|| infer::get(&preview_bytes).map(|t| t.extension().to_string()));
                     let hex_snippet =
                         hex_encode(preview_bytes.iter().take(48).copied().collect::<Vec<u8>>());
+                    let is_binary = preview_text.is_none();
                     let preview = FieldPreview {
-                        preview_text: text.as_ref().map(|s| s.chars().take(400).collect()),
+                        preview_text,
                         hex_snippet,
                         guessed_ext,
-                        is_binary: text.is_none(),
+                        is_binary,
                         size: meta.size.min(u32::MAX as u64) as u32,
                     };
                     self.previews.insert(meta.path.clone(), preview);
@@ -1269,7 +1282,7 @@ pub async fn zenodo_peek_file(
 
     let end = (PEEK_BYTES as u64).saturating_sub(1);
     let (data, total_size) = range_request(&client.http, url.clone(), 0, end).await?;
-    let text = String::from_utf8(data.clone()).ok();
+    let preview_text = preview_utf8_text(&data);
 
     let guessed_ext = url
         .path_segments()
@@ -1283,11 +1296,12 @@ pub async fn zenodo_peek_file(
     let hex_snippet = hex_encode(data.iter().take(48).copied().collect::<Vec<u8>>());
     let size_u32 = total_size.unwrap_or(0).min(u32::MAX as u64) as u32;
 
+    let is_binary = preview_text.is_none();
     Ok(FieldPreview {
-        preview_text: text.as_ref().map(|s| s.chars().take(400).collect()),
+        preview_text,
         hex_snippet,
         guessed_ext,
-        is_binary: text.is_none(),
+        is_binary,
         size: size_u32,
     })
 }
@@ -1578,17 +1592,18 @@ pub async fn zenodo_zip_peek_entry(
     }
 
     let data = read_zip_entry_preview_bytes(&client.http, url, entry).await?;
-    let text = String::from_utf8(data.clone()).ok();
+    let preview_text = preview_utf8_text(&data);
     let guessed_ext = ext_from_filename(&entry.name)
         .or_else(|| infer::get(&data).map(|t| t.extension().to_string()));
     let hex_snippet = hex_encode(data.iter().take(48).copied().collect::<Vec<u8>>());
     let size_u32 = entry.uncompressed_size.min(u32::MAX as u64) as u32;
 
+    let is_binary = preview_text.is_none();
     Ok(FieldPreview {
-        preview_text: text.as_ref().map(|s| s.chars().take(400).collect()),
+        preview_text,
         hex_snippet,
         guessed_ext,
-        is_binary: text.is_none(),
+        is_binary,
         size: size_u32,
     })
 }
@@ -1943,15 +1958,16 @@ pub async fn zenodo_tar_peek_entry(
     tauri::async_runtime::spawn_blocking(move || {
         let (data, size) =
             read_tar_member_with_limit(url, filename, entry_name.clone(), PEEK_BYTES as u64, None)?;
-        let text = String::from_utf8(data.clone()).ok();
+        let preview_text = preview_utf8_text(&data);
         let guessed_ext = ext_from_filename(&entry_name)
             .or_else(|| infer::get(&data).map(|t| t.extension().to_string()));
         let hex_snippet = hex_encode(data.iter().take(48).copied().collect::<Vec<u8>>());
+        let is_binary = preview_text.is_none();
         Ok(FieldPreview {
-            preview_text: text.as_ref().map(|s| s.chars().take(400).collect()),
+            preview_text,
             hex_snippet,
             guessed_ext,
-            is_binary: text.is_none(),
+            is_binary,
             size: size.min(u32::MAX as u64) as u32,
         })
     })
