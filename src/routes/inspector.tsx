@@ -2,7 +2,20 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { Modal, ModalBody, ModalContent, ModalHeader, Tab, Tabs, Tooltip } from "@heroui/react";
+import {
+  Button,
+  Chip,
+  Input,
+  Modal,
+  ModalBody,
+  ModalContent,
+  ModalHeader,
+  ScrollShadow,
+  Skeleton,
+  Tab,
+  Tabs,
+  Tooltip,
+} from "@heroui/react";
 import {
   ArrowRight,
   ArrowUpRightFromSquare,
@@ -21,12 +34,6 @@ import {
   Terminal,
   TriangleAlert,
 } from "lucide-react";
-
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   chooseIndexSource,
   chooseOpenerApp,
@@ -144,12 +151,12 @@ function StatChip({
   title?: string;
 }) {
   return (
-    <Badge variant="secondary" className="bg-white/80 text-slate-700" title={title}>
+    <Chip variant="flat" radius="full" size="sm" className="bg-white/80 text-slate-700 text-xs font-semibold" title={title}>
       <span className="flex items-center gap-2">
         <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</span>
         <span className="font-semibold text-slate-900">{value}</span>
       </span>
-    </Badge>
+    </Chip>
   );
 }
 
@@ -1941,8 +1948,17 @@ export default function InspectorPage() {
     },
   };
   const panelVariants = {
-    hidden: { opacity: 0, y: 12 },
-    show: { opacity: 1, y: 0 },
+    hidden: { opacity: 0, y: 12, scale: 0.98 },
+    show: {
+      opacity: 1,
+      y: 0,
+      scale: 1,
+      transition: {
+        type: "spring",
+        stiffness: 300,
+        damping: 30,
+      },
+    },
   };
 
   const renderLocalPreview = () => {
@@ -2126,7 +2142,7 @@ export default function InspectorPage() {
 	              "relative flex h-full w-full items-center justify-center",
 	              zenodoZipInlineMediaMutation.isPending ? "cursor-wait opacity-80" : "hover:bg-white/75",
 	            )}
-	            disabled={zenodoZipInlineMediaMutation.isPending || !isTauri()}
+	            isDisabled={zenodoZipInlineMediaMutation.isPending || !isTauri()}
 	            onClick={() => {
 	              void loadZenodoZipInlineMedia().then((media) => {
 	                if (!media?.src) return;
@@ -2201,7 +2217,7 @@ export default function InspectorPage() {
 	              "relative flex h-full w-full items-center justify-center",
 	              zenodoTarInlineMediaMutation.isPending ? "cursor-wait opacity-80" : "hover:bg-white/75",
 	            )}
-	            disabled={zenodoTarInlineMediaMutation.isPending || !isTauri()}
+	            isDisabled={zenodoTarInlineMediaMutation.isPending || !isTauri()}
 	            onClick={() => {
 	              void loadZenodoTarInlineMedia().then((media) => {
 	                if (!media?.src) return;
@@ -2368,9 +2384,9 @@ export default function InspectorPage() {
                     }
                   >
                     <div>
-                      <Badge variant="secondary" className="bg-white/85 text-slate-700">
+                      <Chip variant="flat" radius="full" size="sm" className="bg-white/85 text-slate-700">
                         {chunkSelection.length} shard{chunkSelection.length > 1 ? "s" : ""} selected
-                      </Badge>
+                      </Chip>
                     </div>
                   </Tooltip>
                 ) : null}
@@ -2379,10 +2395,10 @@ export default function InspectorPage() {
                   <Button
                     type="button"
                     size="sm"
-                    variant="ghost"
+                    variant="light"
                     className="h-7 px-2 text-[11px] font-semibold text-slate-600 hover:bg-black/[0.05]"
                     onClick={() => setChunkSelection([])}
-                    disabled={busy}
+                    isDisabled={busy}
                   >
                     Clear selection
                   </Button>
@@ -2393,9 +2409,9 @@ export default function InspectorPage() {
                     <Button
                       type="button"
                       size="sm"
-                      variant="ghost"
+                      variant="light"
                       className="h-8 justify-start overflow-hidden rounded-full bg-transparent px-3 text-slate-700 hover:bg-black/[0.05]"
-                      disabled={!tauri}
+                      isDisabled={!tauri}
                       onClick={() => setHfTokenDialogOpen(true)}
                     >
                       <KeyRound className="mr-2 h-4 w-4" />
@@ -2421,10 +2437,10 @@ export default function InspectorPage() {
                 <div className="flex items-center gap-2 shrink-0">
                   {canBrowse ? (
                     <Button
-                      variant="ghost"
+                      variant="light"
                       className="h-9 rounded-full bg-transparent px-3 text-slate-700 hover:bg-black/[0.05]"
                       onClick={handleChoose}
-                      disabled={busy || !tauri}
+                      isDisabled={busy || !tauri}
                     >
                       <FolderOpen className="mr-2 h-4 w-4" />
                       Browse
@@ -2440,7 +2456,7 @@ export default function InspectorPage() {
                       <Button
                         className="shadow-[var(--shadow-glow)]"
                         onClick={() => void handleLoad()}
-                        disabled={busy || (!sourceInput.trim() && chunkSelection.length === 0) || !tauri}
+                        isDisabled={busy || (!sourceInput.trim() && chunkSelection.length === 0) || !tauri}
                       >
                         {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : loadIcon}
                         {loadLabel}
@@ -2536,7 +2552,7 @@ export default function InspectorPage() {
                   {hfToken ? (
                     <Button
                       size="sm"
-                      variant="outline"
+                      variant="bordered"
                       onClick={() => {
                         void (async () => {
                           try {
@@ -2552,7 +2568,7 @@ export default function InspectorPage() {
                       Clear
                     </Button>
                   ) : null}
-                  <Button size="sm" variant="ghost" onClick={() => setHfTokenDialogOpen(false)}>
+                  <Button size="sm" variant="light" onClick={() => setHfTokenDialogOpen(false)}>
                     Close
                   </Button>
                   <Button size="sm" type="submit">
@@ -2601,7 +2617,7 @@ export default function InspectorPage() {
                             placeholder="Filter splits…"
                             ariaLabel="Filter splits"
                           />
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {(() => {
                               const visible = hfSplitPairs.filter((pair) =>
                                 matchesFilter(`${pair.config}/${pair.split}`, level1Needle),
@@ -2614,10 +2630,10 @@ export default function InspectorPage() {
                                     <div
                                       key={key}
                                       className={cn(
-                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
+                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
                                         selected
                                           ? "bg-emerald-50/60"
-                                          : "hover:bg-black/[0.02]",
+                                          : "hover:bg-black/[0.03] hover:shadow-sm",
                                       )}
                                       onClick={() => {
                                         setFilterLevel2("");
@@ -2647,7 +2663,7 @@ export default function InspectorPage() {
                                 <Skeleton className="h-10 w-full" />
                               </div>
                             ) : null}
-                          </ScrollArea>
+                          </ScrollShadow>
                         </div>
                       ),
                       hint: "Select a split.",
@@ -2667,7 +2683,7 @@ export default function InspectorPage() {
                             ariaLabel="Filter rows"
                           />
 
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {(() => {
                               const visible = hfRows
                                 .map((row, idx) => {
@@ -2686,10 +2702,10 @@ export default function InspectorPage() {
                                     <div
                                       key={rowIndex}
                                       className={cn(
-                                        "grid min-w-0 cursor-pointer grid-cols-[auto_1fr] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
+                                        "grid min-w-0 cursor-pointer grid-cols-[auto_1fr] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
                                         selected
                                           ? "bg-sky-50/60"
-                                          : "hover:bg-black/[0.02]",
+                                          : "hover:bg-black/[0.03] hover:shadow-sm",
                                       )}
                                       onClick={() => {
                                         selectHfRow(rowIndex);
@@ -2714,14 +2730,14 @@ export default function InspectorPage() {
                                 <Skeleton className="h-10 w-full" />
                               </div>
                             ) : null}
-                          </ScrollArea>
+                          </ScrollShadow>
 
                           <div className="shrink-0 rounded-xl bg-white/40 px-2 py-2 ring-1 ring-black/[0.04]">
                             <div className="flex items-center gap-2">
                               <Button
                                 size="sm"
-                                variant="outline"
-                                disabled={!hfCanPrev}
+                                variant="bordered"
+                                isDisabled={!hfCanPrev}
                                 onClick={() => setHfOffset(Math.max(0, hfOffset - HF_PAGE_SIZE))}
                               >
                                 <ChevronLeft className="mr-1 h-4 w-4" />
@@ -2729,8 +2745,8 @@ export default function InspectorPage() {
                               </Button>
                               <Button
                                 size="sm"
-                                variant="outline"
-                                disabled={!hfCanNext}
+                                variant="bordered"
+                                isDisabled={!hfCanNext}
                                 onClick={() => setHfOffset(hfOffset + HF_PAGE_SIZE)}
                               >
                                 Next
@@ -2784,7 +2800,7 @@ export default function InspectorPage() {
                             placeholder="Filter fields…"
                             ariaLabel="Filter Hugging Face fields"
                           />
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {(() => {
                               const visible = hfFeatures.filter((feature) => matchesFilter(feature.name, level3Needle));
                               if (visible.length) {
@@ -2794,10 +2810,10 @@ export default function InspectorPage() {
                                     <div
                                       key={feature.name}
                                       className={cn(
-                                        "grid min-w-0 cursor-pointer grid-cols-[1fr] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
+                                        "grid min-w-0 cursor-pointer grid-cols-[1fr] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
                                         selected
                                           ? "bg-cyan-50/60"
-                                          : "hover:bg-black/[0.02]",
+                                          : "hover:bg-black/[0.03] hover:shadow-sm",
                                       )}
                                       onClick={() => {
                                         selectHfField(feature.name);
@@ -2811,9 +2827,9 @@ export default function InspectorPage() {
                                         <div className="min-w-0 truncate font-medium text-slate-900" title={feature.name}>
                                           {feature.name}
                                         </div>
-                                        <Badge variant="secondary" className="shrink-0 bg-slate-100/80 text-slate-500">
+                                        <Chip variant="flat" radius="full" size="sm" className="shrink-0 bg-slate-100/80 text-slate-500">
                                           {(feature.dtype ?? "raw").toString()}
-                                        </Badge>
+                                        </Chip>
                                       </div>
                                     </div>
                                   );
@@ -2828,7 +2844,7 @@ export default function InspectorPage() {
                                 <Skeleton className="h-10 w-full" />
                               </div>
                             ) : null}
-                          </ScrollArea>
+                          </ScrollShadow>
                         </div>
                       ),
                     },
@@ -2866,7 +2882,7 @@ export default function InspectorPage() {
                             placeholder="Filter files…"
                             ariaLabel="Filter Zenodo files"
                           />
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {(() => {
                               const visible = zenodoFiles.filter((file) => matchesFilter(file.key, level1Needle));
                               if (visible.length) {
@@ -2876,8 +2892,8 @@ export default function InspectorPage() {
                                     <div
                                       key={file.key}
                                       className={cn(
-                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
-                                        selected ? "bg-emerald-50/60" : "hover:bg-black/[0.02]",
+                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
+                                        selected ? "bg-emerald-50/60" : "hover:bg-black/[0.03] hover:shadow-sm",
                                       )}
                                       onClick={() => {
                                         setFilterLevel2("");
@@ -2907,7 +2923,7 @@ export default function InspectorPage() {
                                 <Skeleton className="h-10 w-full" />
                               </div>
                             ) : null}
-                          </ScrollArea>
+                          </ScrollShadow>
                         </div>
                       ),
                       hint: "Select a file.",
@@ -2935,7 +2951,7 @@ export default function InspectorPage() {
                             />
                           ) : null}
 
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {zenodoIsCsv ? (
                               zenodoCsvRows
                                 .filter((row) => matchesFilter(`${row.rowIndex} ${row.raw}`, level2Needle))
@@ -2946,8 +2962,8 @@ export default function InspectorPage() {
                                     <div
                                       key={row.rowIndex}
                                       className={cn(
-                                        "grid min-w-0 cursor-pointer grid-cols-[auto_1fr] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
-                                        selected ? "bg-sky-50/60" : "hover:bg-black/[0.02]",
+                                        "grid min-w-0 cursor-pointer grid-cols-[auto_1fr] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
+                                        selected ? "bg-sky-50/60" : "hover:bg-black/[0.03] hover:shadow-sm",
                                       )}
                                       onClick={() => {
                                         selectZenodoCsvRow(row.rowIndex);
@@ -2977,8 +2993,8 @@ export default function InspectorPage() {
                                     <div
                                       key={entry.name}
                                       className={cn(
-                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
-                                        selected ? "bg-sky-50/60" : "hover:bg-black/[0.02]",
+                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
+                                        selected ? "bg-sky-50/60" : "hover:bg-black/[0.03] hover:shadow-sm",
                                       )}
                                       onClick={() => {
                                         selectZenodoEntry(entry.name);
@@ -3012,8 +3028,8 @@ export default function InspectorPage() {
                                     <div
                                       key={entry.name}
                                       className={cn(
-                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
-                                        selected ? "bg-sky-50/60" : "hover:bg-black/[0.02]",
+                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
+                                        selected ? "bg-sky-50/60" : "hover:bg-black/[0.03] hover:shadow-sm",
                                       )}
                                       onClick={() => {
                                         selectZenodoEntry(entry.name);
@@ -3092,15 +3108,15 @@ export default function InspectorPage() {
                             {!zenodoIsArchive && !zenodoIsCsv && !selectedZenodoFile && !zenodoQuery.isPending ? (
                               <EmptyState hint="Load a Zenodo record to list files." />
                             ) : null}
-                          </ScrollArea>
+                          </ScrollShadow>
 
                           {zenodoIsTar ? (
                             <div className="shrink-0 rounded-xl bg-white/40 px-2 py-2 ring-1 ring-black/[0.04]">
                               <div className="flex items-center gap-2">
                                 <Button
                                   size="sm"
-                                  variant="outline"
-                                  disabled={!zenodoTarCanPrev || !isTauri()}
+                                  variant="bordered"
+                                  isDisabled={!zenodoTarCanPrev || !isTauri()}
                                   onClick={() =>
                                     setZenodoEntriesOffset(Math.max(0, zenodoEntriesOffset - ZENODO_TAR_PAGE_SIZE))
                                   }
@@ -3110,8 +3126,8 @@ export default function InspectorPage() {
                                 </Button>
                                 <Button
                                   size="sm"
-                                  variant="outline"
-                                  disabled={!zenodoTarCanNext || !isTauri()}
+                                  variant="bordered"
+                                  isDisabled={!zenodoTarCanNext || !isTauri()}
                                   onClick={() => setZenodoEntriesOffset(zenodoEntriesOffset + ZENODO_TAR_PAGE_SIZE)}
                                 >
                                   Next
@@ -3119,13 +3135,13 @@ export default function InspectorPage() {
                                 </Button>
 
                                 <div className="ml-auto flex items-center gap-2">
-                                  <Badge variant="secondary" className="bg-slate-100/80">
+                                  <Chip variant="flat" radius="full" size="sm" className="bg-slate-100/80">
                                     Offset {zenodoEntriesOffset}
-                                  </Badge>
+                                  </Chip>
                                   {zenodoTarEntriesQuery.data?.partial ? (
-                                    <Badge variant="secondary" className="bg-amber-100/80 text-amber-800">
+                                    <Chip variant="flat" radius="full" size="sm" className="bg-amber-100/80 text-amber-800">
                                       Partial
-                                    </Badge>
+                                    </Chip>
                                   ) : null}
                                 </div>
                               </div>
@@ -3149,7 +3165,7 @@ export default function InspectorPage() {
                             placeholder="Filter fields…"
                             ariaLabel="Filter CSV fields"
                           />
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {zenodoCsvHeaders
                               .map((header, idx) => ({
                                 header,
@@ -3165,8 +3181,8 @@ export default function InspectorPage() {
                                   <div
                                     key={idx}
                                     className={cn(
-                                      "grid min-w-0 cursor-pointer grid-cols-[auto_1fr] items-start gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
-                                      selected ? "bg-cyan-50/60" : "hover:bg-black/[0.02]",
+                                      "grid min-w-0 cursor-pointer grid-cols-[auto_1fr] items-start gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
+                                      selected ? "bg-cyan-50/60" : "hover:bg-black/[0.03] hover:shadow-sm",
                                     )}
                                     onClick={() => selectZenodoCsvField(idx)}
                                   >
@@ -3184,7 +3200,7 @@ export default function InspectorPage() {
                             ) ? (
                               <EmptyState hint="No matches. Try a different filter." />
                             ) : null}
-                          </ScrollArea>
+                          </ScrollShadow>
                         </div>
                       ) : (
                         <div className="flex flex-1 min-h-0 flex-col items-center justify-center text-center text-xs text-slate-500">
@@ -3227,7 +3243,7 @@ export default function InspectorPage() {
                             placeholder="Filter shards…"
                             ariaLabel="Filter WebDataset shards"
                           />
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {(() => {
                               const shards = wdsDirQuery.data?.shards ?? [];
                               const visible = shards.filter((shard) => matchesFilter(shard.filename, level1Needle));
@@ -3236,8 +3252,8 @@ export default function InspectorPage() {
                                   <div
                                     key={shard.filename}
                                     className={cn(
-                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
-                                      selectedShard?.filename === shard.filename ? "bg-emerald-50/60" : "hover:bg-black/[0.02]",
+                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
+                                      selectedShard?.filename === shard.filename ? "bg-emerald-50/60" : "hover:bg-black/[0.03] hover:shadow-sm",
                                     )}
                                     onClick={() => {
                                       setFilterLevel2("");
@@ -3260,7 +3276,7 @@ export default function InspectorPage() {
                               if (!shards.length) return <EmptyState hint="Load a WebDataset directory to list shards." />;
                               return <EmptyState hint="No matches. Try a different filter." />;
                             })()}
-                          </ScrollArea>
+                          </ScrollShadow>
                         </div>
                       ),
                       hint: "Pick a shard.",
@@ -3283,7 +3299,7 @@ export default function InspectorPage() {
                             placeholder="Filter samples…"
                             ariaLabel="Filter WebDataset samples"
                           />
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {(() => {
                               const visible = wdsPageSamples.filter(
                                 (sample) =>
@@ -3295,8 +3311,8 @@ export default function InspectorPage() {
                                   <div
                                     key={`${sample.sampleIndex}:${sample.key}`}
                                     className={cn(
-                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
-                                      selectedWdsSample?.sampleIndex === sample.sampleIndex ? "bg-sky-50/60" : "hover:bg-black/[0.02]",
+                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
+                                      selectedWdsSample?.sampleIndex === sample.sampleIndex ? "bg-sky-50/60" : "hover:bg-black/[0.03] hover:shadow-sm",
                                     )}
                                     onClick={() => {
                                       setFilterLevel3("");
@@ -3327,14 +3343,14 @@ export default function InspectorPage() {
                                 <Skeleton className="h-10 w-full" />
                               </div>
                             ) : null}
-                          </ScrollArea>
+                          </ScrollShadow>
 
                           <div className="shrink-0 rounded-xl bg-white/40 px-2 py-2 ring-1 ring-black/[0.04]">
                             <div className="flex items-center gap-2">
                               <Button
                                 size="sm"
-                                variant="outline"
-                                disabled={!wdsCanPrev}
+                                variant="bordered"
+                                isDisabled={!wdsCanPrev}
                                 onClick={() => setWdsOffset(Math.max(0, wdsOffset - WDS_PAGE_SIZE))}
                               >
                                 <ChevronLeft className="mr-1 h-4 w-4" />
@@ -3342,21 +3358,21 @@ export default function InspectorPage() {
                               </Button>
                               <Button
                                 size="sm"
-                                variant="outline"
-                                disabled={!wdsCanNext}
+                                variant="bordered"
+                                isDisabled={!wdsCanNext}
                                 onClick={() => setWdsOffset(wdsOffset + WDS_PAGE_SIZE)}
                               >
                                 Next
                                 <ChevronRight className="ml-1 h-4 w-4" />
                               </Button>
                               <div className="ml-auto flex items-center gap-2">
-                                <Badge variant="secondary" className="bg-slate-100/80">
+                                <Chip variant="flat" radius="full" size="sm" className="bg-slate-100/80">
                                   Offset {wdsOffset}
-                                </Badge>
+                                </Chip>
                                 {wdsSamplesQuery.data?.partial ? (
-                                  <Badge variant="secondary" className="bg-amber-100/80 text-amber-800">
+                                  <Chip variant="flat" radius="full" size="sm" className="bg-amber-100/80 text-amber-800">
                                     Partial
-                                  </Badge>
+                                  </Chip>
                                 ) : null}
                               </div>
                             </div>
@@ -3381,7 +3397,7 @@ export default function InspectorPage() {
                                 placeholder="Filter fields…"
                                 ariaLabel="Filter WebDataset fields"
                               />
-                              <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+                              <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                                 {(() => {
                                   const visible = selectedWdsSample.fields
                                     .map((field, index) => ({ field, index }))
@@ -3394,8 +3410,8 @@ export default function InspectorPage() {
                                         <div
                                           key={`${field.memberPath}:${index}`}
                                           className={cn(
-                                            "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
-                                            selected ? "bg-cyan-50/60" : "hover:bg-black/[0.02]",
+                                            "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
+                                            selected ? "bg-cyan-50/60" : "hover:bg-black/[0.03] hover:shadow-sm",
                                           )}
                                           onClick={() => selectField(index)}
                                           onDoubleClick={() => wdsOpenFieldMutation.mutate()}
@@ -3407,9 +3423,9 @@ export default function InspectorPage() {
                                           </div>
                                           <div className="flex items-center gap-2 whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
                                             {ext ? (
-                                              <Badge variant="secondary" className="bg-slate-100/80 text-slate-500">
+                                              <Chip variant="flat" radius="full" size="sm" className="bg-slate-100/80 text-slate-500">
                                                 .{ext}
-                                              </Badge>
+                                              </Chip>
                                             ) : null}
                                             <span>{formatBytes(field.size)}</span>
                                           </div>
@@ -3419,7 +3435,7 @@ export default function InspectorPage() {
                                   }
                                   return <EmptyState hint={level3Needle ? "No matches." : "Select a field."} />;
                                 })()}
-                              </ScrollArea>
+                              </ScrollShadow>
                             </>
                           ) : (
                             <EmptyState hint="Select a sample to see its fields." />
@@ -3461,7 +3477,7 @@ export default function InspectorPage() {
                             placeholder="Filter shards…"
                             ariaLabel="Filter local shards"
                           />
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {(() => {
                               const chunks = indexQuery.data?.chunks ?? [];
                               const visible = chunks.filter((chunk) => matchesFilter(chunk.filename, level1Needle));
@@ -3470,10 +3486,10 @@ export default function InspectorPage() {
                                   <div
                                     key={chunk.filename}
                                     className={cn(
-                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
+                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
                                       selectedChunk?.filename === chunk.filename
                                         ? "bg-emerald-50/60"
-                                        : "hover:bg-black/[0.02]",
+                                        : "hover:bg-black/[0.03] hover:shadow-sm",
                                     )}
                                     onClick={() => {
                                       setFilterLevel2("");
@@ -3500,7 +3516,7 @@ export default function InspectorPage() {
                               if (!chunks.length) return <EmptyState hint="Load a dataset to list shards." />;
                               return <EmptyState hint="No matches. Try a different filter." />;
                             })()}
-                          </ScrollArea>
+                          </ScrollShadow>
                         </div>
                       ),
                       hint: "Pick a shard.",
@@ -3519,7 +3535,7 @@ export default function InspectorPage() {
                             placeholder={isMdsMode ? "Filter samples…" : "Filter items…"}
                             ariaLabel={isMdsMode ? "Filter samples" : "Filter items"}
                           />
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {(() => {
                               const items = itemsQuery.data ?? [];
                               const visible = items.filter((item) =>
@@ -3530,10 +3546,10 @@ export default function InspectorPage() {
                                   <div
                                     key={item.itemIndex}
                                     className={cn(
-                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
+                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
                                       selectedItem?.itemIndex === item.itemIndex
                                         ? "bg-sky-50/60"
-                                        : "hover:bg-black/[0.02]",
+                                        : "hover:bg-black/[0.03] hover:shadow-sm",
                                     )}
                                     onClick={() => {
                                       setFilterLevel3("");
@@ -3557,7 +3573,7 @@ export default function InspectorPage() {
                               if (!items.length) return <EmptyState hint="Pick a shard to list its samples." />;
                               return <EmptyState hint="No matches. Try a different filter." />;
                             })()}
-                          </ScrollArea>
+                          </ScrollShadow>
                         </div>
                       ),
                       hint: isMdsMode ? "Pick a sample." : "Pick an item.",
@@ -3577,7 +3593,7 @@ export default function InspectorPage() {
                             ariaLabel="Filter local fields"
                           />
                           {selectedItem ? (
-                            <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+                            <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                               {(() => {
                                 const fields = selectedItem.fields ?? [];
                                 const visible = fields.filter((field) => {
@@ -3591,22 +3607,24 @@ export default function InspectorPage() {
                                       <div
                                         key={field.fieldIndex}
                                         className={cn(
-                                          "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
+                                          "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
                                           selectedField?.fieldIndex === field.fieldIndex
                                             ? "bg-cyan-50/60"
-                                            : "hover:bg-black/[0.02]",
+                                            : "hover:bg-black/[0.03] hover:shadow-sm",
                                         )}
                                         onClick={() => selectField(field.fieldIndex)}
                                         onDoubleClick={() => openFieldMutation.mutate()}
                                       >
                                         <div className="flex min-w-0 items-center gap-2">
                                           <div className="shrink-0 font-medium text-slate-900">#{field.fieldIndex}</div>
-                                          <Badge
-                                            variant="secondary"
+                                          <Chip
+                                            variant="flat"
+                                            radius="full"
+                                            size="sm"
                                             className="min-w-0 max-w-full bg-slate-100/80 text-slate-500"
                                           >
                                             <span className="truncate">{format}</span>
-                                          </Badge>
+                                          </Chip>
                                         </div>
                                         <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
                                           {formatBytes(field.size)}
@@ -3618,7 +3636,7 @@ export default function InspectorPage() {
                                 if (!fields.length) return <EmptyState hint="Select an item to see its fields." />;
                                 return <EmptyState hint="No matches. Try a different filter." />;
                               })()}
-                            </ScrollArea>
+                            </ScrollShadow>
                           ) : (
                             <EmptyState hint="Select an item to see its fields." />
                           )}
@@ -3664,9 +3682,9 @@ function MediaPreviewPanel({
 	        <div className="text-xs font-semibold text-slate-700">Preview</div>
 	        <div className="flex items-center gap-1">
 	          {meta ? (
-	            <Badge variant="secondary" className="bg-white/70 text-slate-600">
+	            <Chip variant="flat" radius="full" size="sm" className="bg-white/70 text-slate-600">
 	              {meta}
-	            </Badge>
+	            </Chip>
 	          ) : null}
 	          {onOpen ? (
 	            <Tooltip content={openTooltip ?? "Open in default app"} showArrow placement="bottom-end">
@@ -3675,11 +3693,11 @@ function MediaPreviewPanel({
 	                  type="button"
 	                  isIconOnly
 	                  size="sm"
-	                  variant="ghost"
+	                  variant="light"
 	                  className="h-8 w-8 rounded-full bg-transparent text-slate-600 hover:bg-black/[0.05]"
 	                  onClick={onOpen}
 	                  aria-label="Open in default app"
-	                  disabled={openDisabled}
+	                  isDisabled={openDisabled}
 	                >
 	                  <ArrowUpRightFromSquare className="h-4 w-4" />
 	                </Button>
@@ -3691,7 +3709,7 @@ function MediaPreviewPanel({
 	              type="button"
 	              isIconOnly
 	              size="sm"
-	              variant="ghost"
+	              variant="light"
 	              className="h-8 w-8 rounded-full bg-transparent text-slate-600 hover:bg-black/[0.05]"
 	              onClick={() => onCopy(copyTextPayload)}
 	              aria-label="Copy preview"
@@ -3774,10 +3792,10 @@ function MediaPreviewPanel({
       <div className="flex items-center justify-between gap-2 shrink-0">
         <div className="text-xs font-semibold text-slate-700">Preview</div>
         <div className="flex items-center gap-1">
-          <Badge variant="secondary" className="bg-white/70 text-slate-600">
+          <Chip variant="flat" radius="full" size="sm" className="bg-white/70 text-slate-600">
             {preview.guessedExt ? `.${preview.guessedExt}` : "unknown"} · {formatBytes(preview.size)} ·{" "}
             {preview.isBinary ? "binary" : "text"}
-          </Badge>
+          </Chip>
           {audioPreparing ? <Loader2 className="h-4 w-4 animate-spin text-slate-500" /> : null}
           {canTryAudio ? (
             <Tooltip content="Audio preview" showArrow placement="bottom-end">
@@ -3786,7 +3804,7 @@ function MediaPreviewPanel({
                   type="button"
                   isIconOnly
                   size="sm"
-                  variant="ghost"
+                  variant="light"
                   className="h-8 w-8 rounded-full bg-transparent text-slate-600 hover:bg-black/[0.05]"
                   onClick={() => void prepareAndPlayAudio()}
                   aria-label="Audio preview"
@@ -3803,11 +3821,11 @@ function MediaPreviewPanel({
                   type="button"
                   isIconOnly
                   size="sm"
-                  variant="ghost"
+                  variant="light"
                   className="h-8 w-8 rounded-full bg-transparent text-slate-600 hover:bg-black/[0.05]"
                   onClick={onOpen}
                   aria-label="Open in default app"
-                  disabled={openDisabled}
+                  isDisabled={openDisabled}
                 >
                   <ArrowUpRightFromSquare className="h-4 w-4" />
                 </Button>
@@ -3818,7 +3836,7 @@ function MediaPreviewPanel({
             type="button"
             isIconOnly
             size="sm"
-            variant="ghost"
+            variant="light"
             className="h-8 w-8 rounded-full bg-transparent text-slate-600 hover:bg-black/[0.05]"
             onClick={() => onCopy(copyPayload)}
             aria-label="Copy preview"
@@ -3853,11 +3871,11 @@ function MediaPreviewPanel({
         </div>
       ) : null}
 
-      <ScrollArea className="flex-1 min-h-0 rounded-lg bg-white/60 ring-1 ring-black/[0.05]">
+      <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 rounded-lg bg-white/60 ring-1 ring-black/[0.05]">
         <pre className="whitespace-pre-wrap break-all px-2 py-2 text-[11px] text-slate-800 font-mono select-text cursor-text">
           {hasTextPreview ? preview.previewText : `Hex: ${preview.hexSnippet}`}
         </pre>
-      </ScrollArea>
+      </ScrollShadow>
     </div>
   );
 }
@@ -4051,11 +4069,11 @@ function JsonPreviewPanel({
                   type="button"
                   isIconOnly
                   size="sm"
-                  variant="ghost"
+                  variant="light"
                   className="h-8 w-8 rounded-full bg-transparent text-slate-600 hover:bg-black/[0.05]"
                   onClick={onOpen}
                   aria-label="Open in default app"
-                  disabled={openDisabled}
+                  isDisabled={openDisabled}
                 >
                   <ArrowUpRightFromSquare className="h-4 w-4" />
                 </Button>
@@ -4066,7 +4084,7 @@ function JsonPreviewPanel({
             type="button"
             isIconOnly
             size="sm"
-            variant="ghost"
+            variant="light"
             className="h-8 w-8 rounded-full bg-transparent text-slate-600 hover:bg-black/[0.05]"
             onClick={onCopy}
             aria-label="Copy JSON value"
@@ -4121,11 +4139,11 @@ function JsonPreviewPanel({
           />
         </div>
       ) : null}
-      <ScrollArea className="flex-1 min-h-0 rounded-lg bg-white/60 ring-1 ring-black/[0.05]">
+      <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 rounded-lg bg-white/60 ring-1 ring-black/[0.05]">
         <pre className="whitespace-pre-wrap break-all px-2 py-2 text-[11px] text-slate-800 font-mono select-text cursor-text">
           {previewText}
         </pre>
-      </ScrollArea>
+      </ScrollShadow>
     </div>
   );
 }
@@ -4284,9 +4302,9 @@ function ThreeColumnExplorer({
                   {tab.icon}
                   <span>{tab.title}</span>
                   {tab.count !== undefined ? (
-                    <Badge variant="secondary" className="bg-white/75 text-slate-600">
+                    <Chip variant="flat" radius="full" size="sm" className="bg-white/75 text-slate-600">
                       {tab.count}
-                    </Badge>
+                    </Chip>
                   ) : null}
                 </div>
               }
@@ -4331,9 +4349,9 @@ function ThreeColumnExplorer({
           <div className="flex items-center gap-2">
             <Terminal className="h-4 w-4 text-slate-500" />
             <span className="text-[12px] font-medium text-slate-700">Log</span>
-            <Badge variant="secondary" className={cn("text-[10px] font-semibold", statusBadgeClass)}>
+            <Chip variant="flat" radius="full" size="sm" className={cn("text-[10px] font-semibold", statusBadgeClass)}>
               {statusLabel}
-            </Badge>
+            </Chip>
           </div>
           <div className="ml-auto flex min-w-0 items-center gap-2 text-[11px] text-slate-500">
             <span className="truncate">{logSummary}</span>
@@ -4343,21 +4361,22 @@ function ThreeColumnExplorer({
 
         {logDockOpen ? (
           <div className="space-y-3 border-t border-black/[0.04] bg-white/50 px-4 py-3">
-            <ScrollArea
+            <ScrollShadow
+              hideScrollBar
               className={cn(
-                "max-h-48 rounded-lg px-3 py-2 text-xs select-text cursor-text",
+                "overflow-y-auto max-h-48 rounded-lg px-3 py-2 text-xs select-text cursor-text",
                 errorMessage ? "bg-rose-50/70 text-rose-700" : "bg-slate-50/70 text-slate-700",
               )}
             >
               <pre className="whitespace-pre-wrap break-words font-mono">{logMessage}</pre>
-            </ScrollArea>
+            </ScrollShadow>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <Button size="sm" variant="ghost" onClick={onCopyLog}>
+                <Button size="sm" variant="light" onClick={onCopyLog}>
                   <Copy className="mr-1 h-3.5 w-3.5" />
                   Copy
                 </Button>
-                <Button size="sm" variant="ghost" onClick={onClearLog}>
+                <Button size="sm" variant="light" onClick={onClearLog}>
                   Clear
                 </Button>
               </div>
