@@ -18,7 +18,7 @@
 ### Tech Stack
 - **Platform**: Tauri v2 + Rust (Tokio async runtime)
 - **Frontend**: React 19 + Vite + TanStack (Router, Query, Form)
-- **Styling**: Tailwind CSS v4 + NextUI
+- **Styling**: Tailwind CSS v4 + HeroUI
 - **Remote**: gRPC (tonic + protobuf-ts)
 - **Animations**: Motion (framer-motion)
 
@@ -33,11 +33,11 @@
 - Generate types from `.proto` files, keep types in sync
 
 ### UI Rules
-- Use NextUI components first
+- Use HeroUI components first
 - Root layout: `select-none cursor-default h-screen overflow-hidden`
-- NextUI components + Motion for micro-interactions
+- HeroUI components + Motion for micro-interactions
 - Add page transitions, hover effects, skeleton loading
-- Use NextUI theming for consistent design
+- Use HeroUI theming for consistent design
 
 ### Security Rules
 - Minimize Tauri capabilities exposure
