@@ -61,6 +61,12 @@ fn main() {
                     .quit()
                     .build()?;
 
+                let file_menu = SubmenuBuilder::new(handle, "File")
+                    .text("open_dataset", "Open Dataset…")
+                    .separator()
+                    .close_window()
+                    .build()?;
+
                 let edit_menu = SubmenuBuilder::new(handle, "Edit")
                     .undo()
                     .redo()
@@ -71,9 +77,27 @@ fn main() {
                     .select_all()
                     .build()?;
 
+                let view_menu = SubmenuBuilder::new(handle, "View")
+                    .fullscreen()
+                    .build()?;
+
+                let window_menu = SubmenuBuilder::new(handle, "Window")
+                    .minimize()
+                    .separator()
+                    .close_window()
+                    .build()?;
+
+                let help_menu = SubmenuBuilder::new(handle, "Help")
+                    .text("help_docs", "Dataset Inspector Help")
+                    .build()?;
+
                 let menu = MenuBuilder::new(handle)
                     .item(&app_menu)
+                    .item(&file_menu)
                     .item(&edit_menu)
+                    .item(&view_menu)
+                    .item(&window_menu)
+                    .item(&help_menu)
                     .build()?;
                 app.set_menu(menu)?;
             }
