@@ -2,15 +2,13 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { Kbd, Modal, ModalBody, ModalContent, ModalHeader, Tab, Tabs, Tooltip } from "@heroui/react";
+import { Modal, ModalBody, ModalContent, ModalHeader, Tab, Tabs, Tooltip } from "@heroui/react";
 import {
   ArrowRight,
-  ArrowUpRight,
   ArrowUpRightFromSquare,
   BadgeInfo,
   ChevronLeft,
   ChevronRight,
-  Cloud,
   Copy,
   Database,
   FolderOpen,
@@ -152,6 +150,36 @@ function StatChip({
         <span className="font-semibold text-slate-900">{value}</span>
       </span>
     </Badge>
+  );
+}
+
+function StatBlock({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center rounded-xl bg-white/70 px-4 py-1.5 ring-1 ring-black/[0.06]">
+      <span className="text-[10px] font-medium uppercase tracking-wider text-slate-400">{label}</span>
+      <span className="text-base font-bold tabular-nums text-slate-800">{value}</span>
+    </div>
+  );
+}
+
+function StatBlockLarge({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number | string;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center px-3 py-1 min-w-0">
+      <span className="text-[10px] font-medium uppercase tracking-wider text-slate-400">{label}</span>
+      <span className="text-lg font-bold tabular-nums text-slate-800 truncate max-w-[120px]" title={String(value)}>{String(value)}</span>
+    </div>
   );
 }
 
@@ -317,6 +345,68 @@ function looksLikeTarFilename(name: string) {
   );
 }
 
+function looksLikeCsvFilename(name: string) {
+  const n = name.trim().toLowerCase();
+  return n.endsWith(".csv") || n.endsWith(".tsv");
+}
+
+type CsvRow = {
+  rowIndex: number;
+  values: string[];
+  raw: string;
+};
+
+type CsvParsed = {
+  headers: string[];
+  rows: CsvRow[];
+  delimiter: string;
+};
+
+function parseCsvText(text: string): CsvParsed {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) return { headers: [], rows: [], delimiter: "," };
+
+  // Detect delimiter: comma or tab
+  const firstLine = lines[0] ?? "";
+  const commaCount = (firstLine.match(/,/g) || []).length;
+  const tabCount = (firstLine.match(/\t/g) || []).length;
+  const delimiter = tabCount > commaCount ? "\t" : ",";
+
+  // Simple CSV parsing (doesn't handle quoted fields with delimiters inside)
+  const parseRow = (line: string) => {
+    const result: string[] = [];
+    let current = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === delimiter && !inQuotes) {
+        result.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+    result.push(current.trim());
+    return result;
+  };
+
+  const headers = parseRow(lines[0] ?? "");
+  const rows: CsvRow[] = lines.slice(1).map((line, idx) => ({
+    rowIndex: idx,
+    values: parseRow(line),
+    raw: line,
+  }));
+
+  return { headers, rows, delimiter };
+}
+
 function guessHfFieldExt(value: unknown) {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const obj = value as Record<string, unknown>;
@@ -360,6 +450,10 @@ export default function InspectorPage() {
     selectZenodoEntry,
     zenodoEntriesOffset,
     setZenodoEntriesOffset,
+    zenodoCsvSelectedRowIndex,
+    selectZenodoCsvRow,
+    zenodoCsvSelectedFieldIndex,
+    selectZenodoCsvField,
     statusMessage,
     setStatusMessage,
   } = useViewerStore();
@@ -634,6 +728,7 @@ export default function InspectorPage() {
   const zenodoIsZip = selectedZenodoExt === "zip";
   const zenodoIsTar = Boolean(selectedZenodoFile && looksLikeTarFilename(selectedZenodoFile.key));
   const zenodoIsArchive = zenodoIsZip || zenodoIsTar;
+  const zenodoIsCsv = Boolean(selectedZenodoFile && looksLikeCsvFilename(selectedZenodoFile.key));
 
   useEffect(() => {
     if (!isZenodoMode) return;
@@ -812,6 +907,37 @@ export default function InspectorPage() {
     if (!zenodoPreviewQuery.data || !selectedZenodoFile) return null;
     return { ...zenodoPreviewQuery.data, size: selectedZenodoFile.size };
   }, [selectedZenodoFile, zenodoPreviewQuery.data]);
+
+  // CSV parsing for Zenodo CSV files
+  const zenodoCsvParsed = useMemo((): CsvParsed | null => {
+    if (!zenodoIsCsv || !zenodoPreviewQuery.data?.previewText) return null;
+    return parseCsvText(zenodoPreviewQuery.data.previewText);
+  }, [zenodoIsCsv, zenodoPreviewQuery.data?.previewText]);
+
+  const zenodoCsvRows = useMemo(() => zenodoCsvParsed?.rows ?? [], [zenodoCsvParsed?.rows]);
+  const zenodoCsvHeaders = useMemo(() => zenodoCsvParsed?.headers ?? [], [zenodoCsvParsed?.headers]);
+
+  const selectedZenodoCsvRow = useMemo(() => {
+    if (!zenodoCsvRows.length) return null;
+    if (zenodoCsvSelectedRowIndex !== null) {
+      const found = zenodoCsvRows.find((r) => r.rowIndex === zenodoCsvSelectedRowIndex);
+      if (found) return found;
+    }
+    return zenodoCsvRows[0] ?? null;
+  }, [zenodoCsvRows, zenodoCsvSelectedRowIndex]);
+
+  // Auto-select first CSV row when CSV is loaded
+  useEffect(() => {
+    if (!isZenodoMode || !zenodoIsCsv) return;
+    if (!zenodoCsvRows.length) {
+      if (zenodoCsvSelectedRowIndex !== null) selectZenodoCsvRow(null);
+      return;
+    }
+    const exists = zenodoCsvSelectedRowIndex !== null && zenodoCsvRows.some((r) => r.rowIndex === zenodoCsvSelectedRowIndex);
+    if (!exists) {
+      selectZenodoCsvRow(zenodoCsvRows[0]?.rowIndex ?? null);
+    }
+  }, [isZenodoMode, selectZenodoCsvRow, zenodoCsvRows, zenodoCsvSelectedRowIndex, zenodoIsCsv]);
 
   const zenodoZipEntriesQuery = useQuery<ZenodoZipEntrySummary[]>({
     queryKey: ["zenodo-zip-entries", selectedZenodoFile?.contentUrl ?? null],
@@ -2215,303 +2341,141 @@ export default function InspectorPage() {
     <main className="h-full overflow-hidden">
       <div className="flex h-full flex-col gap-2">
         <section className="shrink-0 overflow-hidden rounded-2xl bg-white/55 shadow-[var(--shadow-soft)] backdrop-blur ring-1 ring-black/5">
-          <div className="flex flex-col gap-2 p-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center gap-2 pr-1 text-sm font-semibold tracking-tight text-slate-900">
-                <Sparkles className="h-4 w-4 text-emerald-600" />
-                Dataset Inspector
-              </div>
+          <div className="flex gap-4 p-3">
+            {/* Left side: title + input */}
+            <div className="flex flex-1 min-w-0 flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-3 min-h-[32px]">
+                <div className="flex items-center gap-2 pr-1 text-sm font-semibold tracking-tight text-slate-900">
+                  <Sparkles className="h-4 w-4 text-emerald-600" />
+                  Dataset Inspector
+                </div>
 
-              <Tabs
-                aria-label="Source kind"
-                variant="solid"
-                selectedKey={sourceKind}
-                onSelectionChange={(key) => {
-                  const next = String(key);
-                  if (
-                    next === "auto" ||
-                    next === "litdata" ||
-                    next === "mds" ||
-                    next === "wds" ||
-                    next === "hf" ||
-                    next === "zenodo"
-                  ) {
-                    setSourceKind(next);
-                  }
-                }}
-                classNames={{
-                  tabList: "rounded-full bg-black/[0.04] p-1 ring-1 ring-black/[0.04]",
-                  tab: "h-8 px-3 text-[11px] font-semibold text-slate-600 data-[selected=true]:text-slate-900",
-                  tabContent: "gap-2",
-                  cursor: "rounded-full bg-white/80 shadow-sm",
-                  panel: "hidden",
-                }}
-              >
-                <Tab
-                  key="auto"
-                  title={
-                    <Tooltip
-                      showArrow
-                      placement="bottom-start"
-                      content="Auto-detect: WebDataset, LitData, MosaicML MDS, Hugging Face streaming, Zenodo."
-                    >
-                      <div className="flex items-center gap-2">
-                        <Sparkles className="h-3.5 w-3.5 text-emerald-600" />
-                        Auto
+                {chunkSelection.length > 0 ? (
+                  <Tooltip
+                    showArrow
+                    placement="bottom-start"
+                    content={
+                      <div className="max-w-[340px] space-y-1 p-1 text-xs text-slate-700">
+                        {chunkSelection.slice(0, 8).map((path) => (
+                          <div key={path} className="truncate">
+                            {path}
+                          </div>
+                        ))}
+                        {chunkSelection.length > 8 ? (
+                          <div className="text-[11px] text-slate-500">… and {chunkSelection.length - 8} more</div>
+                        ) : null}
                       </div>
-                    </Tooltip>
-                  }
-                  isDisabled={chunkSelection.length > 0}
-                />
-                <Tab
-                  key="litdata"
-                  title={
-                    <Tooltip showArrow placement="bottom-start" content="LitData local preview (index.json / .bin shards).">
-                      <div className="flex items-center gap-2">
-                        <FolderOpen className="h-3.5 w-3.5" />
-                        LitData
-                      </div>
-                    </Tooltip>
-                  }
-                />
-                <Tab
-                  key="mds"
-                  title={
-                    <Tooltip showArrow placement="bottom-start" content="MosaicML MDS local preview (index.json / .mds shards).">
-                      <div className="flex items-center gap-2">
-                        <Database className="h-3.5 w-3.5" />
-                        MDS
-                      </div>
-                    </Tooltip>
-                  }
-                  isDisabled={chunkSelection.length > 0}
-                />
-                <Tab
-                  key="wds"
-                  title={
-                    <Tooltip showArrow placement="bottom-start" content="WebDataset local preview (shards/*.tar).">
-                      <div className="flex items-center gap-2">
-                        <HardDrive className="h-3.5 w-3.5" />
-                        WebDataset
-                      </div>
-                    </Tooltip>
-                  }
-                  isDisabled={chunkSelection.length > 0}
-                />
-                <Tab
-                  key="hf"
-                  title={
-                    <Tooltip showArrow placement="bottom-start" content="Hugging Face streaming dataset online preview.">
-                      <div className="flex items-center gap-2">
-                        <Cloud className="h-3.5 w-3.5" />
-                        Hugging Face
-                      </div>
-                    </Tooltip>
-                  }
-                  isDisabled={chunkSelection.length > 0}
-                />
-                <Tab
-                  key="zenodo"
-                  title={
-                    <Tooltip showArrow placement="bottom-start" content="Zenodo dataset online preview.">
-                      <div className="flex items-center gap-2">
-                        <BadgeInfo className="h-3.5 w-3.5" />
-                        Zenodo
-                      </div>
-                    </Tooltip>
-                  }
-                  isDisabled={chunkSelection.length > 0}
-                />
-              </Tabs>
-
-              {sourceKind === "auto" ? (
-                <Badge variant="secondary" className="bg-white/85 text-slate-700">
-                  Detected:{" "}
-                  {autodetectedHf
-                    ? "Hugging Face"
-                    : autodetectedZenodo
-                      ? "Zenodo"
-                      : isMdsMode
-                        ? "MosaicML MDS"
-                        : isWdsMode
-                          ? "WebDataset"
-                          : isLitdataMode
-                            ? "LitData"
-                            : "Local"}
-                </Badge>
-              ) : null}
-
-              {chunkSelection.length > 0 ? (
-                <Tooltip
-                  showArrow
-                  placement="bottom-start"
-                  content={
-                    <div className="max-w-[340px] space-y-1 p-1 text-xs text-slate-700">
-                      {chunkSelection.slice(0, 8).map((path) => (
-                        <div key={path} className="truncate">
-                          {path}
-                        </div>
-                      ))}
-                      {chunkSelection.length > 8 ? (
-                        <div className="text-[11px] text-slate-500">… and {chunkSelection.length - 8} more</div>
-                      ) : null}
+                    }
+                  >
+                    <div>
+                      <Badge variant="secondary" className="bg-white/85 text-slate-700">
+                        {chunkSelection.length} shard{chunkSelection.length > 1 ? "s" : ""} selected
+                      </Badge>
                     </div>
-                  }
-                >
-                  <div>
-                    <Badge variant="secondary" className="bg-white/85 text-slate-700">
-                      {chunkSelection.length} shard{chunkSelection.length > 1 ? "s" : ""} selected
-                    </Badge>
-                  </div>
-                </Tooltip>
-              ) : null}
+                  </Tooltip>
+                ) : null}
 
-              {chunkSelection.length > 0 ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 px-2 text-[11px] font-semibold text-slate-600 hover:bg-black/[0.05]"
-                  onClick={() => setChunkSelection([])}
-                  disabled={busy}
-                >
-                  Clear selection
-                </Button>
-              ) : null}
-
-              <div className="ml-auto flex flex-wrap items-center gap-2">
-                {showHfStats ? (
+                {chunkSelection.length > 0 ? (
                   <Button
                     type="button"
                     size="sm"
                     variant="ghost"
-                    className="h-8 justify-start overflow-hidden rounded-full bg-transparent px-3 text-slate-700 hover:bg-black/[0.05]"
-                    disabled={!tauri}
-                    onClick={() => setHfTokenDialogOpen(true)}
+                    className="h-7 px-2 text-[11px] font-semibold text-slate-600 hover:bg-black/[0.05]"
+                    onClick={() => setChunkSelection([])}
+                    disabled={busy}
                   >
-                    <KeyRound className="mr-2 h-4 w-4" />
-                    <span className="truncate">{hfTokenMasked ? `HF Token ${hfTokenMasked}` : "HF Token"}</span>
+                    Clear selection
                   </Button>
                 ) : null}
 
-                <Tooltip
-                  showArrow
-                  placement="bottom-end"
-                  content={<pre className="max-w-[520px] whitespace-pre-wrap break-words p-2 text-xs">{logMessage}</pre>}
-                >
-                  <div>
+                {showHfStats ? (
+                  <div className="ml-auto">
                     <Button
                       type="button"
                       size="sm"
                       variant="ghost"
-                      className={cn(
-                        "h-8 px-3 text-xs font-semibold",
-                        errorMessage
-                          ? "text-rose-700 hover:bg-rose-50"
-                          : busy
-                            ? "text-amber-700 hover:bg-amber-50"
-                            : "text-emerald-700 hover:bg-emerald-50",
-                      )}
-                      onClick={() => setLogDockOpen((prev) => !prev)}
+                      className="h-8 justify-start overflow-hidden rounded-full bg-transparent px-3 text-slate-700 hover:bg-black/[0.05]"
+                      disabled={!tauri}
+                      onClick={() => setHfTokenDialogOpen(true)}
                     >
-                      {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                      {errorMessage ? <TriangleAlert className="mr-2 h-4 w-4" /> : null}
-                      {busy ? "Working" : errorMessage ? "Error" : "Ready"}
+                      <KeyRound className="mr-2 h-4 w-4" />
+                      <span className="truncate">{hfTokenMasked ? `HF Token ${hfTokenMasked}` : "HF Token"}</span>
                     </Button>
                   </div>
-                </Tooltip>
+                ) : null}
+              </div>
 
-                {tauri ? (
-                  <Tooltip content="Check Updates" placement="bottom-end" showArrow>
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+                <Input
+                  variant="bordered"
+                  radius="full"
+                  className="w-full bg-white/70"
+                  placeholder={sourcePlaceholder}
+                  value={sourceInput}
+                  onChange={(e) => setSourceInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleLoad();
+                  }}
+                  aria-label="Source"
+                />
+                <div className="flex items-center gap-2 shrink-0">
+                  {canBrowse ? (
+                    <Button
+                      variant="ghost"
+                      className="h-9 rounded-full bg-transparent px-3 text-slate-700 hover:bg-black/[0.05]"
+                      onClick={handleChoose}
+                      disabled={busy || !tauri}
+                    >
+                      <FolderOpen className="mr-2 h-4 w-4" />
+                      Browse
+                    </Button>
+                  ) : null}
+                  <Tooltip
+                    isDisabled={tauri}
+                    showArrow
+                    placement="bottom-end"
+                    content="Loading requires the Tauri runtime."
+                  >
                     <div>
                       <Button
-                        type="button"
-                        isIconOnly
-                        size="sm"
-                        variant="ghost"
-                        className="h-8 w-8 rounded-full bg-transparent text-slate-600 hover:bg-black/[0.05]"
-                        onClick={() => {
-                          window.dispatchEvent(new CustomEvent("dataset-inspector:check-updates"));
-                        }}
-                        aria-label="Check updates"
+                        className="shadow-[var(--shadow-glow)]"
+                        onClick={() => void handleLoad()}
+                        disabled={busy || (!sourceInput.trim() && chunkSelection.length === 0) || !tauri}
                       >
-                        <ArrowUpRight className="h-4 w-4" />
+                        {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : loadIcon}
+                        {loadLabel}
                       </Button>
                     </div>
                   </Tooltip>
-                ) : null}
+                </div>
               </div>
             </div>
 
-            <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
-              <Input
-                variant="bordered"
-                radius="full"
-                className="w-full bg-white/70"
-                placeholder={sourcePlaceholder}
-                value={sourceInput}
-                onChange={(e) => setSourceInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void handleLoad();
-                }}
-                aria-label="Source"
-              />
-              <div className="flex items-center gap-2">
-                {canBrowse ? (
-                  <Button
-                    variant="ghost"
-                    className="h-9 rounded-full bg-transparent px-3 text-slate-700 hover:bg-black/[0.05]"
-                    onClick={handleChoose}
-                    disabled={busy || !tauri}
-                  >
-                    <FolderOpen className="mr-2 h-4 w-4" />
-                    Browse
-                  </Button>
-                ) : null}
-                <Tooltip
-                  isDisabled={tauri}
-                  showArrow
-                  placement="bottom-end"
-                  content="Loading requires the Tauri runtime."
-                >
-                  <div>
-                    <Button
-                      className="shadow-[var(--shadow-glow)]"
-                      onClick={() => void handleLoad()}
-                      disabled={busy || (!sourceInput.trim() && chunkSelection.length === 0) || !tauri}
-                    >
-                      {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : loadIcon}
-                      {loadLabel}
-                    </Button>
-                  </div>
-                </Tooltip>
-              </div>
-            </div>
-
-	            <div className="flex flex-wrap items-center gap-2">
-	              {showHfStats ? (
-	                <>
-	                  <StatChip label="Dataset" value={datasetPreviewLabel} title={datasetPreviewLabel} />
-	                  <StatChip label="Split" value={hfSelectedSplitLabel} />
-	                  <StatChip
-	                    label="Rows"
-	                    value={
-	                      hfQuery.data && hfQuery.data.numRowsTotal !== null && hfQuery.data.numRowsTotal !== undefined
-	                        ? `${hfQuery.data.numRowsTotal.toLocaleString()}${hfQuery.data.partial ? " (Partial)" : ""}`
-	                        : "—"
-	                    }
-	                  />
-	                </>
-	              ) : showZenodoStats ? (
+            {/* Right side: stats spanning both rows */}
+            <div className="hidden lg:flex shrink-0 w-[400px] items-center justify-center gap-3 rounded-xl bg-white/50 px-4 py-2 ring-1 ring-black/[0.05]">
+              {showHfStats ? (
                 <>
-                  <StatChip label="Record" value={zenodoRecordLabel} />
-                  <StatChip label="Files" value={zenodoQuery.data?.files.length ?? "—"} />
-                  <StatChip label="Size" value={zenodoTotalBytes ? formatBytes(zenodoTotalBytes) : "—"} />
+                  <StatBlockLarge label="Dataset" value={datasetPreviewLabel} />
+                  <StatBlockLarge label="Split" value={hfSelectedSplitLabel} />
+                  <StatBlockLarge
+                    label="Rows"
+                    value={
+                      hfQuery.data && hfQuery.data.numRowsTotal !== null && hfQuery.data.numRowsTotal !== undefined
+                        ? `${hfQuery.data.numRowsTotal.toLocaleString()}${hfQuery.data.partial ? " (Partial)" : ""}`
+                        : "—"
+                    }
+                  />
+                </>
+              ) : showZenodoStats ? (
+                <>
+                  <StatBlockLarge label="Record" value={zenodoRecordLabel} />
+                  <StatBlockLarge label="Files" value={zenodoQuery.data?.files.length ?? "—"} />
+                  <StatBlockLarge label="Size" value={zenodoTotalBytes ? formatBytes(zenodoTotalBytes) : "—"} />
                 </>
               ) : isWdsMode ? (
                 <>
-                  <StatChip label="Shards" value={wdsDirQuery.data?.shards.length ?? "—"} />
-                  <StatChip
+                  <StatBlockLarge label="Shards" value={wdsDirQuery.data?.shards.length ?? "—"} />
+                  <StatBlockLarge
                     label="Samples"
                     value={
                       wdsSamplesQuery.data
@@ -2521,51 +2485,15 @@ export default function InspectorPage() {
                         : "—"
                     }
                   />
-                  <StatChip label="Size" value={wdsTotalBytes ? formatBytes(wdsTotalBytes) : "—"} />
+                  <StatBlockLarge label="Size" value={wdsTotalBytes ? formatBytes(wdsTotalBytes) : "—"} />
                 </>
               ) : (
                 <>
-                  <StatChip label="Shards" value={indexQuery.data?.chunks.length ?? "—"} />
-                  <StatChip label="Items" value={totalItems ? totalItems.toLocaleString() : "—"} />
-                  <StatChip label="Size" value={totalBytes ? formatBytes(totalBytes) : "—"} />
+                  <StatBlockLarge label="Shards" value={indexQuery.data?.chunks.length ?? "—"} />
+                  <StatBlockLarge label="Items" value={totalItems ? totalItems.toLocaleString() : "—"} />
+                  <StatBlockLarge label="Size" value={totalBytes ? formatBytes(totalBytes) : "—"} />
                 </>
               )}
-
-              <div className="ml-auto flex items-center gap-2">
-                <Tooltip
-                  showArrow
-                  placement="bottom-end"
-                  content={
-                    <div className="space-y-1 p-1 text-xs text-slate-700">
-                      <div className="flex items-center gap-2">
-                        <Kbd keys={["enter"]} className="bg-white/80">
-                          Enter
-                        </Kbd>
-                        <span>Load</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Kbd keys={["escape"]} className="bg-white/80">
-                          Esc
-                        </Kbd>
-                        <span>Close</span>
-                      </div>
-                    </div>
-                  }
-                >
-                  <div>
-                    <Button
-                      type="button"
-                      isIconOnly
-                      size="sm"
-                      variant="ghost"
-                      className="h-8 w-8 rounded-full bg-transparent text-slate-600 hover:bg-black/[0.05]"
-                      aria-label="Keyboard shortcuts"
-                    >
-                      <BadgeInfo className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </Tooltip>
-              </div>
             </div>
           </div>
         </section>
@@ -2640,18 +2568,25 @@ export default function InspectorPage() {
           variants={cardGridVariants}
           initial="hidden"
           animate="show"
-          className="grid flex-1 min-h-0 gap-2 lg:grid-cols-[minmax(0,1fr)_560px]"
+          className="flex-1 min-h-0"
         >
           {isHfMode ? (
-            <>
               <motion.div variants={panelVariants} className="min-w-0 h-full min-h-0">
-                <ExplorerPanel
+                <ThreeColumnExplorer
                   title="Explorer"
                   subtitle="Splits → Rows → Fields"
                   icon={<Database className="h-4 w-4 text-emerald-600" />}
                   meta={hfExplorerMeta}
                   tabKey={explorerTabKey}
                   onTabChange={setExplorerTabKey}
+                  previewContent={renderHfPreview()}
+                  logMessage={logMessage}
+                  busy={busy}
+                  errorMessage={errorMessage}
+                  logDockOpen={logDockOpen}
+                  onToggleLogDock={() => setLogDockOpen((prev) => !prev)}
+                  onCopyLog={() => copyText(logMessage)}
+                  onClearLog={() => setStatusMessage(null)}
                   tabs={[
                     {
                       key: "level1",
@@ -2666,7 +2601,7 @@ export default function InspectorPage() {
                             placeholder="Filter splits…"
                             ariaLabel="Filter splits"
                           />
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/55 ring-1 ring-black/[0.05]">
+                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {(() => {
                               const visible = hfSplitPairs.filter((pair) =>
                                 matchesFilter(`${pair.config}/${pair.split}`, level1Needle),
@@ -2679,10 +2614,10 @@ export default function InspectorPage() {
                                     <div
                                       key={key}
                                       className={cn(
-                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.05] px-2 py-1.5 text-[13px] transition-colors",
+                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
                                         selected
                                           ? "bg-emerald-50/60"
-                                          : "hover:bg-black/[0.03]",
+                                          : "hover:bg-black/[0.02]",
                                       )}
                                       onClick={() => {
                                         setFilterLevel2("");
@@ -2693,7 +2628,7 @@ export default function InspectorPage() {
                                     >
                                       <div className="min-w-0">
                                         <div
-                                          className="truncate font-semibold text-slate-900"
+                                          className="truncate font-medium text-slate-900"
                                           title={`${pair.config}/${pair.split}`}
                                         >
                                           {`${pair.config}/${pair.split}`}
@@ -2732,7 +2667,7 @@ export default function InspectorPage() {
                             ariaLabel="Filter rows"
                           />
 
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/55 ring-1 ring-black/[0.05]">
+                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {(() => {
                               const visible = hfRows
                                 .map((row, idx) => {
@@ -2751,20 +2686,20 @@ export default function InspectorPage() {
                                     <div
                                       key={rowIndex}
                                       className={cn(
-                                        "grid min-w-0 cursor-pointer grid-cols-[auto_1fr] items-center gap-2 border-b border-black/[0.05] px-2 py-1.5 text-[13px] transition-colors",
+                                        "grid min-w-0 cursor-pointer grid-cols-[auto_1fr] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
                                         selected
                                           ? "bg-sky-50/60"
-                                          : "hover:bg-black/[0.03]",
+                                          : "hover:bg-black/[0.02]",
                                       )}
                                       onClick={() => {
                                         selectHfRow(rowIndex);
                                         setExplorerTabKey("level3");
                                       }}
                                     >
-                                      <div className="whitespace-nowrap font-semibold text-slate-900 tabular-nums">
+                                      <div className="whitespace-nowrap font-medium text-slate-900 tabular-nums">
                                         Row {rowIndex}
                                       </div>
-                                      <div className="min-w-0 truncate text-xs text-slate-600">{snippet}</div>
+                                      <div className="min-w-0 truncate text-xs text-slate-500">{snippet}</div>
                                     </div>
                                   );
                                 });
@@ -2781,59 +2716,59 @@ export default function InspectorPage() {
                             ) : null}
                           </ScrollArea>
 
-	                          <div className="shrink-0 rounded-xl bg-white/40 px-2 py-2 ring-1 ring-black/[0.05]">
-	                            <div className="flex items-center gap-2">
-	                              <Button
-	                                size="sm"
-	                                variant="outline"
-	                                disabled={!hfCanPrev}
-	                                onClick={() => setHfOffset(Math.max(0, hfOffset - HF_PAGE_SIZE))}
-	                              >
-	                                <ChevronLeft className="mr-1 h-4 w-4" />
-	                                Prev
-	                              </Button>
-	                              <Button
-	                                size="sm"
-	                                variant="outline"
-	                                disabled={!hfCanNext}
-	                                onClick={() => setHfOffset(hfOffset + HF_PAGE_SIZE)}
-	                              >
-	                                Next
-	                                <ChevronRight className="ml-1 h-4 w-4" />
-	                              </Button>
+                          <div className="shrink-0 rounded-xl bg-white/40 px-2 py-2 ring-1 ring-black/[0.04]">
+                            <div className="flex items-center gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={!hfCanPrev}
+                                onClick={() => setHfOffset(Math.max(0, hfOffset - HF_PAGE_SIZE))}
+                              >
+                                <ChevronLeft className="mr-1 h-4 w-4" />
+                                Prev
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={!hfCanNext}
+                                onClick={() => setHfOffset(hfOffset + HF_PAGE_SIZE)}
+                              >
+                                Next
+                                <ChevronRight className="ml-1 h-4 w-4" />
+                              </Button>
 
-	                              <div className="ml-auto flex items-center gap-2">
-	                                <span className="text-[11px] font-semibold text-slate-500 whitespace-nowrap">Offset</span>
-	                                <Input
-	                                  size="sm"
-	                                  variant="bordered"
-	                                  radius="lg"
-	                                  className="w-20"
-	                                  classNames={{
-	                                    inputWrapper:
-	                                      "h-8 min-h-0 bg-white/80 data-[hover=true]:bg-white/90 group-data-[focus=true]:bg-white/90",
-	                                    input: "text-xs font-semibold text-slate-900 tabular-nums",
-	                                  }}
-	                                  value={hfOffsetDraft}
-	                                  onValueChange={setHfOffsetDraft}
-	                                  inputMode="numeric"
-	                                  pattern="[0-9]*"
-	                                  onKeyDown={(e) => {
-	                                    if (e.key === "Enter") {
-	                                      (e.currentTarget as HTMLInputElement).blur();
-	                                      handleHfJump();
-	                                    }
-	                                  }}
-	                                  onBlur={handleHfJump}
-	                                  isDisabled={!canPaginateHf}
-	                                  aria-label="Offset"
-	                                />
-	                              </div>
-	                            </div>
-	                          </div>
-	                        </div>
-	                      ),
-	                      hint: "Pick a row to inspect its fields.",
+                              <div className="ml-auto flex items-center gap-2">
+                                <span className="text-[11px] font-medium text-slate-500 whitespace-nowrap">Offset</span>
+                                <Input
+                                  size="sm"
+                                  variant="bordered"
+                                  radius="lg"
+                                  className="w-20"
+                                  classNames={{
+                                    inputWrapper:
+                                      "h-8 min-h-0 bg-white/80 data-[hover=true]:bg-white/90 group-data-[focus=true]:bg-white/90",
+                                    input: "text-xs font-medium text-slate-900 tabular-nums",
+                                  }}
+                                  value={hfOffsetDraft}
+                                  onValueChange={setHfOffsetDraft}
+                                  inputMode="numeric"
+                                  pattern="[0-9]*"
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      (e.currentTarget as HTMLInputElement).blur();
+                                      handleHfJump();
+                                    }
+                                  }}
+                                  onBlur={handleHfJump}
+                                  isDisabled={!canPaginateHf}
+                                  aria-label="Offset"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ),
+                      hint: "Pick a row to inspect its fields.",
                     },
                     {
                       key: "level3",
@@ -2849,7 +2784,7 @@ export default function InspectorPage() {
                             placeholder="Filter fields…"
                             ariaLabel="Filter Hugging Face fields"
                           />
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/55 ring-1 ring-black/[0.05]">
+                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {(() => {
                               const visible = hfFeatures.filter((feature) => matchesFilter(feature.name, level3Needle));
                               if (visible.length) {
@@ -2859,10 +2794,10 @@ export default function InspectorPage() {
                                     <div
                                       key={feature.name}
                                       className={cn(
-                                        "grid min-w-0 cursor-pointer grid-cols-[1fr] items-center gap-2 border-b border-black/[0.05] px-2 py-1.5 text-[13px] transition-colors",
+                                        "grid min-w-0 cursor-pointer grid-cols-[1fr] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
                                         selected
                                           ? "bg-cyan-50/60"
-                                          : "hover:bg-black/[0.03]",
+                                          : "hover:bg-black/[0.02]",
                                       )}
                                       onClick={() => {
                                         selectHfField(feature.name);
@@ -2873,10 +2808,10 @@ export default function InspectorPage() {
                                       }}
                                     >
                                       <div className="flex min-w-0 items-center gap-2">
-                                        <div className="min-w-0 truncate font-semibold text-slate-900" title={feature.name}>
+                                        <div className="min-w-0 truncate font-medium text-slate-900" title={feature.name}>
                                           {feature.name}
                                         </div>
-                                        <Badge variant="secondary" className="shrink-0 bg-slate-100/80 text-slate-600">
+                                        <Badge variant="secondary" className="shrink-0 bg-slate-100/80 text-slate-500">
                                           {(feature.dtype ?? "raw").toString()}
                                         </Badge>
                                       </div>
@@ -2896,40 +2831,28 @@ export default function InspectorPage() {
                           </ScrollArea>
                         </div>
                       ),
-                      hint: "Pick a field to preview.",
                     },
                   ]}
                 />
               </motion.div>
-
-	              <motion.div variants={panelVariants} className="min-w-0 h-full min-h-0">
-	                <InspectorPanel
-	                  title="Inspector"
-	                  subtitle={hfSelectedSplitLabel !== "—" ? `Split ${hfSelectedSplitLabel}` : "Select a split to inspect."}
-	                  meta={hfPreviewMeta}
-	                  showMeta={false}
-	                  previewContent={renderHfPreview()}
-	                  logMessage={logMessage}
-	                  busy={busy}
-	                  errorMessage={errorMessage}
-	                  logDockOpen={logDockOpen}
+	          ) : isZenodoMode ? (
+              <motion.div variants={panelVariants} className="min-w-0 h-full min-h-0">
+                <ThreeColumnExplorer
+                  title="Explorer"
+                  subtitle="Files → Entries → Preview"
+                  icon={<BadgeInfo className="h-4 w-4 text-sky-600" />}
+                  meta={zenodoExplorerMeta}
+                  tabKey={explorerTabKey}
+                  onTabChange={setExplorerTabKey}
+                  previewContent={renderZenodoPreview()}
+                  logMessage={logMessage}
+                  busy={busy}
+                  errorMessage={errorMessage}
+                  logDockOpen={logDockOpen}
                   onToggleLogDock={() => setLogDockOpen((prev) => !prev)}
                   onCopyLog={() => copyText(logMessage)}
                   onClearLog={() => setStatusMessage(null)}
-                />
-              </motion.div>
-            </>
-	          ) : isZenodoMode ? (
-	            <>
-	              <motion.div variants={panelVariants} className="min-w-0 h-full min-h-0">
-	                <ExplorerPanel
-	                  title="Explorer"
-	                  subtitle="Files → Entries"
-	                  icon={<BadgeInfo className="h-4 w-4 text-sky-600" />}
-	                  meta={zenodoExplorerMeta}
-	                  tabKey={explorerTabKey}
-	                  onTabChange={setExplorerTabKey}
-	                  tabs={[
+                  tabs={[
                     {
                       key: "level1",
                       title: "Files",
@@ -2943,40 +2866,38 @@ export default function InspectorPage() {
                             placeholder="Filter files…"
                             ariaLabel="Filter Zenodo files"
                           />
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/55 ring-1 ring-black/[0.05]">
+                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {(() => {
                               const visible = zenodoFiles.filter((file) => matchesFilter(file.key, level1Needle));
-	                              if (visible.length) {
-	                                return visible.map((file) => {
-	                                  const selected = selectedZenodoFile?.key === file.key;
-	                                  return (
-	                                    <div
-	                                      key={file.key}
-	                                      className={cn(
-	                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.05] px-2 py-1.5 text-[13px] transition-colors",
-	                                        selected
-	                                          ? "bg-emerald-50/60"
-	                                          : "hover:bg-black/[0.03]",
-	                                      )}
-	                                      onClick={() => {
-	                                        setFilterLevel2("");
-	                                        setFilterLevel3("");
-	                                        selectZenodoFile(file.key);
-	                                        setExplorerTabKey("level2");
-	                                      }}
-	                                    >
-	                                      <div className="min-w-0">
-	                                        <div className="truncate font-semibold text-slate-900" title={file.key}>
-	                                          {file.key}
-	                                        </div>
-	                                      </div>
-	                                      <div className="whitespace-nowrap text-[11px] text-slate-600 tabular-nums">
-	                                        {formatBytes(file.size)}
-	                                      </div>
-	                                    </div>
-	                                  );
-	                                });
-	                              }
+                              if (visible.length) {
+                                return visible.map((file) => {
+                                  const selected = selectedZenodoFile?.key === file.key;
+                                  return (
+                                    <div
+                                      key={file.key}
+                                      className={cn(
+                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
+                                        selected ? "bg-emerald-50/60" : "hover:bg-black/[0.02]",
+                                      )}
+                                      onClick={() => {
+                                        setFilterLevel2("");
+                                        setFilterLevel3("");
+                                        selectZenodoFile(file.key);
+                                        setExplorerTabKey("level2");
+                                      }}
+                                    >
+                                      <div className="min-w-0">
+                                        <div className="truncate font-medium text-slate-900" title={file.key}>
+                                          {file.key}
+                                        </div>
+                                      </div>
+                                      <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
+                                        {formatBytes(file.size)}
+                                      </div>
+                                    </div>
+                                  );
+                                });
+                              }
                               if (zenodoQuery.isPending) return null;
                               if (!zenodoFiles.length) return <EmptyState hint="Load a Zenodo record to list files." />;
                               return <EmptyState hint="No matches. Try a different filter." />;
@@ -2989,13 +2910,15 @@ export default function InspectorPage() {
                           </ScrollArea>
                         </div>
                       ),
-                      hint: "Select a file to preview.",
+                      hint: "Select a file.",
                     },
                     {
                       key: "level2",
-                      title: "Entries",
+                      title: zenodoIsCsv ? "Rows" : "Entries",
                       icon: <BadgeInfo className="h-4 w-4 text-sky-600" />,
-                      count: zenodoIsZip
+                      count: zenodoIsCsv
+                        ? zenodoCsvRows.length || undefined
+                        : zenodoIsZip
                         ? zenodoZipEntries.length || undefined
                         : zenodoIsTar
                           ? (zenodoTarEntriesQuery.data?.numEntriesTotal ?? (zenodoTarEntries.length || undefined))
@@ -3003,102 +2926,123 @@ export default function InspectorPage() {
                       isDisabled: !selectedZenodoFile,
                       content: (
                         <div className="flex flex-1 min-h-0 flex-col gap-2">
-                          {zenodoIsArchive ? (
+                          {zenodoIsArchive || zenodoIsCsv ? (
                             <ListFilterInput
                               value={filterLevel2}
                               onValueChange={setFilterLevel2}
-                              placeholder="Filter entries…"
-                              ariaLabel="Filter Zenodo entries"
+                              placeholder={zenodoIsCsv ? "Filter rows…" : "Filter entries…"}
+                              ariaLabel={zenodoIsCsv ? "Filter CSV rows" : "Filter Zenodo entries"}
                             />
                           ) : null}
 
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/55 ring-1 ring-black/[0.05]">
-                            {zenodoIsZip ? (
-	                              zenodoZipEntries
-	                                .filter((entry) => matchesFilter(entry.name, level2Needle))
-	                                .map((entry) => {
-	                                  const selected = selectedZenodoEntry?.name === entry.name;
-	                                  const displayName =
-	                                    zenodoZipEntryPrefix &&
-	                                    entry.name.startsWith(zenodoZipEntryPrefix) &&
-	                                    entry.name.length > zenodoZipEntryPrefix.length
-	                                      ? entry.name.slice(zenodoZipEntryPrefix.length)
-	                                      : entry.name;
-	                                  const label = entry.isDir ? `${displayName.replace(/\/+$/, "")}/` : displayName;
-	                                  return (
-	                                    <div
-	                                      key={entry.name}
-	                                      className={cn(
-	                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.05] px-2 py-1.5 text-[13px] transition-colors",
-	                                        selected ? "bg-sky-50/60" : "hover:bg-black/[0.03]",
-	                                      )}
-	                                      onClick={() => {
-	                                        selectZenodoEntry(entry.name);
-	                                      }}
-	                                    >
-	                                      <div className="min-w-0">
-	                                        <div
-	                                          className="truncate font-semibold text-slate-900"
-	                                          title={entry.name}
-	                                        >
-	                                          {label}
-	                                        </div>
-	                                      </div>
-	                                      <div className="whitespace-nowrap text-[11px] text-slate-600 tabular-nums">
-	                                        {entry.isDir ? "" : formatBytes(entry.uncompressedSize)}
-	                                      </div>
-	                                    </div>
-	                                  );
-	                                })
-	                            ) : zenodoIsTar ? (
-	                              zenodoTarEntries
-	                                .filter((entry) => matchesFilter(entry.name, level2Needle))
-	                                .map((entry) => {
-	                                  const selected = selectedZenodoEntry?.name === entry.name;
-	                                  const displayName =
-	                                    zenodoTarEntryPrefix &&
-	                                    entry.name.startsWith(zenodoTarEntryPrefix) &&
-	                                    entry.name.length > zenodoTarEntryPrefix.length
-	                                      ? entry.name.slice(zenodoTarEntryPrefix.length)
-	                                      : entry.name;
-	                                  const label = entry.isDir ? `${displayName.replace(/\/+$/, "")}/` : displayName;
-	                                  return (
-	                                    <div
-	                                      key={entry.name}
-	                                      className={cn(
-	                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.05] px-2 py-1.5 text-[13px] transition-colors",
-	                                        selected ? "bg-sky-50/60" : "hover:bg-black/[0.03]",
-	                                      )}
-	                                      onClick={() => {
-	                                        selectZenodoEntry(entry.name);
-	                                      }}
-	                                    >
-	                                      <div className="min-w-0">
-	                                        <div
-	                                          className="truncate font-semibold text-slate-900"
-	                                          title={entry.name}
-	                                        >
-	                                          {label}
-	                                        </div>
-	                                      </div>
-	                                      <div className="whitespace-nowrap text-[11px] text-slate-600 tabular-nums">
-	                                        {entry.isDir ? "" : formatBytes(entry.size)}
-	                                      </div>
-	                                    </div>
-	                                  );
-	                                })
-	                            ) : selectedZenodoFile ? (
-	                              <div className="grid min-w-0 grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.05] bg-sky-50/50 px-2 py-1.5 text-sm">
+                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+                            {zenodoIsCsv ? (
+                              zenodoCsvRows
+                                .filter((row) => matchesFilter(`${row.rowIndex} ${row.raw}`, level2Needle))
+                                .map((row) => {
+                                  const selected = selectedZenodoCsvRow?.rowIndex === row.rowIndex;
+                                  const snippet = row.values.slice(0, 3).join(" | ");
+                                  return (
+                                    <div
+                                      key={row.rowIndex}
+                                      className={cn(
+                                        "grid min-w-0 cursor-pointer grid-cols-[auto_1fr] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
+                                        selected ? "bg-sky-50/60" : "hover:bg-black/[0.02]",
+                                      )}
+                                      onClick={() => {
+                                        selectZenodoCsvRow(row.rowIndex);
+                                        setExplorerTabKey("level3");
+                                      }}
+                                    >
+                                      <div className="whitespace-nowrap font-medium text-slate-900 tabular-nums">
+                                        Row {row.rowIndex + 1}
+                                      </div>
+                                      <div className="min-w-0 truncate text-xs text-slate-500">{snippet}</div>
+                                    </div>
+                                  );
+                                })
+                            ) : zenodoIsZip ? (
+                              zenodoZipEntries
+                                .filter((entry) => matchesFilter(entry.name, level2Needle))
+                                .map((entry) => {
+                                  const selected = selectedZenodoEntry?.name === entry.name;
+                                  const displayName =
+                                    zenodoZipEntryPrefix &&
+                                    entry.name.startsWith(zenodoZipEntryPrefix) &&
+                                    entry.name.length > zenodoZipEntryPrefix.length
+                                      ? entry.name.slice(zenodoZipEntryPrefix.length)
+                                      : entry.name;
+                                  const label = entry.isDir ? `${displayName.replace(/\/+$/, "")}/` : displayName;
+                                  return (
+                                    <div
+                                      key={entry.name}
+                                      className={cn(
+                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
+                                        selected ? "bg-sky-50/60" : "hover:bg-black/[0.02]",
+                                      )}
+                                      onClick={() => {
+                                        selectZenodoEntry(entry.name);
+                                        setExplorerTabKey("level3");
+                                      }}
+                                    >
+                                      <div className="min-w-0">
+                                        <div className="truncate font-medium text-slate-900" title={entry.name}>
+                                          {label}
+                                        </div>
+                                      </div>
+                                      <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
+                                        {entry.isDir ? "" : formatBytes(entry.uncompressedSize)}
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                            ) : zenodoIsTar ? (
+                              zenodoTarEntries
+                                .filter((entry) => matchesFilter(entry.name, level2Needle))
+                                .map((entry) => {
+                                  const selected = selectedZenodoEntry?.name === entry.name;
+                                  const displayName =
+                                    zenodoTarEntryPrefix &&
+                                    entry.name.startsWith(zenodoTarEntryPrefix) &&
+                                    entry.name.length > zenodoTarEntryPrefix.length
+                                      ? entry.name.slice(zenodoTarEntryPrefix.length)
+                                      : entry.name;
+                                  const label = entry.isDir ? `${displayName.replace(/\/+$/, "")}/` : displayName;
+                                  return (
+                                    <div
+                                      key={entry.name}
+                                      className={cn(
+                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
+                                        selected ? "bg-sky-50/60" : "hover:bg-black/[0.02]",
+                                      )}
+                                      onClick={() => {
+                                        selectZenodoEntry(entry.name);
+                                        setExplorerTabKey("level3");
+                                      }}
+                                    >
+                                      <div className="min-w-0">
+                                        <div className="truncate font-medium text-slate-900" title={entry.name}>
+                                          {label}
+                                        </div>
+                                      </div>
+                                      <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
+                                        {entry.isDir ? "" : formatBytes(entry.size)}
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                            ) : selectedZenodoFile ? (
+                              <div className="grid min-w-0 grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] bg-sky-50/50 px-3 py-2 text-sm">
                                 <div className="min-w-0">
-                                  <div className="truncate font-semibold text-slate-900" title={selectedZenodoFile.key}>
-	                                    {selectedZenodoFile.key}
-	                                  </div>
-	                                </div>
-	                                <div className="whitespace-nowrap text-[11px] text-slate-600 tabular-nums">
-	                                  {formatBytes(selectedZenodoFile.size)}
-	                                </div>
-	                              </div>
-	                            ) : null}
+                                  <div className="truncate font-medium text-slate-900" title={selectedZenodoFile.key}>
+                                    {selectedZenodoFile.key}
+                                  </div>
+                                </div>
+                                <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
+                                  {formatBytes(selectedZenodoFile.size)}
+                                </div>
+                              </div>
+                            ) : null}
 
                             {zenodoIsZip && zenodoZipEntriesQuery.isPending ? (
                               <div className="p-4">
@@ -3125,92 +3069,150 @@ export default function InspectorPage() {
                               <EmptyState hint="No matches. Try a different filter." />
                             ) : null}
                             {zenodoIsZip && !zenodoZipEntries.length && !zenodoZipEntriesQuery.isPending ? (
-                              <EmptyState hint="No ZIP entries found (or unsupported ZIP format)." />
+                              <EmptyState hint="No ZIP entries found." />
                             ) : null}
                             {zenodoIsTar && !zenodoTarEntries.length && !zenodoTarEntriesQuery.isPending ? (
-                              <EmptyState hint="No TAR entries found (or unsupported TAR format)." />
+                              <EmptyState hint="No TAR entries found." />
                             ) : null}
-                            {!zenodoIsArchive && !selectedZenodoFile && !zenodoQuery.isPending ? (
+                            {zenodoIsCsv && !zenodoCsvRows.length && !zenodoPreviewQuery.isPending ? (
+                              <EmptyState hint="No CSV rows found." />
+                            ) : null}
+                            {zenodoIsCsv && zenodoPreviewQuery.isPending ? (
+                              <div className="p-4">
+                                <Skeleton className="h-10 w-full" />
+                              </div>
+                            ) : null}
+                            {zenodoIsCsv &&
+                            level2Needle &&
+                            !zenodoPreviewQuery.isPending &&
+                            zenodoCsvRows.length &&
+                            !zenodoCsvRows.some((row) => matchesFilter(`${row.rowIndex} ${row.raw}`, level2Needle)) ? (
+                              <EmptyState hint="No matches. Try a different filter." />
+                            ) : null}
+                            {!zenodoIsArchive && !zenodoIsCsv && !selectedZenodoFile && !zenodoQuery.isPending ? (
                               <EmptyState hint="Load a Zenodo record to list files." />
                             ) : null}
                           </ScrollArea>
 
-	                          {zenodoIsTar ? (
-	                            <div className="shrink-0 rounded-xl bg-white/40 px-2 py-2 ring-1 ring-black/[0.05]">
-	                              <div className="flex items-center gap-2">
-	                                <Button
-	                                  size="sm"
-	                                  variant="outline"
-	                                  disabled={!zenodoTarCanPrev || !isTauri()}
-	                                  onClick={() =>
-	                                    setZenodoEntriesOffset(Math.max(0, zenodoEntriesOffset - ZENODO_TAR_PAGE_SIZE))
-	                                  }
-	                                >
-	                                  <ChevronLeft className="mr-1 h-4 w-4" />
-	                                  Prev
-	                                </Button>
-	                                <Button
-	                                  size="sm"
-	                                  variant="outline"
-	                                  disabled={!zenodoTarCanNext || !isTauri()}
-	                                  onClick={() => setZenodoEntriesOffset(zenodoEntriesOffset + ZENODO_TAR_PAGE_SIZE)}
-	                                >
-	                                  Next
-	                                  <ChevronRight className="ml-1 h-4 w-4" />
-	                                </Button>
+                          {zenodoIsTar ? (
+                            <div className="shrink-0 rounded-xl bg-white/40 px-2 py-2 ring-1 ring-black/[0.04]">
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={!zenodoTarCanPrev || !isTauri()}
+                                  onClick={() =>
+                                    setZenodoEntriesOffset(Math.max(0, zenodoEntriesOffset - ZENODO_TAR_PAGE_SIZE))
+                                  }
+                                >
+                                  <ChevronLeft className="mr-1 h-4 w-4" />
+                                  Prev
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={!zenodoTarCanNext || !isTauri()}
+                                  onClick={() => setZenodoEntriesOffset(zenodoEntriesOffset + ZENODO_TAR_PAGE_SIZE)}
+                                >
+                                  Next
+                                  <ChevronRight className="ml-1 h-4 w-4" />
+                                </Button>
 
-	                                <div className="ml-auto flex items-center gap-2">
-	                                  <Badge variant="secondary" className="bg-slate-100/80">
-	                                    Offset {zenodoEntriesOffset}
-	                                  </Badge>
-	                                  {zenodoTarEntriesQuery.data?.partial ? (
-	                                    <Badge variant="secondary" className="bg-amber-100/80 text-amber-800">
-	                                      Partial
-	                                    </Badge>
-	                                  ) : null}
-	                                </div>
-	                              </div>
-	                            </div>
-	                          ) : null}
+                                <div className="ml-auto flex items-center gap-2">
+                                  <Badge variant="secondary" className="bg-slate-100/80">
+                                    Offset {zenodoEntriesOffset}
+                                  </Badge>
+                                  {zenodoTarEntriesQuery.data?.partial ? (
+                                    <Badge variant="secondary" className="bg-amber-100/80 text-amber-800">
+                                      Partial
+                                    </Badge>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
                       ),
-                      hint: zenodoIsZip
-                        ? "ZIP entries parsed via HTTP Range (central directory)."
-                        : zenodoIsTar
-                          ? "TAR entries streamed over HTTP (WebDataset-style)."
-                          : "Selected file.",
+                      hint: zenodoIsCsv ? "CSV rows." : zenodoIsZip ? "ZIP entries." : zenodoIsTar ? "TAR entries." : "Selected file.",
                     },
-	                  ]}
-	                />
-	              </motion.div>
-
-	              <motion.div variants={panelVariants} className="min-w-0 h-full min-h-0">
-	                <InspectorPanel
-	                  title="Inspector"
-	                  subtitle={zenodoInspectorSubtitle}
-	                  meta={zenodoPreviewMeta}
-	                  showMeta={false}
-	                  previewContent={renderZenodoPreview()}
-	                  logMessage={logMessage}
-	                  busy={busy}
-	                  errorMessage={errorMessage}
-	                  logDockOpen={logDockOpen}
-                  onToggleLogDock={() => setLogDockOpen((prev) => !prev)}
-                  onCopyLog={() => copyText(logMessage)}
-                  onClearLog={() => setStatusMessage(null)}
+                    {
+                      key: "level3",
+                      title: zenodoIsCsv ? "Fields" : "Details",
+                      icon: <Play className="h-4 w-4 text-cyan-600" />,
+                      count: zenodoIsCsv && selectedZenodoCsvRow ? zenodoCsvHeaders.length || undefined : undefined,
+                      isDisabled: zenodoIsCsv ? !selectedZenodoCsvRow : !selectedZenodoEntry && !selectedZenodoFile,
+                      content: zenodoIsCsv && selectedZenodoCsvRow ? (
+                        <div className="flex flex-1 min-h-0 flex-col gap-2">
+                          <ListFilterInput
+                            value={filterLevel3}
+                            onValueChange={setFilterLevel3}
+                            placeholder="Filter fields…"
+                            ariaLabel="Filter CSV fields"
+                          />
+                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+                            {zenodoCsvHeaders
+                              .map((header, idx) => ({
+                                header,
+                                value: selectedZenodoCsvRow.values[idx] ?? "",
+                                idx,
+                              }))
+                              .filter(({ header, value }) =>
+                                matchesFilter(`${header} ${value}`, level3Needle),
+                              )
+                              .map(({ header, value, idx }) => {
+                                const selected = zenodoCsvSelectedFieldIndex === idx;
+                                return (
+                                  <div
+                                    key={idx}
+                                    className={cn(
+                                      "grid min-w-0 cursor-pointer grid-cols-[auto_1fr] items-start gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
+                                      selected ? "bg-cyan-50/60" : "hover:bg-black/[0.02]",
+                                    )}
+                                    onClick={() => selectZenodoCsvField(idx)}
+                                  >
+                                    <div className="whitespace-nowrap font-medium text-slate-600">
+                                      {header || `[${idx}]`}
+                                    </div>
+                                    <div className="min-w-0 break-words text-slate-900">{value}</div>
+                                  </div>
+                                );
+                              })}
+                            {level3Needle &&
+                            zenodoCsvHeaders.length &&
+                            !zenodoCsvHeaders.some((header, idx) =>
+                              matchesFilter(`${header} ${selectedZenodoCsvRow.values[idx] ?? ""}`, level3Needle),
+                            ) ? (
+                              <EmptyState hint="No matches. Try a different filter." />
+                            ) : null}
+                          </ScrollArea>
+                        </div>
+                      ) : (
+                        <div className="flex flex-1 min-h-0 flex-col items-center justify-center text-center text-xs text-slate-500">
+                          <Sparkles className="h-5 w-5 text-slate-400 mb-2" />
+                          <div>Preview shown below</div>
+                        </div>
+                      ),
+                    },
+                  ]}
                 />
               </motion.div>
-            </>
           ) : isWdsMode ? (
-            <>
               <motion.div variants={panelVariants} className="min-w-0 h-full min-h-0">
-                <ExplorerPanel
+                <ThreeColumnExplorer
                   title="Explorer"
                   subtitle="Shards → Samples → Fields"
                   icon={<HardDrive className="h-4 w-4 text-emerald-600" />}
                   meta={wdsExplorerMeta}
                   tabKey={explorerTabKey}
                   onTabChange={setExplorerTabKey}
+                  previewContent={renderWdsPreview()}
+                  logMessage={logMessage}
+                  busy={busy}
+                  errorMessage={errorMessage}
+                  logDockOpen={logDockOpen}
+                  onToggleLogDock={() => setLogDockOpen((prev) => !prev)}
+                  onCopyLog={() => copyText(logMessage)}
+                  onClearLog={() => setStatusMessage(null)}
                   tabs={[
                     {
                       key: "level1",
@@ -3225,7 +3227,7 @@ export default function InspectorPage() {
                             placeholder="Filter shards…"
                             ariaLabel="Filter WebDataset shards"
                           />
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/55 ring-1 ring-black/[0.05]">
+                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {(() => {
                               const shards = wdsDirQuery.data?.shards ?? [];
                               const visible = shards.filter((shard) => matchesFilter(shard.filename, level1Needle));
@@ -3234,10 +3236,8 @@ export default function InspectorPage() {
                                   <div
                                     key={shard.filename}
                                     className={cn(
-                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.05] px-2 py-1.5 text-[13px] transition-colors",
-                                      selectedShard?.filename === shard.filename
-                                        ? "bg-emerald-50/60"
-                                        : "hover:bg-black/[0.03]",
+                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
+                                      selectedShard?.filename === shard.filename ? "bg-emerald-50/60" : "hover:bg-black/[0.02]",
                                     )}
                                     onClick={() => {
                                       setFilterLevel2("");
@@ -3247,11 +3247,11 @@ export default function InspectorPage() {
                                     }}
                                   >
                                     <div className="min-w-0">
-                                      <div className="truncate font-semibold text-slate-900" title={shard.filename}>
+                                      <div className="truncate font-medium text-slate-900" title={shard.filename}>
                                         {shard.filename}
                                       </div>
                                     </div>
-                                    <div className="whitespace-nowrap text-[11px] text-slate-600 tabular-nums">
+                                    <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
                                       {formatBytes(shard.bytes)}
                                     </div>
                                   </div>
@@ -3263,7 +3263,7 @@ export default function InspectorPage() {
                           </ScrollArea>
                         </div>
                       ),
-                      hint: "Pick a shard to list its samples.",
+                      hint: "Pick a shard.",
                     },
                     {
                       key: "level2",
@@ -3283,7 +3283,7 @@ export default function InspectorPage() {
                             placeholder="Filter samples…"
                             ariaLabel="Filter WebDataset samples"
                           />
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/55 ring-1 ring-black/[0.05]">
+                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {(() => {
                               const visible = wdsPageSamples.filter(
                                 (sample) =>
@@ -3295,10 +3295,8 @@ export default function InspectorPage() {
                                   <div
                                     key={`${sample.sampleIndex}:${sample.key}`}
                                     className={cn(
-                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.05] px-2 py-1.5 text-[13px] transition-colors",
-                                      selectedWdsSample?.sampleIndex === sample.sampleIndex
-                                        ? "bg-sky-50/60"
-                                        : "hover:bg-black/[0.03]",
+                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
+                                      selectedWdsSample?.sampleIndex === sample.sampleIndex ? "bg-sky-50/60" : "hover:bg-black/[0.02]",
                                     )}
                                     onClick={() => {
                                       setFilterLevel3("");
@@ -3307,10 +3305,10 @@ export default function InspectorPage() {
                                     }}
                                   >
                                     <div className="min-w-0">
-                                      <div className="truncate font-semibold text-slate-900">{sample.key}</div>
+                                      <div className="truncate font-medium text-slate-900">{sample.key}</div>
                                       <div className="text-xs text-slate-500">Sample {sample.sampleIndex}</div>
                                     </div>
-                                    <div className="flex items-center gap-2 whitespace-nowrap text-[11px] text-slate-600 tabular-nums">
+                                    <div className="flex items-center gap-2 whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
                                       <span>{sample.fields.length.toLocaleString()} files</span>
                                       <span className="text-slate-400">·</span>
                                       <span>{formatBytes(sample.totalBytes)}</span>
@@ -3320,15 +3318,9 @@ export default function InspectorPage() {
                               }
                               if (wdsSamplesQuery.isPending) return null;
                               if (!wdsPageSamples.length) {
-                                return (
-                                  <EmptyState
-                                    hint={
-                                      selectedShard ? "No samples found at this offset." : "Pick a shard to list its samples."
-                                    }
-                                  />
-                                );
+                                return <EmptyState hint={selectedShard ? "No samples at this offset." : "Pick a shard."} />;
                               }
-                              return <EmptyState hint="No matches. Try a different filter." />;
+                              return <EmptyState hint="No matches." />;
                             })()}
                             {wdsSamplesQuery.isPending ? (
                               <div className="p-4">
@@ -3337,42 +3329,41 @@ export default function InspectorPage() {
                             ) : null}
                           </ScrollArea>
 
-	                          <div className="shrink-0 rounded-xl bg-white/40 px-2 py-2 ring-1 ring-black/[0.05]">
-	                            <div className="flex items-center gap-2">
-	                              <Button
-	                                size="sm"
-	                                variant="outline"
-	                                disabled={!wdsCanPrev}
-	                                onClick={() => setWdsOffset(Math.max(0, wdsOffset - WDS_PAGE_SIZE))}
-	                              >
-	                                <ChevronLeft className="mr-1 h-4 w-4" />
-	                                Prev
-	                              </Button>
-	                              <Button
-	                                size="sm"
-	                                variant="outline"
-	                                disabled={!wdsCanNext}
-	                                onClick={() => setWdsOffset(wdsOffset + WDS_PAGE_SIZE)}
-	                              >
-	                                Next
-	                                <ChevronRight className="ml-1 h-4 w-4" />
-	                              </Button>
-
-	                              <div className="ml-auto flex items-center gap-2">
-	                                <Badge variant="secondary" className="bg-slate-100/80">
-	                                  Offset {wdsOffset}
-	                                </Badge>
-	                                {wdsSamplesQuery.data?.partial ? (
-	                                  <Badge variant="secondary" className="bg-amber-100/80 text-amber-800">
-	                                    Partial
-	                                  </Badge>
-	                                ) : null}
-	                              </div>
-	                            </div>
-	                          </div>
+                          <div className="shrink-0 rounded-xl bg-white/40 px-2 py-2 ring-1 ring-black/[0.04]">
+                            <div className="flex items-center gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={!wdsCanPrev}
+                                onClick={() => setWdsOffset(Math.max(0, wdsOffset - WDS_PAGE_SIZE))}
+                              >
+                                <ChevronLeft className="mr-1 h-4 w-4" />
+                                Prev
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={!wdsCanNext}
+                                onClick={() => setWdsOffset(wdsOffset + WDS_PAGE_SIZE)}
+                              >
+                                Next
+                                <ChevronRight className="ml-1 h-4 w-4" />
+                              </Button>
+                              <div className="ml-auto flex items-center gap-2">
+                                <Badge variant="secondary" className="bg-slate-100/80">
+                                  Offset {wdsOffset}
+                                </Badge>
+                                {wdsSamplesQuery.data?.partial ? (
+                                  <Badge variant="secondary" className="bg-amber-100/80 text-amber-800">
+                                    Partial
+                                  </Badge>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
                         </div>
                       ),
-                      hint: "Pick a sample to inspect its fields.",
+                      hint: "Pick a sample.",
                     },
                     {
                       key: "level3",
@@ -3390,7 +3381,7 @@ export default function InspectorPage() {
                                 placeholder="Filter fields…"
                                 ariaLabel="Filter WebDataset fields"
                               />
-                              <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/55 ring-1 ring-black/[0.05]">
+                              <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                                 {(() => {
                                   const visible = selectedWdsSample.fields
                                     .map((field, index) => ({ field, index }))
@@ -3403,22 +3394,20 @@ export default function InspectorPage() {
                                         <div
                                           key={`${field.memberPath}:${index}`}
                                           className={cn(
-                                            "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.05] px-2 py-1.5 text-[13px] transition-colors",
-                                            selected ? "bg-cyan-50/60" : "hover:bg-black/[0.03]",
+                                            "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
+                                            selected ? "bg-cyan-50/60" : "hover:bg-black/[0.02]",
                                           )}
-                                          onClick={() => {
-                                            selectField(index);
-                                          }}
+                                          onClick={() => selectField(index)}
                                           onDoubleClick={() => wdsOpenFieldMutation.mutate()}
                                         >
                                           <div className="min-w-0">
-                                            <div className="truncate font-semibold text-slate-900">
+                                            <div className="truncate font-medium text-slate-900">
                                               {field.name} · {field.memberPath}
                                             </div>
                                           </div>
-                                          <div className="flex items-center gap-2 whitespace-nowrap text-[11px] text-slate-600 tabular-nums">
+                                          <div className="flex items-center gap-2 whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
                                             {ext ? (
-                                              <Badge variant="secondary" className="bg-slate-100/80 text-slate-600">
+                                              <Badge variant="secondary" className="bg-slate-100/80 text-slate-500">
                                                 .{ext}
                                               </Badge>
                                             ) : null}
@@ -3428,9 +3417,7 @@ export default function InspectorPage() {
                                       );
                                     });
                                   }
-                                  return (
-                                    <EmptyState hint={level3Needle ? "No matches. Try a different filter." : "Select a field."} />
-                                  );
+                                  return <EmptyState hint={level3Needle ? "No matches." : "Select a field."} />;
                                 })()}
                               </ScrollArea>
                             </>
@@ -3439,19 +3426,20 @@ export default function InspectorPage() {
                           )}
                         </div>
                       ),
-                      hint: "Pick a field to preview in the inspector.",
                     },
                   ]}
                 />
               </motion.div>
-
+          ) : (
               <motion.div variants={panelVariants} className="min-w-0 h-full min-h-0">
-                <InspectorPanel
-                  title="Inspector"
-                  subtitle={wdsInspectorSubtitle}
-                  meta={wdsPreviewMeta}
-                  showMeta={false}
-                  previewContent={renderWdsPreview()}
+                <ThreeColumnExplorer
+                  title="Explorer"
+                  subtitle={isMdsMode ? "Shards → Samples → Fields" : "Shards → Items → Fields"}
+                  icon={<HardDrive className="h-4 w-4 text-emerald-600" />}
+                  meta={localExplorerMeta}
+                  tabKey={explorerTabKey}
+                  onTabChange={setExplorerTabKey}
+                  previewContent={renderLocalPreview()}
                   logMessage={logMessage}
                   busy={busy}
                   errorMessage={errorMessage}
@@ -3459,19 +3447,6 @@ export default function InspectorPage() {
                   onToggleLogDock={() => setLogDockOpen((prev) => !prev)}
                   onCopyLog={() => copyText(logMessage)}
                   onClearLog={() => setStatusMessage(null)}
-                />
-              </motion.div>
-            </>
-          ) : (
-            <>
-              <motion.div variants={panelVariants} className="min-w-0 h-full min-h-0">
-                <ExplorerPanel
-                  title="Explorer"
-                  subtitle={isMdsMode ? "Shards → Samples → Fields" : "Shards → Items → Fields"}
-                  icon={<HardDrive className="h-4 w-4 text-emerald-600" />}
-                  meta={localExplorerMeta}
-                  tabKey={explorerTabKey}
-                  onTabChange={setExplorerTabKey}
                   tabs={[
                     {
                       key: "level1",
@@ -3486,7 +3461,7 @@ export default function InspectorPage() {
                             placeholder="Filter shards…"
                             ariaLabel="Filter local shards"
                           />
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/55 ring-1 ring-black/[0.05]">
+                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {(() => {
                               const chunks = indexQuery.data?.chunks ?? [];
                               const visible = chunks.filter((chunk) => matchesFilter(chunk.filename, level1Needle));
@@ -3495,10 +3470,10 @@ export default function InspectorPage() {
                                   <div
                                     key={chunk.filename}
                                     className={cn(
-                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.05] px-2 py-1.5 text-[13px] transition-colors",
+                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
                                       selectedChunk?.filename === chunk.filename
                                         ? "bg-emerald-50/60"
-                                        : "hover:bg-black/[0.03]",
+                                        : "hover:bg-black/[0.02]",
                                     )}
                                     onClick={() => {
                                       setFilterLevel2("");
@@ -3508,11 +3483,11 @@ export default function InspectorPage() {
                                     }}
                                   >
                                     <div className="min-w-0">
-                                      <div className="truncate font-semibold text-slate-900" title={chunk.filename}>
+                                      <div className="truncate font-medium text-slate-900" title={chunk.filename}>
                                         {chunk.filename}
                                       </div>
                                     </div>
-                                    <div className="flex items-center gap-2 whitespace-nowrap text-[11px] text-slate-600 tabular-nums">
+                                    <div className="flex items-center gap-2 whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
                                       <span>
                                         {chunk.chunkSize.toLocaleString()} {isMdsMode ? "samples" : "items"}
                                       </span>
@@ -3528,7 +3503,7 @@ export default function InspectorPage() {
                           </ScrollArea>
                         </div>
                       ),
-                      hint: "Pick a shard to list its samples.",
+                      hint: "Pick a shard.",
                     },
                     {
                       key: "level2",
@@ -3544,7 +3519,7 @@ export default function InspectorPage() {
                             placeholder={isMdsMode ? "Filter samples…" : "Filter items…"}
                             ariaLabel={isMdsMode ? "Filter samples" : "Filter items"}
                           />
-                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/55 ring-1 ring-black/[0.05]">
+                          <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                             {(() => {
                               const items = itemsQuery.data ?? [];
                               const visible = items.filter((item) =>
@@ -3555,10 +3530,10 @@ export default function InspectorPage() {
                                   <div
                                     key={item.itemIndex}
                                     className={cn(
-                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.05] px-2 py-1.5 text-[13px] transition-colors",
+                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
                                       selectedItem?.itemIndex === item.itemIndex
                                         ? "bg-sky-50/60"
-                                        : "hover:bg-black/[0.03]",
+                                        : "hover:bg-black/[0.02]",
                                     )}
                                     onClick={() => {
                                       setFilterLevel3("");
@@ -3566,10 +3541,10 @@ export default function InspectorPage() {
                                       setExplorerTabKey("level3");
                                     }}
                                   >
-                                    <div className="font-semibold text-slate-900">
+                                    <div className="font-medium text-slate-900">
                                       {isMdsMode ? "Sample" : "Item"} {item.itemIndex}
                                     </div>
-                                    <div className="flex items-center gap-2 whitespace-nowrap text-[11px] text-slate-600 tabular-nums">
+                                    <div className="flex items-center gap-2 whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
                                       <span>
                                         {item.fields.length.toLocaleString()} {isMdsMode ? "fields" : "leaves"}
                                       </span>
@@ -3585,7 +3560,7 @@ export default function InspectorPage() {
                           </ScrollArea>
                         </div>
                       ),
-                      hint: isMdsMode ? "Pick a sample to inspect its fields." : "Pick an item to inspect its leaves.",
+                      hint: isMdsMode ? "Pick a sample." : "Pick an item.",
                     },
                     {
                       key: "level3",
@@ -3602,7 +3577,7 @@ export default function InspectorPage() {
                             ariaLabel="Filter local fields"
                           />
                           {selectedItem ? (
-                            <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/55 ring-1 ring-black/[0.05]">
+                            <ScrollArea className="flex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                               {(() => {
                                 const fields = selectedItem.fields ?? [];
                                 const visible = fields.filter((field) => {
@@ -3616,26 +3591,24 @@ export default function InspectorPage() {
                                       <div
                                         key={field.fieldIndex}
                                         className={cn(
-                                          "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.05] px-2 py-1.5 text-[13px] transition-colors",
+                                          "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-colors",
                                           selectedField?.fieldIndex === field.fieldIndex
                                             ? "bg-cyan-50/60"
-                                            : "hover:bg-black/[0.03]",
+                                            : "hover:bg-black/[0.02]",
                                         )}
-                                        onClick={() => {
-                                          selectField(field.fieldIndex);
-                                        }}
+                                        onClick={() => selectField(field.fieldIndex)}
                                         onDoubleClick={() => openFieldMutation.mutate()}
                                       >
                                         <div className="flex min-w-0 items-center gap-2">
-                                          <div className="shrink-0 font-semibold text-slate-900">#{field.fieldIndex}</div>
+                                          <div className="shrink-0 font-medium text-slate-900">#{field.fieldIndex}</div>
                                           <Badge
                                             variant="secondary"
-                                            className="min-w-0 max-w-full bg-slate-100/80 text-slate-600"
+                                            className="min-w-0 max-w-full bg-slate-100/80 text-slate-500"
                                           >
                                             <span className="truncate">{format}</span>
                                           </Badge>
                                         </div>
-                                        <div className="whitespace-nowrap text-[11px] text-slate-600 tabular-nums">
+                                        <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
                                           {formatBytes(field.size)}
                                         </div>
                                       </div>
@@ -3651,29 +3624,10 @@ export default function InspectorPage() {
                           )}
                         </div>
                       ),
-                      hint: "Pick a field to preview in the inspector.",
                     },
                   ]}
                 />
               </motion.div>
-
-              <motion.div variants={panelVariants} className="min-w-0 h-full min-h-0">
-                <InspectorPanel
-                  title="Inspector"
-                  subtitle={localInspectorSubtitle}
-                  meta={localPreviewMeta}
-                  showMeta={false}
-                  previewContent={renderLocalPreview()}
-                  logMessage={logMessage}
-                  busy={busy}
-                  errorMessage={errorMessage}
-                  logDockOpen={logDockOpen}
-                  onToggleLogDock={() => setLogDockOpen((prev) => !prev)}
-                  onCopyLog={() => copyText(logMessage)}
-                  onClearLog={() => setStatusMessage(null)}
-                />
-              </motion.div>
-            </>
           )}
         </motion.div>
 
@@ -3684,250 +3638,7 @@ export default function InspectorPage() {
 
 type ExplorerTabKey = "level1" | "level2" | "level3";
 
-function ExplorerPanel({
-  title,
-  subtitle,
-  icon,
-  meta,
-  tabKey,
-  onTabChange,
-  tabs,
-}: {
-  title: string;
-  subtitle?: string | null;
-  icon: ReactNode;
-  meta: string[];
-  tabKey: ExplorerTabKey;
-  onTabChange: (next: ExplorerTabKey) => void;
-  tabs: Array<{
-    key: ExplorerTabKey;
-    title: string;
-    icon: ReactNode;
-    count?: string | number;
-    isDisabled?: boolean;
-    content: ReactNode;
-    hint?: string;
-  }>;
-}) {
-	  const metaLine = (meta.length ? meta : ["—"]).join(" › ");
-	  const desktopGridTemplate =
-	    tabs.length === 1
-	      ? "grid-cols-1"
-	      : tabs.length === 2
-	        ? "grid-cols-2"
-	        : "grid-cols-3";
-	  return (
-	    <div className="min-w-0 flex h-full flex-col overflow-hidden rounded-2xl bg-white/55 shadow-[var(--shadow-soft)] backdrop-blur ring-1 ring-black/5">
-      <div className="flex items-center gap-2 px-3 py-2 text-[11px] text-slate-600">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="text-slate-700">{icon}</span>
-          <span className="font-semibold text-slate-900">{title}</span>
-          {subtitle ? <span className="hidden sm:inline text-slate-500">{subtitle}</span> : null}
-        </div>
-        <div className="ml-auto max-w-[55%] truncate text-slate-500" title={metaLine}>
-          {metaLine}
-        </div>
-      </div>
-
-	      <div className={cn("hidden lg:grid flex-1 min-h-0 divide-x divide-black/5", desktopGridTemplate)}>
-	        {tabs.map((tab) => (
-	          <div
-	            key={tab.key}
-	            className={cn("flex min-w-0 min-h-0 flex-col", tab.isDisabled ? "opacity-50" : "")}
-	          >
-	            <div className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700">
-	              <span className="text-slate-600">{tab.icon}</span>
-	              <span className="truncate">{tab.title}</span>
-              {tab.count !== undefined ? (
-                <span className="ml-auto text-[11px] font-semibold text-slate-500">{tab.count}</span>
-	              ) : null}
-	            </div>
-	            <div className="flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden px-2 pb-2">
-	              <div className="flex h-full min-h-0 flex-col gap-2">
-	                {tab.content}
-	                {tab.hint ? (
-	                  <div className="flex items-center gap-2 px-1 text-[11px] text-slate-500">
-                    <ArrowRight className="h-3.5 w-3.5 text-slate-400" />
-                    {tab.hint}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="flex flex-1 min-h-0 flex-col overflow-hidden px-3 pb-3 lg:hidden">
-        <Tabs
-          aria-label="Explorer tabs"
-          variant="solid"
-          fullWidth
-          selectedKey={tabKey}
-          onSelectionChange={(key) => {
-            const next = String(key);
-            if (next === "level1" || next === "level2" || next === "level3") {
-              onTabChange(next);
-            }
-          }}
-          classNames={{
-            base: "shrink-0",
-            tabList: "shrink-0 rounded-full bg-black/[0.04] p-1 ring-1 ring-black/[0.04]",
-            tab: "h-9 px-3 text-xs font-semibold text-slate-600 data-[selected=true]:text-slate-900",
-            tabContent: "gap-2",
-            cursor: "rounded-full bg-white/80 shadow-sm",
-            panel: "flex-1 min-h-0 overflow-hidden pt-2",
-          }}
-        >
-          {tabs.map((tab) => (
-            <Tab
-              key={tab.key}
-              isDisabled={tab.isDisabled}
-              title={
-                <div className="flex items-center gap-2">
-                  {tab.icon}
-                  <span>{tab.title}</span>
-                  {tab.count !== undefined ? (
-                    <Badge variant="secondary" className="bg-white/75 text-slate-600">
-                      {tab.count}
-                    </Badge>
-                  ) : null}
-                </div>
-              }
-            >
-              <div className="flex h-full min-h-0 flex-col gap-2">
-                {tab.content}
-                {tab.hint ? (
-                  <div className="flex items-center gap-2 text-xs text-slate-500">
-                    <ArrowRight className="h-3.5 w-3.5 text-slate-400" />
-                    {tab.hint}
-                  </div>
-                ) : null}
-              </div>
-            </Tab>
-          ))}
-        </Tabs>
-      </div>
-    </div>
-  );
-}
-
-function InspectorPanel({
-  title,
-  subtitle,
-  meta,
-  showMeta = true,
-  previewContent,
-  logMessage,
-  busy,
-  errorMessage,
-  logDockOpen,
-  onToggleLogDock,
-  onCopyLog,
-  onClearLog,
-}: {
-  title: string;
-  subtitle?: string | null;
-  meta: string[];
-  showMeta?: boolean;
-  previewContent: ReactNode;
-  logMessage: string;
-  busy: boolean;
-  errorMessage: string | null;
-  logDockOpen: boolean;
-  onToggleLogDock: () => void;
-  onCopyLog: () => void;
-  onClearLog: () => void;
-}) {
-  const metaLine = (meta.length ? meta : ["no selection"]).join(" › ");
-  const statusLabel = busy ? "Working" : errorMessage ? "Error" : "Ready";
-  const statusBadgeClass = errorMessage
-    ? "bg-rose-100/80 text-rose-700"
-    : busy
-      ? "bg-amber-100/80 text-amber-800"
-      : "bg-emerald-100/80 text-emerald-800";
-  const logSummary = useMemo(() => {
-    const trimmed = logMessage.trim();
-    if (!trimmed) return "—";
-    const lines = trimmed.split("\n").map((l) => l.trim()).filter(Boolean);
-    return lines[0] ?? trimmed;
-  }, [logMessage]);
-  return (
-    <div className="min-w-0 flex h-full flex-col overflow-hidden rounded-2xl bg-white/55 shadow-[var(--shadow-soft)] backdrop-blur ring-1 ring-black/5">
-      <div className="flex items-center gap-2 px-3 py-2 text-[11px] text-slate-600">
-        <div className="flex min-w-0 items-center gap-2">
-          <Sparkles className="h-4 w-4 text-emerald-600" />
-          <span className="font-semibold text-slate-900">{title}</span>
-          {subtitle ? <span className="hidden sm:inline text-slate-500">{subtitle}</span> : null}
-        </div>
-        {showMeta ? (
-          <div className="ml-auto max-w-[60%] truncate text-slate-500" title={metaLine}>
-            {metaLine}
-          </div>
-        ) : null}
-      </div>
-
-      <div className="flex flex-1 min-h-0 flex-col overflow-hidden px-3 pb-3">
-        <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
-          {previewContent}
-        </div>
-
-        <div className="mt-2 shrink-0 overflow-hidden rounded-xl bg-white/40 ring-1 ring-black/[0.05]">
-          <button
-            type="button"
-            className={cn(
-              "flex w-full items-center gap-3 px-3 py-2 text-left transition",
-              logDockOpen ? "bg-white/35" : "hover:bg-white/55",
-            )}
-            onClick={onToggleLogDock}
-          >
-            <div className="flex items-center gap-2">
-              <Terminal className="h-4 w-4 text-slate-600" />
-              <span className="text-xs font-semibold text-slate-700">Log</span>
-              <Badge variant="secondary" className={cn("text-[11px] font-semibold", statusBadgeClass)}>
-                {statusLabel}
-              </Badge>
-            </div>
-            <div className="ml-auto flex min-w-0 items-center gap-2 text-xs text-slate-500">
-              <span className="truncate">{logSummary}</span>
-              <ChevronRight className={cn("h-4 w-4 shrink-0 text-slate-400 transition", logDockOpen ? "rotate-90" : "")} />
-            </div>
-          </button>
-
-          {logDockOpen ? (
-            <div className="space-y-3 border-t border-black/[0.06] bg-white/35 px-3 py-2">
-              <ScrollArea
-                className={cn(
-                  "max-h-56 rounded-lg px-3 py-2 text-xs select-text cursor-text",
-                  errorMessage ? "bg-rose-50/70 text-rose-700" : "bg-white/70 text-slate-700",
-                )}
-              >
-                <pre className="whitespace-pre-wrap break-words font-mono">{logMessage}</pre>
-              </ScrollArea>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <Button size="sm" variant="ghost" onClick={onCopyLog}>
-                    <Copy className="mr-1 h-3.5 w-3.5" />
-                    Copy
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={onClearLog}>
-                    Clear
-                  </Button>
-                </div>
-                <div className="flex items-center gap-2 text-xs text-slate-500">
-                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600" /> : null}
-                  {errorMessage ? <TriangleAlert className="h-3.5 w-3.5 text-rose-500" /> : null}
-                  <span className="whitespace-nowrap">{busy ? "Working" : errorMessage ? "Resolve and retry" : "Idle"}</span>
-                </div>
-              </div>
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </div>
-  );
-	}
-
-	function MediaPreviewPanel({
+function MediaPreviewPanel({
 	  meta,
 	  onOpen,
 	  openDisabled,
@@ -4424,6 +4135,241 @@ function EmptyState({ hint }: { hint: string }) {
     <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
       <TriangleAlert className="h-4 w-4 text-slate-400" />
       <div className="max-w-[520px] leading-relaxed">{hint}</div>
+    </div>
+  );
+}
+
+/** Apple-style three-column explorer with preview integrated in the third column */
+function ThreeColumnExplorer({
+  title,
+  subtitle,
+  icon,
+  meta,
+  tabKey,
+  onTabChange,
+  tabs,
+  previewContent,
+  logMessage,
+  busy,
+  errorMessage,
+  logDockOpen,
+  onToggleLogDock,
+  onCopyLog,
+  onClearLog,
+}: {
+  title: string;
+  subtitle?: string | null;
+  icon: ReactNode;
+  meta: string[];
+  tabKey: ExplorerTabKey;
+  onTabChange: (next: ExplorerTabKey) => void;
+  tabs: Array<{
+    key: ExplorerTabKey;
+    title: string;
+    icon: ReactNode;
+    count?: string | number;
+    isDisabled?: boolean;
+    content: ReactNode;
+    hint?: string;
+  }>;
+  previewContent: ReactNode;
+  logMessage: string;
+  busy: boolean;
+  errorMessage: string | null;
+  logDockOpen: boolean;
+  onToggleLogDock: () => void;
+  onCopyLog: () => void;
+  onClearLog: () => void;
+}) {
+  const statusLabel = busy ? "Working" : errorMessage ? "Error" : "Ready";
+  const statusBadgeClass = errorMessage
+    ? "bg-rose-100/80 text-rose-700"
+    : busy
+      ? "bg-amber-100/80 text-amber-800"
+      : "bg-emerald-100/80 text-emerald-800";
+  const logSummary = useMemo(() => {
+    const trimmed = logMessage.trim();
+    if (!trimmed) return "—";
+    const lines = trimmed.split("\n").map((l) => l.trim()).filter(Boolean);
+    return lines[0] ?? trimmed;
+  }, [logMessage]);
+
+  return (
+    <div className="min-w-0 flex h-full flex-col overflow-hidden rounded-2xl bg-white/80 shadow-sm backdrop-blur-xl ring-1 ring-black/[0.08]">
+      {/* Desktop: Three columns - no header bar */}
+      <div className="hidden lg:grid flex-1 min-h-0 grid-cols-3">
+        {tabs.map((tab, idx) => {
+          const isLastColumn = idx === tabs.length - 1;
+          return (
+            <div
+              key={tab.key}
+              className={cn(
+                "flex min-w-0 min-h-0 flex-col",
+                idx < tabs.length - 1 ? "border-r border-black/[0.06]" : "",
+                tab.isDisabled ? "opacity-50 pointer-events-none" : "",
+              )}
+            >
+              {/* Column header */}
+              <div className="flex items-center gap-2 border-b border-black/[0.06] bg-slate-50/50 px-3 py-2">
+                <span className="text-slate-500">{tab.icon}</span>
+                <span className="text-[12px] font-semibold text-slate-700">{tab.title}</span>
+                {tab.count !== undefined ? (
+                  <span className="ml-auto text-[11px] font-medium text-slate-500 tabular-nums">{tab.count}</span>
+                ) : null}
+              </div>
+
+              {/* Column content */}
+              {isLastColumn ? (
+                <div className="flex flex-1 min-h-0 flex-col">
+                  {/* Fields list - flexible height */}
+                  <div className="flex flex-col min-h-0 flex-1 overflow-hidden">
+                    <div className="flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden px-2 py-1.5">
+                      <div className="flex h-full min-h-0 flex-col gap-1.5">
+                        {tab.content}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Preview section - auto height with max */}
+                  <div className="shrink-0 max-h-[40%] flex flex-col border-t border-black/[0.06]">
+                    <div className="flex items-center gap-2 border-b border-black/[0.06] bg-slate-50/50 px-3 py-1.5">
+                      <Sparkles className="h-3.5 w-3.5 text-slate-400" />
+                      <span className="text-[11px] font-semibold text-slate-600">Preview</span>
+                    </div>
+                    <div className="flex flex-1 min-h-0 flex-col overflow-auto px-2 py-1.5">
+                      {previewContent}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden px-2 py-1.5">
+                  <div className="flex h-full min-h-0 flex-col gap-1.5">
+                    {tab.content}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Mobile: Tabbed interface */}
+      <div className="flex flex-1 min-h-0 flex-col overflow-hidden px-3 pb-3 lg:hidden">
+        <Tabs
+          aria-label="Explorer tabs"
+          variant="solid"
+          fullWidth
+          selectedKey={tabKey}
+          onSelectionChange={(key) => {
+            const next = String(key);
+            if (next === "level1" || next === "level2" || next === "level3") {
+              onTabChange(next);
+            }
+          }}
+          classNames={{
+            base: "shrink-0",
+            tabList: "shrink-0 rounded-full bg-black/[0.04] p-1 ring-1 ring-black/[0.04]",
+            tab: "h-9 px-3 text-xs font-semibold text-slate-600 data-[selected=true]:text-slate-900",
+            tabContent: "gap-2",
+            cursor: "rounded-full bg-white/90 shadow-sm",
+            panel: "flex-1 min-h-0 overflow-hidden pt-2",
+          }}
+        >
+          {tabs.map((tab) => (
+            <Tab
+              key={tab.key}
+              isDisabled={tab.isDisabled}
+              title={
+                <div className="flex items-center gap-2">
+                  {tab.icon}
+                  <span>{tab.title}</span>
+                  {tab.count !== undefined ? (
+                    <Badge variant="secondary" className="bg-white/75 text-slate-600">
+                      {tab.count}
+                    </Badge>
+                  ) : null}
+                </div>
+              }
+            >
+              <div className="flex h-full min-h-0 flex-col gap-2">
+                {tab.content}
+                {tab.hint ? (
+                  <div className="flex items-center gap-2 text-xs text-slate-500">
+                    <ArrowRight className="h-3.5 w-3.5 text-slate-400" />
+                    {tab.hint}
+                  </div>
+                ) : null}
+              </div>
+            </Tab>
+          ))}
+        </Tabs>
+
+        {/* Mobile: Preview section below tabs */}
+        {tabKey === "level3" ? (
+          <div className="mt-3 flex-1 min-h-0 flex flex-col overflow-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+            <div className="flex items-center gap-2 border-b border-black/[0.04] px-3 py-2">
+              <Sparkles className="h-4 w-4 text-slate-500" />
+              <span className="text-[12px] font-medium text-slate-700">Preview</span>
+            </div>
+            <div className="flex flex-1 min-h-0 flex-col overflow-hidden p-2">
+              {previewContent}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      {/* Log dock - fixed at bottom */}
+      <div className="shrink-0 border-t border-black/[0.04] bg-white/40">
+        <button
+          type="button"
+          className={cn(
+            "flex w-full items-center gap-3 px-4 py-2.5 text-left transition",
+            logDockOpen ? "bg-white/50" : "hover:bg-white/60",
+          )}
+          onClick={onToggleLogDock}
+        >
+          <div className="flex items-center gap-2">
+            <Terminal className="h-4 w-4 text-slate-500" />
+            <span className="text-[12px] font-medium text-slate-700">Log</span>
+            <Badge variant="secondary" className={cn("text-[10px] font-semibold", statusBadgeClass)}>
+              {statusLabel}
+            </Badge>
+          </div>
+          <div className="ml-auto flex min-w-0 items-center gap-2 text-[11px] text-slate-500">
+            <span className="truncate">{logSummary}</span>
+            <ChevronRight className={cn("h-4 w-4 shrink-0 text-slate-400 transition", logDockOpen ? "rotate-90" : "")} />
+          </div>
+        </button>
+
+        {logDockOpen ? (
+          <div className="space-y-3 border-t border-black/[0.04] bg-white/50 px-4 py-3">
+            <ScrollArea
+              className={cn(
+                "max-h-48 rounded-lg px-3 py-2 text-xs select-text cursor-text",
+                errorMessage ? "bg-rose-50/70 text-rose-700" : "bg-slate-50/70 text-slate-700",
+              )}
+            >
+              <pre className="whitespace-pre-wrap break-words font-mono">{logMessage}</pre>
+            </ScrollArea>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="ghost" onClick={onCopyLog}>
+                  <Copy className="mr-1 h-3.5 w-3.5" />
+                  Copy
+                </Button>
+                <Button size="sm" variant="ghost" onClick={onClearLog}>
+                  Clear
+                </Button>
+              </div>
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600" /> : null}
+                {errorMessage ? <TriangleAlert className="h-3.5 w-3.5 text-rose-500" /> : null}
+                <span className="whitespace-nowrap">{busy ? "Working" : errorMessage ? "Resolve and retry" : "Idle"}</span>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

@@ -26,6 +26,8 @@ type ViewerState = {
   zenodoSelectedFileKey: string | null;
   zenodoSelectedEntryName: string | null;
   zenodoEntriesOffset: number;
+  zenodoCsvSelectedRowIndex: number | null;
+  zenodoCsvSelectedFieldIndex: number | null;
 
   wdsOffset: number;
 
@@ -50,6 +52,8 @@ type ViewerState = {
   selectZenodoFile: (key: string | null) => void;
   selectZenodoEntry: (name: string | null) => void;
   setZenodoEntriesOffset: (offset: number) => void;
+  selectZenodoCsvRow: (rowIndex: number | null) => void;
+  selectZenodoCsvField: (fieldIndex: number | null) => void;
 
   setWdsOffset: (offset: number) => void;
 
@@ -75,6 +79,8 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   zenodoSelectedFileKey: null,
   zenodoSelectedEntryName: null,
   zenodoEntriesOffset: 0,
+  zenodoCsvSelectedRowIndex: null,
+  zenodoCsvSelectedFieldIndex: null,
 
   wdsOffset: 0,
 
@@ -221,9 +227,11 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   selectHfRow: (rowIndex) => set({ hfSelectedRowIndex: rowIndex }),
   selectHfField: (fieldName) => set({ hfSelectedFieldName: fieldName }),
 
-  selectZenodoFile: (key) => set({ zenodoSelectedFileKey: key, zenodoSelectedEntryName: null, zenodoEntriesOffset: 0 }),
+  selectZenodoFile: (key) => set({ zenodoSelectedFileKey: key, zenodoSelectedEntryName: null, zenodoEntriesOffset: 0, zenodoCsvSelectedRowIndex: null, zenodoCsvSelectedFieldIndex: null }),
   selectZenodoEntry: (name) => set({ zenodoSelectedEntryName: name }),
   setZenodoEntriesOffset: (offset) => set({ zenodoEntriesOffset: Math.max(0, offset | 0) }),
+  selectZenodoCsvRow: (rowIndex) => set({ zenodoCsvSelectedRowIndex: rowIndex, zenodoCsvSelectedFieldIndex: null }),
+  selectZenodoCsvField: (fieldIndex) => set({ zenodoCsvSelectedFieldIndex: fieldIndex }),
 
   setWdsOffset: (offset) => set({ wdsOffset: Math.max(0, offset | 0) }),
 
@@ -242,6 +250,8 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       zenodoSelectedFileKey: null,
       zenodoSelectedEntryName: null,
       zenodoEntriesOffset: 0,
+      zenodoCsvSelectedRowIndex: null,
+      zenodoCsvSelectedFieldIndex: null,
       wdsOffset: 0,
     }),
 }));
