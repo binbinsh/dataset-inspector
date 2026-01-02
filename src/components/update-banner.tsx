@@ -2,10 +2,19 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { AnimatePresence, motion } from "framer-motion";
-import { Button, Chip, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Progress } from "@heroui/react";
 import { RefreshCw, TriangleAlert, X } from "lucide-react";
 
 import { checkAppUpdate, downloadAndInstallAppUpdate, isTauri, relaunchApp } from "@/lib/tauri-api";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogFooter,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 type DownloadState =
   | { state: "idle" }
@@ -138,7 +147,7 @@ export default function UpdateBanner() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 10 }}
             transition={{ duration: 0.2 }}
-            className="fixed bottom-6 right-6 z-50 flex max-w-sm flex-col gap-3 rounded-2xl border border-white/70 bg-white/80 p-4 shadow-[var(--shadow-soft)] backdrop-blur"
+            className="fixed bottom-6 right-6 z-50 flex max-w-sm flex-col gap-3 rounded-xl border border-slate-200 bg-white/95 p-4 shadow-lg backdrop-blur"
           >
             <div className="flex items-start justify-between gap-2">
               <div>
@@ -147,15 +156,15 @@ export default function UpdateBanner() {
                   {update?.currentVersion} → {update?.version}
                 </div>
               </div>
-              <Button isIconOnly size="sm" variant="light" onClick={() => setDismissed(true)}>
+              <Button variant="ghost" size="icon" onClick={() => setDismissed(true)}>
                 <X className="h-4 w-4" />
               </Button>
             </div>
             <div className="flex items-center gap-2">
-              <Button size="sm" variant="bordered" onClick={openAndRunManualCheck}>
+              <Button size="sm" variant="outline" onClick={openAndRunManualCheck}>
                 Review update
               </Button>
-              <Button size="sm" variant="light" onClick={() => setDismissed(true)}>
+              <Button size="sm" variant="ghost" onClick={() => setDismissed(true)}>
                 Later
               </Button>
             </div>
@@ -163,34 +172,32 @@ export default function UpdateBanner() {
         ) : null}
       </AnimatePresence>
 
-      <Modal
-        isOpen={tauri && checkDialogOpen}
-        onClose={closeCheckDialog}
-        size="lg"
-        backdrop="blur"
-        hideCloseButton
-      >
-        <ModalContent>
-          <ModalHeader className="flex items-center justify-between gap-3">
+      <Dialog open={tauri && checkDialogOpen} onOpenChange={(open) => !open && closeCheckDialog()}>
+        <DialogContent className="sm:max-w-lg" hideCloseButton>
+          <DialogHeader className="flex flex-row items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-base font-semibold">
-              <Chip variant="flat" color="secondary">
-                Updates
-              </Chip>
-              <span className="text-slate-900">Dataset Inspector</span>
+              <Badge variant="secondary">Updates</Badge>
+              <DialogTitle>Dataset Inspector</DialogTitle>
             </div>
-            <Button isIconOnly size="sm" variant="light" onClick={closeCheckDialog} isDisabled={installMutation.isPending}>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={closeCheckDialog}
+              disabled={installMutation.isPending}
+            >
               <X className="h-4 w-4" />
             </Button>
-          </ModalHeader>
-          <ModalBody className="gap-4">
+          </DialogHeader>
+
+          <div className="space-y-4">
             <div className="text-sm text-slate-700">
               {manualCheckMutation.isPending ? (
                 <span className="inline-flex items-center gap-2">
                   <RefreshCw className="h-4 w-4 animate-spin text-slate-500" />
-                  Checking for updates…
+                  Checking for updates...
                 </span>
               ) : manualCheckMutation.isError ? (
-                <span className="inline-flex items-center gap-2 text-rose-700">
+                <span className="inline-flex items-center gap-2 text-red-700">
                   <TriangleAlert className="h-4 w-4" />
                   Update check failed
                 </span>
@@ -202,13 +209,13 @@ export default function UpdateBanner() {
             </div>
 
             {manualCheckMutation.isError ? (
-              <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
                 {manualCheckMutation.error instanceof Error
                   ? manualCheckMutation.error.message
                   : String(manualCheckMutation.error)}
               </div>
             ) : update ? (
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
                 <div className="flex flex-wrap gap-x-6 gap-y-1">
                   <div>
                     <span className="text-emerald-700">Current</span>{" "}
@@ -229,11 +236,11 @@ export default function UpdateBanner() {
             ) : null}
 
             {downloadState.state === "error" ? (
-              <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
                 {isSignatureVerificationError ? (
                   <div className="flex flex-col gap-1">
                     <div className="font-medium">Signature verification failed.</div>
-                    <div className="text-rose-800/90">The downloaded update could not be verified.</div>
+                    <div className="text-red-800/90">The downloaded update could not be verified.</div>
                   </div>
                 ) : (
                   downloadState.message
@@ -247,23 +254,24 @@ export default function UpdateBanner() {
                 <div className="text-xs text-slate-500">{progressLabel}</div>
               </div>
             ) : null}
-          </ModalBody>
-          <ModalFooter className="gap-2">
-            <Button variant="light" onClick={closeCheckDialog} isDisabled={installMutation.isPending}>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button variant="ghost" onClick={closeCheckDialog} disabled={installMutation.isPending}>
               Close
             </Button>
             {update ? (
               <Button
-                color="success"
+                variant="success"
                 onClick={() => installMutation.mutate()}
                 isLoading={installMutation.isPending}
               >
                 Install update
               </Button>
             ) : null}
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

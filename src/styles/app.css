@@ -1,8 +1,5 @@
 @import "tailwindcss";
 
-@plugin "../hero.ts";
-@source "../../node_modules/@heroui/theme/dist/**/*.{js,ts,jsx,tsx}";
-
 @theme {
   --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
     "Segoe UI", "Helvetica Neue", Arial, sans-serif;
@@ -12,6 +9,31 @@
   --radius-md: 10px;
   --shadow-soft: 0 25px 80px -35px rgba(12, 21, 31, 0.35);
   --shadow-glow: 0 0 0 1px rgba(20, 184, 166, 0.2), 0 18px 45px -30px rgba(20, 184, 166, 0.7);
+
+  --animate-in: animate-in 0.2s ease-out;
+  --animate-out: animate-out 0.15s ease-in;
+}
+
+@keyframes animate-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes animate-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.95);
+  }
 }
 
 :root {

@@ -17,6 +17,10 @@ type ViewerState = {
   selectedItemIndex: number | null;
   selectedFieldIndex: number | null;
 
+  wdsSelectedSampleKey: string | null;
+  wdsSelectedMemberPath: string | null;
+  wdsSelectedMemberName: string | null; // Field name (extension) to preserve selection across samples
+
   hfConfigOverride: string | null;
   hfSplitOverride: string | null;
   hfOffset: number;
@@ -44,6 +48,9 @@ type ViewerState = {
   selectItem: (idx: number | null) => void;
   selectField: (idx: number | null) => void;
 
+  selectWdsSample: (key: string | null) => void;
+  selectWdsMember: (memberPath: string | null, memberName?: string | null) => void;
+
   setHfConfigSplit: (config: string, split: string) => void;
   setHfOffset: (offset: number) => void;
   selectHfRow: (rowIndex: number | null) => void;
@@ -69,6 +76,10 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   selectedChunkName: null,
   selectedItemIndex: null,
   selectedFieldIndex: null,
+
+  wdsSelectedSampleKey: null,
+  wdsSelectedMemberPath: null,
+  wdsSelectedMemberName: null,
 
   hfConfigOverride: null,
   hfSplitOverride: null,
@@ -98,6 +109,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         selectedChunkName: null,
         selectedItemIndex: null,
         selectedFieldIndex: null,
+        wdsSelectedSampleKey: null,
+        wdsSelectedMemberPath: null,
+        wdsSelectedMemberName: null,
         hfConfigOverride: null,
         hfSplitOverride: null,
         hfOffset: 0,
@@ -118,6 +132,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         selectedChunkName: null,
         selectedItemIndex: null,
         selectedFieldIndex: null,
+        wdsSelectedSampleKey: null,
+        wdsSelectedMemberPath: null,
+        wdsSelectedMemberName: null,
         hfConfigOverride: null,
         hfSplitOverride: null,
         hfOffset: 0,
@@ -137,6 +154,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         selectedChunkName: null,
         selectedItemIndex: null,
         selectedFieldIndex: null,
+        wdsSelectedSampleKey: null,
+        wdsSelectedMemberPath: null,
+        wdsSelectedMemberName: null,
         hfConfigOverride: null,
         hfSplitOverride: null,
         hfOffset: 0,
@@ -158,6 +178,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         selectedChunkName: null,
         selectedItemIndex: null,
         selectedFieldIndex: null,
+        wdsSelectedSampleKey: null,
+        wdsSelectedMemberPath: null,
+        wdsSelectedMemberName: null,
         hfConfigOverride: null,
         hfSplitOverride: null,
         hfOffset: 0,
@@ -179,6 +202,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         selectedChunkName: null,
         selectedItemIndex: null,
         selectedFieldIndex: null,
+        wdsSelectedSampleKey: null,
+        wdsSelectedMemberPath: null,
+        wdsSelectedMemberName: null,
         hfConfigOverride: null,
         hfSplitOverride: null,
         hfOffset: 0,
@@ -200,6 +226,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       selectedChunkName: null,
       selectedItemIndex: null,
       selectedFieldIndex: null,
+      wdsSelectedSampleKey: null,
+      wdsSelectedMemberPath: null,
+      wdsSelectedMemberName: null,
       hfConfigOverride: null,
       hfSplitOverride: null,
       hfOffset: 0,
@@ -211,9 +240,20 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     });
   },
 
-  selectChunk: (filename) => set({ selectedChunkName: filename, selectedItemIndex: null, selectedFieldIndex: null }),
-  selectItem: (idx) => set({ selectedItemIndex: idx, selectedFieldIndex: null }),
+  selectChunk: (filename) =>
+    set({
+      selectedChunkName: filename,
+      selectedItemIndex: null,
+      selectedFieldIndex: null,
+      wdsSelectedSampleKey: null,
+      wdsSelectedMemberPath: null,
+      wdsSelectedMemberName: null,
+    }),
+  selectItem: (idx) => set({ selectedItemIndex: idx }),
   selectField: (idx) => set({ selectedFieldIndex: idx }),
+
+  selectWdsSample: (key) => set({ wdsSelectedSampleKey: key }), // Keep wdsSelectedMemberPath to preserve field selection
+  selectWdsMember: (memberPath, memberName) => set({ wdsSelectedMemberPath: memberPath, wdsSelectedMemberName: memberName ?? null }),
 
   setHfConfigSplit: (config, split) =>
     set({
@@ -223,17 +263,32 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       hfSelectedRowIndex: null,
       hfSelectedFieldName: null,
     }),
-  setHfOffset: (offset) => set({ hfOffset: Math.max(0, offset | 0) }),
+  setHfOffset: (offset) =>
+    set({
+      hfOffset: Math.max(0, offset | 0),
+      hfSelectedRowIndex: null,
+      hfSelectedFieldName: null,
+    }),
   selectHfRow: (rowIndex) => set({ hfSelectedRowIndex: rowIndex }),
   selectHfField: (fieldName) => set({ hfSelectedFieldName: fieldName }),
 
   selectZenodoFile: (key) => set({ zenodoSelectedFileKey: key, zenodoSelectedEntryName: null, zenodoEntriesOffset: 0, zenodoCsvSelectedRowIndex: null, zenodoCsvSelectedFieldIndex: null }),
   selectZenodoEntry: (name) => set({ zenodoSelectedEntryName: name }),
-  setZenodoEntriesOffset: (offset) => set({ zenodoEntriesOffset: Math.max(0, offset | 0) }),
+  setZenodoEntriesOffset: (offset) =>
+    set({
+      zenodoEntriesOffset: Math.max(0, offset | 0),
+      zenodoSelectedEntryName: null,
+    }),
   selectZenodoCsvRow: (rowIndex) => set({ zenodoCsvSelectedRowIndex: rowIndex, zenodoCsvSelectedFieldIndex: null }),
   selectZenodoCsvField: (fieldIndex) => set({ zenodoCsvSelectedFieldIndex: fieldIndex }),
 
-  setWdsOffset: (offset) => set({ wdsOffset: Math.max(0, offset | 0) }),
+  setWdsOffset: (offset) =>
+    set({
+      wdsOffset: Math.max(0, offset | 0),
+      wdsSelectedSampleKey: null,
+      wdsSelectedMemberPath: null,
+      wdsSelectedMemberName: null,
+    }),
 
   setStatusMessage: (message) => set({ statusMessage: message }),
   clearMode: () =>
@@ -242,6 +297,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       selectedChunkName: null,
       selectedItemIndex: null,
       selectedFieldIndex: null,
+      wdsSelectedSampleKey: null,
+      wdsSelectedMemberPath: null,
+      wdsSelectedMemberName: null,
       hfConfigOverride: null,
       hfSplitOverride: null,
       hfOffset: 0,

@@ -21,9 +21,8 @@ pub struct HfClient {
 impl Default for HfClient {
     fn default() -> Self {
         let http = reqwest::Client::builder()
-            .http1_only()
             .user_agent("dataset-inspector/0.6.0 (tauri)")
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(120)) // Increased for large datasets
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self { http }
@@ -177,6 +176,19 @@ fn pick_default_split(splits: &BTreeSet<String>) -> String {
         .unwrap_or_else(|| "train".into())
 }
 
+fn should_retry_with_canonical_dataset(message: &str) -> bool {
+    let msg = message.trim();
+    if msg.is_empty() {
+        return false;
+    }
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("not found") || lower.contains("renamed") || lower.contains("current dataset name")
+}
+
+fn is_not_found_message(message: &str) -> bool {
+    message.to_ascii_lowercase().contains("not found")
+}
+
 fn feature_dtype_label(ty: &serde_json::Value) -> Option<String> {
     ty.get("dtype")
         .and_then(|v| v.as_str())
@@ -210,14 +222,94 @@ async fn get_json<T: DeserializeOwned>(
     let value: serde_json::Value = serde_json::from_str(&text)
         .map_err(|e| AppError::Remote(format!("invalid JSON from {url}: {e}")))?;
 
-    if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
-        return Err(AppError::Invalid(err.to_string()));
-    }
+    let server_error = value
+        .get("error")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+
     if !status.is_success() {
+        if let Some(err) = server_error {
+            // HF datasets-server uses the `error` field for both client and server failures.
+            // Treat client errors (except rate limiting) as user-facing "Invalid" errors,
+            // and keep server errors as retryable "Remote" errors.
+            if status.is_client_error() && status != reqwest::StatusCode::TOO_MANY_REQUESTS {
+                return Err(AppError::Invalid(format!("HTTP {status} from {url}: {err}")));
+            }
+            return Err(AppError::Remote(format!("HTTP {status} from {url}: {err}")));
+        }
         return Err(AppError::Remote(format!("HTTP {status} from {url}")));
     }
 
+    if let Some(err) = server_error {
+        return Err(AppError::Invalid(format!("HTTP {status} from {url}: {err}")));
+    }
+
     serde_json::from_value(value).map_err(|e| AppError::Remote(format!("parse failed: {e}")))
+}
+
+fn splits_url(dataset: &str) -> AppResult<Url> {
+    let mut url = Url::parse(DATASETS_SERVER_BASE)
+        .map_err(|e| AppError::Remote(format!("invalid datasets-server base url: {e}")))?;
+    url.set_path("splits");
+    url.query_pairs_mut().append_pair("dataset", dataset);
+    Ok(url)
+}
+
+fn rows_url(dataset: &str, config: &str, split: &str, offset: usize, length: usize) -> AppResult<Url> {
+    let mut url = Url::parse(DATASETS_SERVER_BASE)
+        .map_err(|e| AppError::Remote(format!("invalid datasets-server base url: {e}")))?;
+    url.set_path("rows");
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("dataset", dataset);
+        qp.append_pair("config", config);
+        qp.append_pair("split", split);
+        qp.append_pair("offset", &offset.to_string());
+        qp.append_pair("length", &length.to_string());
+    }
+    Ok(url)
+}
+
+async fn resolve_canonical_dataset_id(
+    client: &reqwest::Client,
+    dataset: &str,
+    token: Option<&str>,
+) -> Option<String> {
+    let base = Url::parse("https://huggingface.co").ok()?;
+    let mut url = base.join(&format!("/api/datasets/{dataset}")).ok()?;
+    url.set_query(None);
+    url.set_fragment(None);
+
+    for _ in 0..3 {
+        let mut req = client.get(url.clone());
+        if let Some(t) = token.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            req = req.header(reqwest::header::AUTHORIZATION, format!("Bearer {t}"));
+        }
+        let res = req.send().await.ok()?;
+        let status = res.status();
+
+        if status.is_redirection() {
+            let loc = res
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())?;
+            url = url.join(loc).ok()?;
+            continue;
+        }
+
+        if !status.is_success() {
+            return None;
+        }
+        let text = res.text().await.ok()?;
+        let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+        let id = value.get("id").and_then(|v| v.as_str())?.trim();
+        if id.is_empty() {
+            return None;
+        }
+        return Some(id.to_string());
+    }
+    None
 }
 
 fn sanitize(value: &str) -> String {
@@ -343,18 +435,148 @@ pub async fn hf_dataset_preview(
     length: Option<usize>,
     token: Option<String>,
 ) -> AppResult<HfDatasetPreview> {
-    let dataset = extract_repo_id(&input)?;
+    let mut dataset = extract_repo_id(&input)?;
     let offset = offset.unwrap_or(0);
     let length = length.unwrap_or(DEFAULT_ROWS).clamp(1, MAX_ROWS);
     let token = token.as_deref();
 
-    let mut splits_url = Url::parse(DATASETS_SERVER_BASE)
-        .map_err(|e| AppError::Remote(format!("invalid datasets-server base url: {e}")))?;
-    splits_url.set_path("splits");
-    splits_url
-        .query_pairs_mut()
-        .append_pair("dataset", &dataset);
-    let splits_resp: SplitsResponse = get_json(&client.http, splits_url, token).await?;
+    let user_config = config.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty());
+    let user_split = split.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty());
+
+    // When both config and split are provided, fetch rows directly without splits API call.
+    // This makes pagination much faster since we skip the splits round-trip.
+    if let (Some(cfg), Some(spl)) = (user_config, user_split) {
+        let rows_resp: RowsResponse = match get_json(
+            &client.http,
+            rows_url(&dataset, cfg, spl, offset, length)?,
+            token,
+        )
+        .await
+        {
+            Ok(resp) => resp,
+            Err(AppError::Invalid(msg)) if is_not_found_message(&msg) => {
+                // Cached config/split can become stale. Retry once using splits-derived defaults.
+                if let Some(canonical) =
+                    resolve_canonical_dataset_id(&client.http, &dataset, token).await
+                {
+                    dataset = canonical;
+                }
+
+                let splits_resp: SplitsResponse =
+                    get_json(&client.http, splits_url(&dataset)?, token).await?;
+                let mut configs_map: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+                for entry in splits_resp.splits {
+                    configs_map
+                        .entry(entry.config)
+                        .or_default()
+                        .insert(entry.split);
+                }
+                if configs_map.is_empty() {
+                    return Err(AppError::Missing(format!(
+                        "No supported splits found for dataset {dataset}."
+                    )));
+                }
+
+                let selected_config = if configs_map.contains_key(cfg) {
+                    cfg.to_string()
+                } else {
+                    configs_map.keys().next().cloned().unwrap_or_default()
+                };
+                let splits_for_config = configs_map.get(&selected_config).ok_or_else(|| {
+                    AppError::Invalid(format!(
+                        "Unknown config '{selected_config}' for dataset {dataset}."
+                    ))
+                })?;
+                let selected_split = if splits_for_config.contains(spl) {
+                    spl.to_string()
+                } else {
+                    pick_default_split(splits_for_config)
+                };
+
+                let rows_resp: RowsResponse = get_json(
+                    &client.http,
+                    rows_url(&dataset, &selected_config, &selected_split, offset, length)?,
+                    token,
+                )
+                .await?;
+
+                let features = rows_resp
+                    .features
+                    .into_iter()
+                    .map(|f| HfFeature {
+                        name: f.name,
+                        dtype: feature_dtype_label(&f.ty),
+                        raw_type: f.ty,
+                    })
+                    .collect::<Vec<_>>();
+                let rows = rows_resp.rows.into_iter().map(|r| r.row).collect();
+
+                let mut configs: Vec<HfConfigSummary> = Vec::with_capacity(configs_map.len());
+                for (config_name, splits) in configs_map {
+                    configs.push(HfConfigSummary {
+                        config: config_name,
+                        splits: splits.into_iter().collect(),
+                    });
+                }
+
+                return Ok(HfDatasetPreview {
+                    dataset,
+                    config: selected_config,
+                    split: selected_split,
+                    configs,
+                    offset,
+                    length,
+                    num_rows_total: rows_resp.num_rows_total,
+                    partial: rows_resp.partial,
+                    features,
+                    rows,
+                });
+            }
+            Err(err) => return Err(err),
+        };
+
+        let features = rows_resp
+            .features
+            .into_iter()
+            .map(|f| HfFeature {
+                name: f.name,
+                dtype: feature_dtype_label(&f.ty),
+                raw_type: f.ty,
+            })
+            .collect::<Vec<_>>();
+        let rows = rows_resp.rows.into_iter().map(|r| r.row).collect();
+
+        return Ok(HfDatasetPreview {
+            dataset,
+            config: cfg.to_string(),
+            split: spl.to_string(),
+            configs: vec![], // Empty - caller already has configs from initial load
+            offset,
+            length,
+            num_rows_total: rows_resp.num_rows_total,
+            partial: rows_resp.partial,
+            features,
+            rows,
+        });
+    }
+
+    // Initial load or config/split not provided - fetch splits first.
+    let splits_resp: SplitsResponse = match get_json(&client.http, splits_url(&dataset)?, token).await
+    {
+        Ok(resp) => resp,
+        Err(AppError::Invalid(msg)) if should_retry_with_canonical_dataset(&msg) => {
+            let Some(canonical) = resolve_canonical_dataset_id(&client.http, &dataset, token).await
+            else {
+                return Err(AppError::Invalid(msg));
+            };
+            if canonical == dataset {
+                return Err(AppError::Invalid(msg));
+            }
+            dataset = canonical;
+            get_json(&client.http, splits_url(&dataset)?, token).await?
+        }
+        Err(err) => return Err(err),
+    };
 
     let mut configs_map: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for entry in splits_resp.splits {
@@ -369,38 +591,69 @@ pub async fn hf_dataset_preview(
         )));
     }
 
-    let selected_config = config
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    let mut selected_config = user_config
+        .and_then(|s| configs_map.get(s).map(|_| s.to_string()))
         .unwrap_or_else(|| configs_map.keys().next().cloned().unwrap_or_default());
-    let splits_for_config = configs_map.get(&selected_config).ok_or_else(|| {
-        AppError::Invalid(format!(
-            "Unknown config '{selected_config}' for dataset {dataset}."
-        ))
+    let mut selected_split = {
+        let splits_for_config = configs_map.get(&selected_config).ok_or_else(|| {
+            AppError::Missing(format!("No splits returned for dataset {dataset}."))
+        })?;
+        pick_default_split(splits_for_config)
+    };
+
+    if let Some(requested_split) = user_split.map(|s| s.to_string()) {
+        let splits_for_config = configs_map.get(&selected_config).ok_or_else(|| {
+            AppError::Missing(format!("No splits returned for dataset {dataset}."))
+        })?;
+        if splits_for_config.contains(&requested_split) {
+            selected_split = requested_split;
+        } else if let Some((cfg_name, _)) =
+            configs_map.iter().find(|(_, splits)| splits.contains(&requested_split))
+        {
+            selected_config = cfg_name.clone();
+            selected_split = requested_split;
+        }
+    }
+
+    let mut candidates: Vec<(String, String)> = Vec::new();
+    candidates.push((selected_config.clone(), selected_split.clone()));
+    if let Some(splits_for_selected) = configs_map.get(&selected_config) {
+        for split_name in splits_for_selected {
+            if split_name != &selected_split {
+                candidates.push((selected_config.clone(), split_name.clone()));
+            }
+        }
+    }
+    for (cfg_name, splits) in configs_map.iter() {
+        if cfg_name == &selected_config {
+            continue;
+        }
+        candidates.push((cfg_name.clone(), pick_default_split(splits)));
+    }
+
+    let mut last_not_found = None::<String>;
+    let mut chosen = None::<(String, String, RowsResponse)>;
+    for (cfg, spl) in candidates {
+        match get_json(
+            &client.http,
+            rows_url(&dataset, &cfg, &spl, offset, length)?,
+            token,
+        )
+        .await
+        {
+            Ok(resp) => {
+                chosen = Some((cfg, spl, resp));
+                break;
+            }
+            Err(AppError::Invalid(msg)) if is_not_found_message(&msg) => {
+                last_not_found = Some(msg);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    let (selected_config, selected_split, rows_resp) = chosen.ok_or_else(|| {
+        AppError::Invalid(last_not_found.unwrap_or_else(|| "Not found.".into()))
     })?;
-
-    let selected_split = split
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| pick_default_split(splits_for_config));
-    if !splits_for_config.contains(&selected_split) {
-        return Err(AppError::Invalid(format!(
-            "Unknown split '{selected_split}' for config '{selected_config}'."
-        )));
-    }
-
-    let mut rows_url = Url::parse(DATASETS_SERVER_BASE)
-        .map_err(|e| AppError::Remote(format!("invalid datasets-server base url: {e}")))?;
-    rows_url.set_path("rows");
-    {
-        let mut qp = rows_url.query_pairs_mut();
-        qp.append_pair("dataset", &dataset);
-        qp.append_pair("config", &selected_config);
-        qp.append_pair("split", &selected_split);
-        qp.append_pair("offset", &offset.to_string());
-        qp.append_pair("length", &length.to_string());
-    }
-    let rows_resp: RowsResponse = get_json(&client.http, rows_url, token).await?;
 
     let mut configs: Vec<HfConfigSummary> = Vec::with_capacity(configs_map.len());
     for (config_name, splits) in configs_map {
