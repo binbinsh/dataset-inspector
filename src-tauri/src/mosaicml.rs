@@ -16,23 +16,12 @@ use crate::{
         PreparedFileResponse,
     },
     open_with,
+    preview::{preview_utf8_text, PREVIEW_TEXT_CHARS},
 };
 
 const PREVIEW_BYTES: usize = 16 * 1024;
-const PREVIEW_TEXT_CHARS: usize = 8 * 1024;
 const MAX_LISTED_SAMPLES: u32 = 5_000;
 const MAX_OPEN_BYTES: u64 = 256 * 1024 * 1024;
-
-fn preview_utf8_text(data: &[u8]) -> Option<String> {
-    let raw = match std::str::from_utf8(data) {
-        Ok(text) => text,
-        Err(err) if err.error_len().is_none() => {
-            std::str::from_utf8(&data[..err.valid_up_to()]).ok()?
-        }
-        Err(_) => return None,
-    };
-    Some(raw.chars().take(PREVIEW_TEXT_CHARS).collect())
-}
 
 #[derive(Deserialize)]
 struct MdsIndexFile {
