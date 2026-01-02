@@ -7,6 +7,7 @@ mod ipc_types;
 mod litdata;
 mod mosaicml;
 mod open_with;
+mod preview;
 mod webdataset;
 mod zenodo;
 

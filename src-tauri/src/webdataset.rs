@@ -14,23 +14,12 @@ use crate::audio;
 use crate::ipc_types::{FieldPreview, OpenLeafResponse, PreparedFileResponse};
 use crate::mosaicml;
 use crate::open_with;
+use crate::preview::preview_utf8_text;
 
 const PREVIEW_BYTES: usize = 16 * 1024;
-const PREVIEW_TEXT_CHARS: usize = 8 * 1024;
 const MAX_LISTED_SAMPLES: usize = 5000;
 const MAX_OPEN_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_TAR_META_BYTES: u64 = 1024 * 1024;
-
-fn preview_utf8_text(data: &[u8]) -> Option<String> {
-    let raw = match std::str::from_utf8(data) {
-        Ok(text) => text,
-        Err(err) if err.error_len().is_none() => {
-            std::str::from_utf8(&data[..err.valid_up_to()]).ok()?
-        }
-        Err(_) => return None,
-    };
-    Some(raw.chars().take(PREVIEW_TEXT_CHARS).collect())
-}
 
 #[derive(Clone, Default)]
 pub struct WdsScanCache {

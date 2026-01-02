@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
@@ -451,6 +451,31 @@ function SelectableRowButton({
     >
       {children}
     </Button>
+  );
+}
+
+function ListSkeleton() {
+  return (
+    <div className="p-4">
+      <Skeleton className="h-10 w-full" />
+    </div>
+  );
+}
+
+function EmptyState({
+  icon: Icon,
+  iconClassName,
+  children,
+}: {
+  icon: ComponentType<{ className?: string }>;
+  iconClassName?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
+      <Icon className={cn("h-4 w-4 text-slate-400", iconClassName)} />
+      <div className="max-w-[520px] leading-relaxed">{children}</div>
+    </div>
   );
 }
 
@@ -1423,7 +1448,13 @@ export default function InspectorPage() {
             ? "Local MosaicML streaming dataset"
             : "Local LitData optimized dataset";
 
-  const level1Pending = isHfMode ? hfQuery.isPending : isZenodoMode ? zenodoQuery.isPending : isWdsMode ? wdsDirQuery.isPending : indexQuery.isPending;
+  const level1Loading = isHfMode
+    ? hfQuery.isLoading
+    : isZenodoMode
+      ? zenodoQuery.isLoading
+      : isWdsMode
+        ? wdsDirQuery.isLoading
+        : indexQuery.isLoading;
   const selectedHfConfig = hfConfigOverride ?? hfQuery.data?.config ?? hfSelectedCache?.config ?? null;
   const selectedHfSplit = hfSplitOverride ?? hfQuery.data?.split ?? hfSelectedCache?.split ?? null;
 
@@ -1696,11 +1727,7 @@ export default function InspectorPage() {
                             </SelectableRowButton>
                           ))
                       )}
-                      {level1Pending ? (
-                        <div className="p-4">
-                          <Skeleton className="h-10 w-full" />
-                        </div>
-                      ) : null}
+                      {level1Loading ? <ListSkeleton /> : null}
                     </ScrollArea>
                   </div>
                 </div>
@@ -1730,11 +1757,7 @@ export default function InspectorPage() {
                     <ListFilterInput value={filterLevel2} onValueChange={setFilterLevel2} placeholder="Filter…" ariaLabel="Filter level 2" />
                     <ScrollArea className="flex-1 min-h-0 rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
                       {isHfMode ? (
-                        hfQuery.isFetching ? (
-                          <div className="p-4">
-                            <Skeleton className="h-10 w-full" />
-                          </div>
-                        ) : hfRows.length > 0 ? (
+                        hfQuery.isFetching ? <ListSkeleton /> : hfRows.length > 0 ? (
                           hfRows
                             .map((row, idx) => ({ row: row as Record<string, unknown>, idx }))
                             .filter(({ row }) => {
@@ -1759,12 +1782,7 @@ export default function InspectorPage() {
                                 </div>
                               </SelectableRowButton>
                             ))
-                        ) : (
-                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
-                            <TriangleAlert className="h-4 w-4 text-slate-400" />
-                            <div className="max-w-[520px] leading-relaxed">No rows available.</div>
-                          </div>
-                        )
+                        ) : <EmptyState icon={TriangleAlert}>No rows available.</EmptyState>
                       ) : isZenodoMode ? (
                         zenodoEntries.length > 0 ? (
                           zenodoEntries
@@ -1787,25 +1805,13 @@ export default function InspectorPage() {
                                 </SelectableRowButton>
                               );
                             })
-                        ) : zenodoTarEntriesQuery.isPending || zenodoZipEntriesQuery.isPending ? (
-                          <div className="p-4">
-                            <Skeleton className="h-10 w-full" />
-                          </div>
-                        ) : selectedZenodoFile ? (
-                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
-                            <BadgeInfo className="h-4 w-4 text-slate-400" />
-                            <div className="max-w-[520px] leading-relaxed">
-                              {looksLikeTarFilename(selectedZenodoFile.key) || selectedZenodoFile.key.endsWith(".zip")
-                                ? "Loading entries…"
-                                : "Select a .tar or .zip file to browse entries."}
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
-                            <TriangleAlert className="h-4 w-4 text-slate-400" />
-                            <div className="max-w-[520px] leading-relaxed">Select a file from the first column.</div>
-                          </div>
-                        )
+                        ) : zenodoTarEntriesQuery.isLoading || zenodoZipEntriesQuery.isLoading ? <ListSkeleton /> : selectedZenodoFile ? (
+                          <EmptyState icon={BadgeInfo}>
+                            {selectedZenodoFileIsTar || selectedZenodoFileIsZip
+                              ? "Loading entries…"
+                              : "Select a .tar or .zip file to browse entries."}
+                          </EmptyState>
+                        ) : <EmptyState icon={TriangleAlert}>Select a file from the first column.</EmptyState>
                       ) : isWdsMode ? (
                         wdsSamples.length > 0 ? (
                           wdsSamples
@@ -1824,16 +1830,7 @@ export default function InspectorPage() {
                                 </div>
                               </SelectableRowButton>
                             ))
-                        ) : wdsSamplesQuery.isPending ? (
-                          <div className="p-4">
-                            <Skeleton className="h-10 w-full" />
-                          </div>
-                        ) : (
-                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
-                            <TriangleAlert className="h-4 w-4 text-slate-400" />
-                            <div className="max-w-[520px] leading-relaxed">Select a shard from the first column.</div>
-                          </div>
-                        )
+                        ) : wdsSamplesQuery.isLoading ? <ListSkeleton /> : <EmptyState icon={TriangleAlert}>Select a shard from the first column.</EmptyState>
                       ) : isMdsMode ? (
                         mdsItems.length > 0 ? (
                           mdsItems
@@ -1852,21 +1849,11 @@ export default function InspectorPage() {
                                 </div>
                               </SelectableRowButton>
                             ))
-                        ) : mdsItemsQuery.isPending ? (
-                          <div className="p-4">
-                            <Skeleton className="h-10 w-full" />
-                          </div>
-                        ) : selectedChunk ? (
-                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
-                            <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
-                            <div className="max-w-[520px] leading-relaxed">Loading samples…</div>
-                          </div>
-                        ) : (
-                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
-                            <TriangleAlert className="h-4 w-4 text-slate-400" />
-                            <div className="max-w-[520px] leading-relaxed">Select a shard from the first column.</div>
-                          </div>
-                        )
+                        ) : mdsItemsQuery.isLoading ? <ListSkeleton /> : selectedChunk ? (
+                          <EmptyState icon={Loader2} iconClassName="animate-spin">
+                            Loading samples…
+                          </EmptyState>
+                        ) : <EmptyState icon={TriangleAlert}>Select a shard from the first column.</EmptyState>
                       ) : items.length > 0 ? (
                         items
                           .filter((item) => matchesFilter(`Item ${item.itemIndex}`, level2Needle))
@@ -1884,21 +1871,11 @@ export default function InspectorPage() {
                               </div>
                             </SelectableRowButton>
                           ))
-                      ) : itemsQuery.isPending ? (
-                        <div className="p-4">
-                          <Skeleton className="h-10 w-full" />
-                        </div>
-                      ) : selectedChunk ? (
-                        <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
-                          <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
-                          <div className="max-w-[520px] leading-relaxed">Loading items…</div>
-                        </div>
-                      ) : (
-                        <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
-                          <TriangleAlert className="h-4 w-4 text-slate-400" />
-                          <div className="max-w-[520px] leading-relaxed">Select a shard from the first column.</div>
-                        </div>
-                      )}
+                      ) : itemsQuery.isLoading ? <ListSkeleton /> : selectedChunk ? (
+                        <EmptyState icon={Loader2} iconClassName="animate-spin">
+                          Loading items…
+                        </EmptyState>
+                      ) : <EmptyState icon={TriangleAlert}>Select a shard from the first column.</EmptyState>}
                     </ScrollArea>
                   </div>
                 </div>
@@ -2090,16 +2067,10 @@ export default function InspectorPage() {
                                 </SelectableRowButton>
                               ))
                           ) : selectedItemIndex !== null ? (
-                            <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
-                              <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
-                              <div className="max-w-[520px] leading-relaxed">Loading fields…</div>
-                            </div>
-                          ) : (
-                            <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
-                              <TriangleAlert className="h-4 w-4 text-slate-400" />
-                              <div className="max-w-[520px] leading-relaxed">Select an item to see its fields.</div>
-                            </div>
-                          )}
+                            <EmptyState icon={Loader2} iconClassName="animate-spin">
+                              Loading fields…
+                            </EmptyState>
+                          ) : <EmptyState icon={TriangleAlert}>Select an item to see its fields.</EmptyState>}
                         </ScrollArea>
                       </div>
                     </div>
@@ -2121,10 +2092,9 @@ export default function InspectorPage() {
                     </div>
                     <div className="flex flex-1 min-h-0 flex-col overflow-auto px-2 py-1.5">
                       {localPreviewLoading ? (
-                        <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
-                          <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
-                          <div>Loading preview…</div>
-                        </div>
+                        <EmptyState icon={Loader2} iconClassName="animate-spin">
+                          Loading preview…
+                        </EmptyState>
                       ) : localPreviewData ? (
                         <div className="space-y-2">
                           {audioPreviewPath ? (
@@ -2206,10 +2176,9 @@ export default function InspectorPage() {
                         </div>
                       ) : isZenodoMode ? (
                         zenodoPreviewLoading ? (
-                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
-                            <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
-                            <div>Loading preview…</div>
-                          </div>
+                          <EmptyState icon={Loader2} iconClassName="animate-spin">
+                            Loading preview…
+                          </EmptyState>
                         ) : zenodoPreviewData ? (
                           <div className="space-y-2">
                             {!zenodoInlineMediaData &&
@@ -2293,18 +2262,10 @@ export default function InspectorPage() {
                               </Button>
                             </div>
                           </div>
-                        ) : selectedZenodoFile ? (
-                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
-                            <Sparkles className="h-5 w-5 text-slate-400" />
-                            <div>
-                              {selectedZenodoEntry ? "Pick an entry to preview its bytes." : "Pick a file to preview its bytes."}
-                            </div>
-                          </div>
                         ) : (
-                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
-                            <Sparkles className="h-5 w-5 text-slate-400" />
-                            <div>Pick a file to preview its bytes.</div>
-                          </div>
+                          <EmptyState icon={Sparkles} iconClassName="h-5 w-5">
+                            {selectedZenodoEntry ? "Pick an entry to preview its bytes." : "Pick a file to preview its bytes."}
+                          </EmptyState>
                         )
                       ) : isHfMode && hfSelectedFieldName && hfSelectedRow ? (
                         (() => {
@@ -2378,12 +2339,7 @@ export default function InspectorPage() {
                             </div>
                           );
                         })()
-                      ) : (
-                        <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
-                          <Sparkles className="h-5 w-5 text-slate-400" />
-                          <div>Pick a field to preview its bytes.</div>
-                        </div>
-                      )}
+                      ) : <EmptyState icon={Sparkles} iconClassName="h-5 w-5">Pick a field to preview its bytes.</EmptyState>}
                     </div>
                   </div>
                 </div>

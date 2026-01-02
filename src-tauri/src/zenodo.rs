@@ -9,11 +9,11 @@ use url::Url;
 use crate::app_error::{AppError, AppResult};
 use crate::ipc_types::{FieldPreview, InlineMediaResponse, OpenLeafResponse};
 use crate::open_with;
+use crate::preview::preview_utf8_text;
 
 const USER_AGENT: &str = "dataset-inspector/1.2.0 (tauri)";
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 const PEEK_BYTES: usize = 64 * 1024;
-const PREVIEW_TEXT_CHARS: usize = 8 * 1024;
 const MAX_INLINE_DOWNLOAD_BYTES: u64 = 50 * 1024 * 1024;
 const ZIP_TAIL_INITIAL_BYTES: u64 = 1024 * 1024;
 const ZIP_TAIL_MAX_BYTES: u64 = 8 * 1024 * 1024;
@@ -27,17 +27,6 @@ const TAR_MAX_PAGE_SIZE: u32 = 200;
 const MAX_TAR_META_BYTES: u64 = 1024 * 1024;
 const TAR_MEDIA_CACHE_ITEM_MAX_BYTES: u64 = 32 * 1024 * 1024;
 const TAR_MEDIA_CACHE_TOTAL_MAX_BYTES: u64 = 256 * 1024 * 1024;
-
-fn preview_utf8_text(data: &[u8]) -> Option<String> {
-    let raw = match std::str::from_utf8(data) {
-        Ok(text) => text,
-        Err(err) if err.error_len().is_none() => {
-            std::str::from_utf8(&data[..err.valid_up_to()]).ok()?
-        }
-        Err(_) => return None,
-    };
-    Some(raw.chars().take(PREVIEW_TEXT_CHARS).collect())
-}
 
 #[derive(Clone)]
 pub struct ZenodoClient {
