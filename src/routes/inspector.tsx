@@ -1,28 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useForm } from "@tanstack/react-form";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
-  Button,
-  Chip,
-  Input,
-  Modal,
-  ModalBody,
-  ModalContent,
-  ModalHeader,
-  ScrollShadow,
-  Skeleton,
-  Tab,
-  Tabs,
-  Tooltip,
-} from "@heroui/react";
-import {
-  ArrowRight,
   ArrowUpRightFromSquare,
   BadgeInfo,
   ChevronLeft,
   ChevronRight,
-  Copy,
   Database,
   FolderOpen,
   HardDrive,
@@ -34,6 +17,16 @@ import {
   Terminal,
   TriangleAlert,
 } from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/copy-button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import {
   chooseIndexSource,
   chooseOpenerApp,
@@ -55,8 +48,8 @@ import {
   peekField,
   prepareAudioPreview,
   readHfToken,
-  readPreferredOpenerForExt,
   readLastIndex,
+  readPreferredOpenerForExt,
   saveHfToken,
   saveLastIndex,
   savePreferredOpenerForExt,
@@ -73,35 +66,38 @@ import {
   zenodoTarListEntries,
   zenodoTarOpenEntry,
   zenodoTarPeekEntry,
-  zenodoZipListEntries,
   zenodoZipInlineEntryMedia,
+  zenodoZipListEntries,
   zenodoZipOpenEntry,
   zenodoZipPeekEntry,
-  type HfConfigSummary,
+  type FieldMeta,
   type FieldPreview,
+  type HfConfigSummary,
   type HfDatasetPreview,
-  type HfFeature,
   type IndexSummary,
+  type InlineMediaResponse,
   type ItemMeta,
+  type OpenLeafResponse,
   type WdsDirSummary,
   type WdsSampleListResponse,
-  type InlineMediaResponse,
-  type ZenodoFileSummary,
   type ZenodoRecordSummary,
   type ZenodoTarEntryListResponse,
   type ZenodoTarEntrySummary,
   type ZenodoZipEntrySummary,
 } from "@/lib/tauri-api";
-import { cn } from "@/lib/utils";
 import { useViewerStore } from "@/store/viewer";
 
 const HF_PAGE_SIZE = 25;
 const WDS_PAGE_SIZE = 50;
 const ZENODO_TAR_PAGE_SIZE = 25;
-const EMPTY_ROWS: unknown[] = [];
-const EMPTY_HF_FEATURES: HfFeature[] = [];
 
-const formatBytes = (value: number) => {
+const EMPTY_ROWS: unknown[] = [];
+
+type SourceKind = "auto" | "litdata" | "mds" | "wds" | "hf" | "zenodo";
+type EffectiveKind = Exclude<SourceKind, "auto">;
+type ZenodoEntry = ZenodoTarEntrySummary | ZenodoZipEntrySummary;
+
+function formatBytes(value: number) {
   if (!Number.isFinite(value)) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
   let v = value;
@@ -111,9 +107,9 @@ const formatBytes = (value: number) => {
     idx += 1;
   }
   return `${v.toFixed(v >= 10 || v < 1 ? 0 : 1)} ${units[idx]}`;
-};
+}
 
-const audioMimeFromExt = (value: string) => {
+function audioMimeFromExt(value: string) {
   switch (value) {
     case "wav":
       return "audio/wav";
@@ -132,110 +128,87 @@ const audioMimeFromExt = (value: string) => {
     default:
       return undefined;
   }
-};
+}
 
-const buildPreviewMeta = (preview: FieldPreview | null) => {
+function videoMimeFromExt(value: string) {
+  switch (value) {
+    case "mp4":
+      return "video/mp4";
+    case "webm":
+      return "video/webm";
+    case "mov":
+      return "video/quicktime";
+    default:
+      return undefined;
+  }
+}
+
+function isInlineMediaExt(value: string) {
+  const ext = value.trim().replace(/^\\./, "").toLowerCase();
+  if (!ext) return false;
+  if (audioMimeFromExt(ext)) return true;
+  if (videoMimeFromExt(ext)) return true;
+  return ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"].includes(ext);
+}
+
+function buildPreviewMeta(preview: FieldPreview | null) {
   if (!preview) return [];
-  const ext = (preview.guessedExt ?? "").trim().replace(/^\./, "");
+  const ext = (preview.guessedExt ?? "").trim().replace(/^\\./, "");
   const typeLabel = ext ? `.${ext}` : "unknown";
   return [typeLabel, formatBytes(preview.size), preview.isBinary ? "binary" : "text"];
-};
-
-function StatChip({
-  label,
-  value,
-  title,
-}: {
-  label: string;
-  value: string | number;
-  title?: string;
-}) {
-  return (
-    <Chip variant="flat" radius="full" size="sm" className="bg-white/80 text-slate-700 text-xs font-semibold" title={title}>
-      <span className="flex items-center gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</span>
-        <span className="font-semibold text-slate-900">{value}</span>
-      </span>
-    </Chip>
-  );
 }
 
-function StatBlock({
-  label,
-  value,
-}: {
-  label: string;
-  value: string | number;
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center rounded-xl bg-white/70 px-4 py-1.5 ring-1 ring-black/[0.06]">
-      <span className="text-[10px] font-medium uppercase tracking-wider text-slate-400">{label}</span>
-      <span className="text-base font-bold tabular-nums text-slate-800">{value}</span>
-    </div>
-  );
+function buildPreviewBodyText(preview: FieldPreview) {
+  if (preview.isBinary) return `Hex: ${preview.hexSnippet}`;
+  return preview.previewText ?? "";
 }
 
-function StatBlockLarge({
-  label,
-  value,
-}: {
-  label: string;
-  value: string | number | string;
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center px-3 py-1 min-w-0">
-      <span className="text-[10px] font-medium uppercase tracking-wider text-slate-400">{label}</span>
-      <span className="text-lg font-bold tabular-nums text-slate-800 truncate max-w-[120px]" title={String(value)}>{String(value)}</span>
-    </div>
-  );
+function safeJson(value: unknown) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
-const normalizeFilter = (value: string) => value.trim().toLowerCase();
+function formatCell(value: unknown) {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  const json = safeJson(value);
+  return json.length > 220 ? `${json.slice(0, 220)}…` : json;
+}
 
-const matchesFilter = (haystack: string, needle: string) => {
+function normalizeFilter(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function matchesFilter(haystack: string, needle: string) {
   if (!needle) return true;
   return haystack.toLowerCase().includes(needle);
-};
+}
 
-type SourceKind = "auto" | "litdata" | "mds" | "wds" | "hf" | "zenodo";
-
-function ListFilterInput({
-  value,
-  onValueChange,
-  placeholder,
-  ariaLabel,
-}: {
-  value: string;
-  onValueChange: (next: string) => void;
-  placeholder: string;
-  ariaLabel: string;
-}) {
+function looksLikeTarFilename(name: string) {
+  const n = name.trim().toLowerCase();
   return (
-    <Input
-      size="sm"
-      variant="bordered"
-      radius="full"
-      className="bg-white/80"
-      placeholder={placeholder}
-      value={value}
-      onValueChange={onValueChange}
-      isClearable
-      startContent={<Search className="h-4 w-4 text-slate-500" />}
-      aria-label={ariaLabel}
-    />
+    n.endsWith(".tar") ||
+    n.endsWith(".tar.gz") ||
+    n.endsWith(".tgz") ||
+    n.endsWith(".tar.zst") ||
+    n.endsWith(".tar.zstd")
   );
 }
 
-const looksLikeHfInput = (value: string) => {
+function looksLikeHfInput(value: string) {
   const v = value.trim();
   if (!v) return false;
   if (v.startsWith("hf://datasets/")) return true;
   if (v.startsWith("https://huggingface.co/datasets/") || v.startsWith("http://huggingface.co/datasets/")) return true;
   if (v.startsWith("https://hf.co/datasets/") || v.startsWith("http://hf.co/datasets/")) return true;
   return false;
-};
+}
 
-const looksLikeZenodoInput = (value: string) => {
+function looksLikeZenodoInput(value: string) {
   const v = value.trim();
   if (!v) return false;
   try {
@@ -252,9 +225,9 @@ const looksLikeZenodoInput = (value: string) => {
   } catch {
     return false;
   }
-};
+}
 
-const displayHfDatasetId = (value: string) => {
+function displayHfDatasetId(value: string) {
   const v = value.trim();
   if (!v) return null;
   if (v.startsWith("hf://datasets/")) {
@@ -286,144 +259,199 @@ const displayHfDatasetId = (value: string) => {
     return null;
   }
   return null;
-};
+}
 
-function commonPathPrefix(values: string[]) {
-  if (values.length < 2) return "";
-  const filtered = values.map((v) => v.trim()).filter(Boolean);
-  if (filtered.length < 2) return "";
-  let prefix = filtered[0]!;
-  for (let i = 1; i < filtered.length; i += 1) {
-    const next = filtered[i]!;
-    let j = 0;
-    const max = Math.min(prefix.length, next.length);
-    while (j < max && prefix[j] === next[j]) j += 1;
-    prefix = prefix.slice(0, j);
-    if (!prefix) return "";
+type HfMediaInfo = { src: string; type: string } | null;
+
+function inferMediaTypeFromFieldName(fieldName: string): string | null {
+  const lower = fieldName.toLowerCase();
+  if (
+    lower === "mp4" ||
+    lower === "video" ||
+    lower.includes("video") ||
+    lower.endsWith(".mp4") ||
+    lower.endsWith(".webm") ||
+    lower.endsWith(".mov")
+  ) {
+    return "video/mp4";
   }
-  const cut = prefix.lastIndexOf("/");
-  if (cut <= 0) return "";
-  return prefix.slice(0, cut + 1);
-}
-
-function safeJson(value: unknown) {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
+  if (lower === "mp3" || lower === "wav" || lower === "audio" || lower === "flac" || lower.includes("audio")) {
+    if (lower.includes("wav")) return "audio/wav";
+    if (lower.includes("flac")) return "audio/flac";
+    if (lower.includes("mp3")) return "audio/mpeg";
+    return "audio/mpeg";
   }
-}
-
-function formatCell(value: unknown) {
-  if (value === null || value === undefined) return "null";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  const json = safeJson(value);
-  return json.length > 220 ? `${json.slice(0, 220)}…` : json;
-}
-
-function extFromUrl(input: string) {
-  try {
-    const url = new URL(input);
-    const name = url.pathname.split("/").pop() ?? "";
-    const ext = name.includes(".") ? name.split(".").pop() : "";
-    const cleaned = String(ext ?? "").trim().toLowerCase();
-    return cleaned || null;
-  } catch {
-    return null;
+  if (lower === "png" || lower === "jpg" || lower === "jpeg" || lower === "image" || lower.includes("image")) {
+    if (lower.includes("png")) return "image/png";
+    return "image/jpeg";
   }
+  return null;
 }
 
-function extFromFilename(name: string) {
-  const base = name.split(/[\\/]/).pop() ?? name;
-  const ext = base.includes(".") ? base.split(".").pop() : "";
-  const cleaned = String(ext ?? "").trim().replace(/^\\./, "").toLowerCase();
-  return cleaned || null;
+function looksLikeBase64(value: string) {
+  if (value.length < 100) return false;
+  return /^[A-Za-z0-9+/=]+$/.test(value.slice(0, 1000));
 }
 
-function looksLikeTarFilename(name: string) {
-  const n = name.trim().toLowerCase();
+function extractHfMedia(value: unknown, fieldName?: string): HfMediaInfo {
+  if (!value) return null;
+
+  if (Array.isArray(value) && value.length > 0) {
+    const first = value[0];
+    if (first && typeof first === "object" && "src" in first && typeof first.src === "string") {
+      const type = "type" in first && typeof first.type === "string" ? first.type : "";
+      return { src: first.src, type };
+    }
+  }
+
+  if (typeof value === "object" && value !== null && "src" in value) {
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.src === "string") {
+      let type = typeof obj.type === "string" ? obj.type : "";
+      if (!type) {
+        if (typeof obj.width === "number" || typeof obj.height === "number") {
+          type = "image";
+        } else {
+          const lower = obj.src.toLowerCase();
+          if (
+            lower.includes(".jpg") ||
+            lower.includes(".jpeg") ||
+            lower.includes(".png") ||
+            lower.includes(".gif") ||
+            lower.includes(".webp") ||
+            lower.includes("/image/")
+          ) {
+            type = "image";
+          } else if (
+            lower.includes(".wav") ||
+            lower.includes(".mp3") ||
+            lower.includes(".flac") ||
+            lower.includes(".ogg") ||
+            lower.includes("/audio/")
+          ) {
+            type = "audio";
+          } else if (
+            lower.includes(".mp4") ||
+            lower.includes(".webm") ||
+            lower.includes(".mov") ||
+            lower.includes("/video/")
+          ) {
+            type = "video";
+          }
+        }
+      }
+      return { src: obj.src, type };
+    }
+  }
+
+  if (typeof value === "string" && (value.startsWith("http://") || value.startsWith("https://"))) {
+    const lower = value.toLowerCase();
+    if (lower.includes(".wav") || lower.includes(".mp3") || lower.includes(".flac") || lower.includes(".ogg")) {
+      return { src: value, type: "audio" };
+    }
+    if (
+      lower.includes(".png") ||
+      lower.includes(".jpg") ||
+      lower.includes(".jpeg") ||
+      lower.includes(".gif") ||
+      lower.includes(".webp")
+    ) {
+      return { src: value, type: "image" };
+    }
+    if (lower.includes(".mp4") || lower.includes(".webm") || lower.includes(".mov")) {
+      return { src: value, type: "video" };
+    }
+  }
+
+  if (typeof value === "string" && fieldName && looksLikeBase64(value)) {
+    const inferredType = inferMediaTypeFromFieldName(fieldName);
+    if (inferredType) {
+      return { src: `data:${inferredType};base64,${value}`, type: inferredType };
+    }
+  }
+
+  return null;
+}
+
+function isHfAudioMedia(media: HfMediaInfo) {
+  if (!media) return false;
+  return media.type.startsWith("audio") || media.type === "audio";
+}
+
+function isHfImageMedia(media: HfMediaInfo) {
+  if (!media) return false;
+  return media.type.startsWith("image") || media.type === "image";
+}
+
+function isHfVideoMedia(media: HfMediaInfo) {
+  if (!media) return false;
+  return media.type.startsWith("video") || media.type === "video";
+}
+
+function StatBlockLarge({ label, value }: { label: string; value: string | number }) {
   return (
-    n.endsWith(".tar") ||
-    n.endsWith(".tar.gz") ||
-    n.endsWith(".tgz") ||
-    n.endsWith(".tar.zst") ||
-    n.endsWith(".tar.zstd")
+    <div className="flex flex-col items-center justify-center px-4 py-1 min-w-0">
+      <span className="text-[10px] font-medium uppercase tracking-wider text-slate-400">{label}</span>
+      <span className="text-lg font-bold tabular-nums text-slate-800 truncate max-w-[160px]" title={String(value)}>
+        {String(value)}
+      </span>
+    </div>
   );
 }
 
-function looksLikeCsvFilename(name: string) {
-  const n = name.trim().toLowerCase();
-  return n.endsWith(".csv") || n.endsWith(".tsv");
+function ListFilterInput({
+  value,
+  onValueChange,
+  placeholder,
+  ariaLabel,
+}: {
+  value: string;
+  onValueChange: (next: string) => void;
+  placeholder: string;
+  ariaLabel: string;
+}) {
+  return (
+    <Input
+      className="bg-white/80 rounded-full h-9"
+      placeholder={placeholder}
+      value={value}
+      onChange={(e) => onValueChange(e.target.value)}
+      isClearable
+      onClear={() => onValueChange("")}
+      startContent={<Search className="h-4 w-4 text-slate-500" />}
+      aria-label={ariaLabel}
+    />
+  );
 }
 
-type CsvRow = {
-  rowIndex: number;
-  values: string[];
-  raw: string;
-};
-
-type CsvParsed = {
-  headers: string[];
-  rows: CsvRow[];
-  delimiter: string;
-};
-
-function parseCsvText(text: string): CsvParsed {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim());
-  if (!lines.length) return { headers: [], rows: [], delimiter: "," };
-
-  // Detect delimiter: comma or tab
-  const firstLine = lines[0] ?? "";
-  const commaCount = (firstLine.match(/,/g) || []).length;
-  const tabCount = (firstLine.match(/\t/g) || []).length;
-  const delimiter = tabCount > commaCount ? "\t" : ",";
-
-  // Simple CSV parsing (doesn't handle quoted fields with delimiters inside)
-  const parseRow = (line: string) => {
-    const result: string[] = [];
-    let current = "";
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i];
-      if (char === '"') {
-        if (inQuotes && line[i + 1] === '"') {
-          current += '"';
-          i++;
-        } else {
-          inQuotes = !inQuotes;
-        }
-      } else if (char === delimiter && !inQuotes) {
-        result.push(current.trim());
-        current = "";
-      } else {
-        current += char;
-      }
-    }
-    result.push(current.trim());
-    return result;
-  };
-
-  const headers = parseRow(lines[0] ?? "");
-  const rows: CsvRow[] = lines.slice(1).map((line, idx) => ({
-    rowIndex: idx,
-    values: parseRow(line),
-    raw: line,
-  }));
-
-  return { headers, rows, delimiter };
-}
-
-function guessHfFieldExt(value: unknown) {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    const obj = value as Record<string, unknown>;
-    const src = typeof obj.src === "string" ? obj.src.trim() : "";
-    const fromSrc = src ? extFromUrl(src) : null;
-    if (fromSrc) return fromSrc;
-    return "json";
-  }
-  if (typeof value === "string") return "txt";
-  return "json";
+function SelectableRowButton({
+  isSelected,
+  onClick,
+  className,
+  ariaLabel,
+  children,
+}: {
+  isSelected: boolean;
+  onClick: () => void;
+  className: string;
+  ariaLabel: string;
+  children: ReactNode;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      className={cn(
+        "grid h-auto min-w-0 w-full rounded-none border-b border-black/[0.04] px-3 py-2 text-left text-[13px] font-normal transition-all duration-150",
+        isSelected ? "bg-emerald-50/60 hover:bg-emerald-50/60" : "hover:bg-black/[0.03]",
+        className,
+      )}
+      onClick={onClick}
+      aria-label={ariaLabel}
+    >
+      {children}
+    </Button>
+  );
 }
 
 export default function InspectorPage() {
@@ -440,6 +468,11 @@ export default function InspectorPage() {
     selectItem,
     selectedFieldIndex,
     selectField,
+    wdsSelectedSampleKey,
+    selectWdsSample,
+    wdsSelectedMemberPath,
+    wdsSelectedMemberName,
+    selectWdsMember,
     hfConfigOverride,
     hfSplitOverride,
     hfOffset,
@@ -457,51 +490,47 @@ export default function InspectorPage() {
     selectZenodoEntry,
     zenodoEntriesOffset,
     setZenodoEntriesOffset,
-    zenodoCsvSelectedRowIndex,
-    selectZenodoCsvRow,
-    zenodoCsvSelectedFieldIndex,
-    selectZenodoCsvField,
     statusMessage,
     setStatusMessage,
   } = useViewerStore();
 
+  const requestId = mode?.requestId ?? 0;
   const tauri = useMemo(() => isTauri(), []);
 
   const [hfToken, setHfToken] = useState<string | null>(null);
   const hfTokenMasked = hfToken ? `…${hfToken.slice(-6)}` : null;
   const [hfTokenDialogOpen, setHfTokenDialogOpen] = useState(false);
-  const [hfOffsetDraft, setHfOffsetDraft] = useState(String(hfOffset));
+  const [hfTokenDraft, setHfTokenDraft] = useState("");
   const [logDockOpen, setLogDockOpen] = useState(false);
-  const [explorerTabKey, setExplorerTabKey] = useState<"level1" | "level2" | "level3">("level1");
   const [sourceKind, setSourceKind] = useState<SourceKind>("auto");
-  const [filterLevel1, setFilterLevel1] = useState("");
-  const [filterLevel2, setFilterLevel2] = useState("");
-  const [filterLevel3, setFilterLevel3] = useState("");
-  const level1Needle = useMemo(() => normalizeFilter(filterLevel1), [filterLevel1]);
-  const level2Needle = useMemo(() => normalizeFilter(filterLevel2), [filterLevel2]);
-  const level3Needle = useMemo(() => normalizeFilter(filterLevel3), [filterLevel3]);
 
-  const tokenForm = useForm({
-    defaultValues: {
-      token: "",
-    },
-    onSubmit: async ({ value }) => {
-      const trimmed = value.token.trim();
+  const handleSaveHfToken = async () => {
+    const trimmed = hfTokenDraft.trim();
+    try {
+      if (!trimmed) {
+        await clearHfToken();
+        setHfToken(null);
+      } else {
+        await saveHfToken(trimmed);
+        setHfToken(trimmed);
+      }
+      setHfTokenDialogOpen(false);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Unable to save token.");
+    }
+  };
+
+  const handleClearSavedHfToken = () => {
+    void (async () => {
       try {
-        if (!trimmed) {
-          await clearHfToken();
-          setHfToken(null);
-        } else {
-          await saveHfToken(trimmed);
-          setHfToken(trimmed);
-        }
+        await clearHfToken();
+        setHfToken(null);
         setHfTokenDialogOpen(false);
       } catch (err) {
-        setStatusMessage(err instanceof Error ? err.message : "Unable to save token.");
+        setStatusMessage(err instanceof Error ? err.message : "Unable to clear token.");
       }
-    },
-  });
-  
+    })();
+  };
 
   const isLitdataMode = mode?.kind === "litdata-index" || mode?.kind === "litdata-chunks";
   const isMdsMode = mode?.kind === "mds-index";
@@ -524,11 +553,12 @@ export default function InspectorPage() {
     }
   }, [chunkSelection.length, sourceKind]);
 
+  // Reset sourceKind to auto when user changes input
   useEffect(() => {
-    setHfOffsetDraft(String(hfOffset));
-  }, [hfOffset]);
-
-  
+    if (sourceKind !== "auto" && chunkSelection.length === 0) {
+      setSourceKind("auto");
+    }
+  }, [sourceInput, chunkSelection.length, sourceKind]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -548,24 +578,17 @@ export default function InspectorPage() {
   }, []);
 
   useEffect(() => {
-    if (!hfTokenDialogOpen) return;
-    tokenForm.update({
-      defaultValues: {
-        token: hfToken ?? "",
-      },
-    });
-  }, [hfToken, hfTokenDialogOpen, tokenForm]);
+    if (hfTokenDialogOpen) {
+      setHfTokenDraft(hfToken ?? "");
+    }
+  }, [hfToken, hfTokenDialogOpen]);
 
   useEffect(() => {
     setLogDockOpen(false);
-    setExplorerTabKey("level1");
-    setFilterLevel1("");
-    setFilterLevel2("");
-    setFilterLevel3("");
-  }, [mode?.requestId]);
+  }, [requestId]);
 
   const indexQuery = useQuery<IndexSummary>({
-    queryKey: ["index-summary", mode?.requestId ?? 0],
+    queryKey: ["index-summary", requestId],
     enabled: Boolean(isLocalIndexMode),
     queryFn: () => {
       if (!mode) throw new Error("No source selected.");
@@ -577,7 +600,7 @@ export default function InspectorPage() {
   });
 
   const wdsDirQuery = useQuery<WdsDirSummary>({
-    queryKey: ["wds-dir", mode?.requestId ?? 0],
+    queryKey: ["wds-dir", requestId],
     enabled: Boolean(isWdsMode),
     queryFn: () => {
       if (!mode || mode.kind !== "webdataset-dir") throw new Error("No WebDataset selected.");
@@ -585,23 +608,34 @@ export default function InspectorPage() {
     },
   });
 
+  // HuggingFace cache state - must be declared before hfQuery to allow use in queryFn
+  const hfDatasetInput = isHfMode ? mode.input : null;
+  const [hfSplitsCache, setHfSplitsCache] = useState<{ input: string; configs: HfConfigSummary[] } | null>(null);
+  const [hfSelectedCache, setHfSelectedCache] = useState<{ input: string; config: string; split: string } | null>(null);
+
   const hfQuery = useQuery<HfDatasetPreview>({
     queryKey: [
       "hf-preview",
       isHfMode ? mode.input : null,
+      isHfMode ? requestId : 0,
       hfConfigOverride,
       hfSplitOverride,
       hfOffset,
       HF_PAGE_SIZE,
       hfTokenMasked,
     ],
-    enabled: Boolean(isHfMode && isTauri()),
+    enabled: Boolean(isHfMode && tauri),
     queryFn: () => {
       if (!mode || mode.kind !== "huggingface") throw new Error("No dataset selected.");
+      // Use override if set, otherwise use cached selection (for faster pagination).
+      // Only pass config/split if we have both (backend optimization skips splits API).
+      const cachedSelection = hfSelectedCache?.input === mode.input ? hfSelectedCache : null;
+      const effectiveConfig = hfConfigOverride ?? cachedSelection?.config;
+      const effectiveSplit = hfSplitOverride ?? cachedSelection?.split;
       return hfDatasetPreview({
         input: mode.input,
-        config: hfConfigOverride ?? undefined,
-        split: hfSplitOverride ?? undefined,
+        config: effectiveConfig ?? undefined,
+        split: effectiveSplit ?? undefined,
         offset: hfOffset,
         length: HF_PAGE_SIZE,
         token: hfToken,
@@ -611,18 +645,14 @@ export default function InspectorPage() {
   });
 
   const zenodoQuery = useQuery<ZenodoRecordSummary>({
-    queryKey: ["zenodo-record", isZenodoMode ? mode.input : null],
-    enabled: Boolean(isZenodoMode && isTauri()),
+    queryKey: ["zenodo-record", isZenodoMode ? mode.input : null, isZenodoMode ? requestId : 0],
+    enabled: Boolean(isZenodoMode && tauri),
     queryFn: () => {
       if (!mode || mode.kind !== "zenodo") throw new Error("No Zenodo record selected.");
       return zenodoRecordSummary({ input: mode.input });
     },
     staleTime: 5 * 60 * 1000,
   });
-
-  const hfDatasetInput = isHfMode ? mode.input : null;
-  const [hfSplitsCache, setHfSplitsCache] = useState<{ input: string; configs: HfConfigSummary[] } | null>(null);
-  const [hfSelectedCache, setHfSelectedCache] = useState<{ input: string; config: string; split: string } | null>(null);
 
   useEffect(() => {
     if (!hfDatasetInput) {
@@ -636,7 +666,11 @@ export default function InspectorPage() {
 
   useEffect(() => {
     if (!hfDatasetInput || !hfQuery.data) return;
-    setHfSplitsCache({ input: hfDatasetInput, configs: hfQuery.data.configs });
+    // Only update splits cache if configs is non-empty (initial load).
+    // Pagination responses have empty configs to skip the splits API call.
+    if (hfQuery.data.configs.length > 0) {
+      setHfSplitsCache({ input: hfDatasetInput, configs: hfQuery.data.configs });
+    }
     setHfSelectedCache({ input: hfDatasetInput, config: hfQuery.data.config, split: hfQuery.data.split });
   }, [hfDatasetInput, hfQuery.data]);
 
@@ -649,13 +683,17 @@ export default function InspectorPage() {
   useEffect(() => {
     if (indexQuery.data) {
       const noun = isMdsMode ? "shard" : "chunk";
-      setStatusMessage(`Loaded ${indexQuery.data.chunks.length} ${noun}${indexQuery.data.chunks.length === 1 ? "" : "s"}.`);
+      setStatusMessage(
+        `Loaded ${indexQuery.data.chunks.length} ${noun}${indexQuery.data.chunks.length === 1 ? "" : "s"}.`,
+      );
     }
   }, [indexQuery.data, isMdsMode, setStatusMessage]);
 
   useEffect(() => {
     if (wdsDirQuery.data) {
-      setStatusMessage(`Loaded ${wdsDirQuery.data.shards.length} shard${wdsDirQuery.data.shards.length === 1 ? "" : "s"}.`);
+      setStatusMessage(
+        `Loaded ${wdsDirQuery.data.shards.length} shard${wdsDirQuery.data.shards.length === 1 ? "" : "s"}.`,
+      );
     }
   }, [setStatusMessage, wdsDirQuery.data]);
 
@@ -669,7 +707,9 @@ export default function InspectorPage() {
   useEffect(() => {
     if (zenodoQuery.data) {
       const count = zenodoQuery.data.files.length;
-      setStatusMessage(`Loaded Zenodo record ${zenodoQuery.data.recordId} · ${count} file${count === 1 ? "" : "s"}.`);
+      setStatusMessage(
+        `Loaded Zenodo record ${zenodoQuery.data.recordId} · ${count} file${count === 1 ? "" : "s"}.`,
+      );
     }
   }, [setStatusMessage, zenodoQuery.data]);
 
@@ -731,384 +771,189 @@ export default function InspectorPage() {
     }
     return zenodoFiles[0] ?? null;
   }, [zenodoFiles, zenodoSelectedFileKey]);
-  const selectedZenodoExt = selectedZenodoFile ? extFromFilename(selectedZenodoFile.key) : null;
-  const zenodoIsZip = selectedZenodoExt === "zip";
-  const zenodoIsTar = Boolean(selectedZenodoFile && looksLikeTarFilename(selectedZenodoFile.key));
-  const zenodoIsArchive = zenodoIsZip || zenodoIsTar;
-  const zenodoIsCsv = Boolean(selectedZenodoFile && looksLikeCsvFilename(selectedZenodoFile.key));
 
-  useEffect(() => {
-    if (!isZenodoMode) return;
-    if (!zenodoFiles.length) {
-      if (zenodoSelectedFileKey !== null) selectZenodoFile(null);
-      return;
-    }
-    const exists = zenodoSelectedFileKey ? zenodoFiles.some((f) => f.key === zenodoSelectedFileKey) : false;
-    if (!exists) {
-      selectZenodoFile(zenodoFiles[0]!.key);
-    }
-  }, [isZenodoMode, selectZenodoFile, zenodoFiles, zenodoSelectedFileKey]);
+  const selectedZenodoFileIsZip = Boolean(
+    isZenodoMode && selectedZenodoFile && selectedZenodoFile.key.toLowerCase().endsWith(".zip"),
+  );
+  const selectedZenodoFileIsTar = Boolean(
+    isZenodoMode && selectedZenodoFile && looksLikeTarFilename(selectedZenodoFile.key),
+  );
 
-  useEffect(() => {
-    if (!isWdsMode) return;
-    setWdsOffset(0);
-    selectItem(null);
-    selectField(null);
-  }, [isWdsMode, selectField, selectItem, selectedShard?.filename, setWdsOffset]);
+  // Query for items in selected chunk (LitData / MDS)
+  const itemsQuery = useQuery<ItemMeta[]>({
+    queryKey: ["chunk-items", selectedChunk?.filename ?? null, requestId],
+    enabled: Boolean(isLitdataMode && selectedChunk && indexQuery.data),
+    queryFn: () => {
+      if (!selectedChunk || !indexQuery.data) throw new Error("No chunk selected.");
+      return listChunkItems({ indexPath: indexQuery.data.indexPath, chunkFilename: selectedChunk.filename });
+    },
+  });
 
+  const mdsItemsQuery = useQuery<ItemMeta[]>({
+    queryKey: ["mds-samples", selectedChunk?.filename ?? null, requestId],
+    enabled: Boolean(isMdsMode && selectedChunk && indexQuery.data),
+    queryFn: () => {
+      if (!selectedChunk || !indexQuery.data) throw new Error("No shard selected.");
+      return mosaicmlListSamples({ indexPath: indexQuery.data.indexPath, shardFilename: selectedChunk.filename });
+    },
+  });
+
+  // Query for WDS samples
   const wdsSamplesQuery = useQuery<WdsSampleListResponse>({
-    queryKey: ["wds-samples", wdsDirQuery.data?.dirPath, selectedShard?.filename, wdsOffset, WDS_PAGE_SIZE],
-    enabled: Boolean(isWdsMode && wdsDirQuery.data && selectedShard && !wdsDirQuery.isFetching),
-    queryFn: () =>
-      wdsListSamples({
-        dirPath: wdsDirQuery.data?.dirPath ?? "",
-        shardFilename: selectedShard?.filename ?? "",
+    queryKey: ["wds-samples", selectedShard?.filename ?? null, wdsOffset, requestId],
+    enabled: Boolean(isWdsMode && selectedShard && wdsDirQuery.data),
+    queryFn: () => {
+      if (!selectedShard || !wdsDirQuery.data) throw new Error("No shard selected.");
+      return wdsListSamples({
+        dirPath: wdsDirQuery.data.dirPath,
+        shardFilename: selectedShard.filename,
         offset: wdsOffset,
         length: WDS_PAGE_SIZE,
-      }),
-    staleTime: 5 * 60 * 1000,
-  });
-
-  const itemsQuery = useQuery<ItemMeta[]>({
-    queryKey: ["chunk-items", indexQuery.data?.indexPath, selectedChunk?.filename],
-    enabled: Boolean(isLocalIndexMode && indexQuery.data && selectedChunk && !indexQuery.isFetching),
-    queryFn: () => {
-      if (!mode) throw new Error("No source selected.");
-      if (mode.kind === "mds-index") {
-        return mosaicmlListSamples({
-          indexPath: indexQuery.data?.indexPath ?? "",
-          shardFilename: selectedChunk?.filename ?? "",
-        });
-      }
-      return listChunkItems({
-        indexPath: indexQuery.data?.indexPath ?? "",
-        chunkFilename: selectedChunk?.filename ?? "",
       });
     },
-    staleTime: 5 * 60 * 1000,
   });
 
-  useEffect(() => {
-    if (!isLocalIndexMode) return;
-    const items = itemsQuery.data ?? [];
-    if (!items.length) {
-      selectItem(null);
-      return;
-    }
-    const exists = items.some((item) => item.itemIndex === selectedItemIndex);
-    if (!exists) {
-      selectItem(items[0].itemIndex);
-    }
-  }, [isLocalIndexMode, itemsQuery.data, selectItem, selectedItemIndex]);
-
-  const selectedItem = useMemo(
-    () => itemsQuery.data?.find((item) => item.itemIndex === selectedItemIndex) ?? null,
-    [itemsQuery.data, selectedItemIndex],
-  );
-
-  useEffect(() => {
-    if (!isLocalIndexMode) return;
-    if (!selectedItem) {
-      selectField(null);
-      return;
-    }
-    const exists = selectedItem.fields.some((field) => field.fieldIndex === selectedFieldIndex);
-    if (!exists) {
-      selectField(selectedItem.fields[0]?.fieldIndex ?? null);
-    }
-  }, [isLocalIndexMode, selectField, selectedFieldIndex, selectedItem]);
-
-  const selectedField = useMemo(
-    () => selectedItem?.fields.find((field) => field.fieldIndex === selectedFieldIndex) ?? null,
-    [selectedFieldIndex, selectedItem],
-  );
-
-  const previewQuery = useQuery<FieldPreview>({
-    queryKey: [
-      "field-preview",
-      indexQuery.data?.indexPath,
-      selectedChunk?.filename,
-      selectedItem?.itemIndex,
-      selectedField?.fieldIndex,
-    ],
-    enabled: Boolean(
-      isLocalIndexMode && indexQuery.data && selectedChunk && selectedItem && selectedField && !itemsQuery.isFetching,
-    ),
-    queryFn: () => {
-      if (!mode) throw new Error("No source selected.");
-      if (mode.kind === "mds-index") {
-        return mosaicmlPeekField({
-          indexPath: indexQuery.data?.indexPath ?? "",
-          shardFilename: selectedChunk?.filename ?? "",
-          itemIndex: selectedItem?.itemIndex ?? 0,
-          fieldIndex: selectedField?.fieldIndex ?? 0,
-        });
-      }
-      return peekField({
-        indexPath: indexQuery.data?.indexPath ?? "",
-        chunkFilename: selectedChunk?.filename ?? "",
-        itemIndex: selectedItem?.itemIndex ?? 0,
-        fieldIndex: selectedField?.fieldIndex ?? 0,
-      });
-    },
-    staleTime: 60 * 1000,
-  });
-
-  useEffect(() => {
-    if (!isWdsMode) return;
-    const samples = wdsSamplesQuery.data?.samples ?? [];
-    if (!samples.length) {
-      selectItem(null);
-      return;
-    }
-    const exists = samples.some((sample) => sample.sampleIndex === selectedItemIndex);
-    if (!exists) {
-      selectItem(samples[0].sampleIndex);
-    }
-  }, [isWdsMode, selectItem, selectedItemIndex, wdsSamplesQuery.data?.samples]);
-
-  const selectedWdsSample = useMemo(
-    () => wdsSamplesQuery.data?.samples.find((sample) => sample.sampleIndex === selectedItemIndex) ?? null,
-    [selectedItemIndex, wdsSamplesQuery.data?.samples],
-  );
-
-  useEffect(() => {
-    if (!isWdsMode) return;
-    if (!selectedWdsSample) {
-      selectField(null);
-      return;
-    }
-    const idx = selectedFieldIndex ?? -1;
-    if (idx < 0 || idx >= selectedWdsSample.fields.length) {
-      selectField(selectedWdsSample.fields.length ? 0 : null);
-    }
-  }, [isWdsMode, selectField, selectedFieldIndex, selectedWdsSample]);
-
-  const selectedWdsField = useMemo(() => {
-    if (!selectedWdsSample) return null;
-    const idx = selectedFieldIndex ?? -1;
-    if (idx < 0 || idx >= selectedWdsSample.fields.length) return null;
-    return selectedWdsSample.fields[idx] ?? null;
-  }, [selectedFieldIndex, selectedWdsSample]);
-
-  const wdsPreviewQuery = useQuery<FieldPreview>({
-    queryKey: ["wds-preview", wdsDirQuery.data?.dirPath, selectedShard?.filename, selectedWdsField?.memberPath],
-    enabled: Boolean(isWdsMode && wdsDirQuery.data && selectedShard && selectedWdsField && !wdsSamplesQuery.isFetching),
-    queryFn: () =>
-      wdsPeekMember({
-        dirPath: wdsDirQuery.data?.dirPath ?? "",
-        shardFilename: selectedShard?.filename ?? "",
-        memberPath: selectedWdsField?.memberPath ?? "",
-      }),
-    staleTime: 60 * 1000,
-  });
-
-  const zenodoPreviewQuery = useQuery<FieldPreview>({
-    queryKey: ["zenodo-preview", selectedZenodoFile?.contentUrl ?? null],
-    enabled: Boolean(isZenodoMode && selectedZenodoFile && !zenodoQuery.isFetching && !zenodoIsArchive),
-    queryFn: () => zenodoPeekFile({ contentUrl: selectedZenodoFile?.contentUrl ?? "" }),
-    staleTime: 60 * 1000,
-  });
-
-  const zenodoPreview: FieldPreview | null = useMemo(() => {
-    if (!zenodoPreviewQuery.data || !selectedZenodoFile) return null;
-    return { ...zenodoPreviewQuery.data, size: selectedZenodoFile.size };
-  }, [selectedZenodoFile, zenodoPreviewQuery.data]);
-
-  // CSV parsing for Zenodo CSV files
-  const zenodoCsvParsed = useMemo((): CsvParsed | null => {
-    if (!zenodoIsCsv || !zenodoPreviewQuery.data?.previewText) return null;
-    return parseCsvText(zenodoPreviewQuery.data.previewText);
-  }, [zenodoIsCsv, zenodoPreviewQuery.data?.previewText]);
-
-  const zenodoCsvRows = useMemo(() => zenodoCsvParsed?.rows ?? [], [zenodoCsvParsed?.rows]);
-  const zenodoCsvHeaders = useMemo(() => zenodoCsvParsed?.headers ?? [], [zenodoCsvParsed?.headers]);
-
-  const selectedZenodoCsvRow = useMemo(() => {
-    if (!zenodoCsvRows.length) return null;
-    if (zenodoCsvSelectedRowIndex !== null) {
-      const found = zenodoCsvRows.find((r) => r.rowIndex === zenodoCsvSelectedRowIndex);
-      if (found) return found;
-    }
-    return zenodoCsvRows[0] ?? null;
-  }, [zenodoCsvRows, zenodoCsvSelectedRowIndex]);
-
-  // Auto-select first CSV row when CSV is loaded
-  useEffect(() => {
-    if (!isZenodoMode || !zenodoIsCsv) return;
-    if (!zenodoCsvRows.length) {
-      if (zenodoCsvSelectedRowIndex !== null) selectZenodoCsvRow(null);
-      return;
-    }
-    const exists = zenodoCsvSelectedRowIndex !== null && zenodoCsvRows.some((r) => r.rowIndex === zenodoCsvSelectedRowIndex);
-    if (!exists) {
-      selectZenodoCsvRow(zenodoCsvRows[0]?.rowIndex ?? null);
-    }
-  }, [isZenodoMode, selectZenodoCsvRow, zenodoCsvRows, zenodoCsvSelectedRowIndex, zenodoIsCsv]);
-
-  const zenodoZipEntriesQuery = useQuery<ZenodoZipEntrySummary[]>({
-    queryKey: ["zenodo-zip-entries", selectedZenodoFile?.contentUrl ?? null],
-    enabled: Boolean(isZenodoMode && zenodoIsZip && selectedZenodoFile && !zenodoQuery.isFetching),
-    queryFn: () =>
-      zenodoZipListEntries({
-        contentUrl: selectedZenodoFile?.contentUrl ?? "",
-        filename: selectedZenodoFile?.key ?? "",
-      }),
-    staleTime: 10 * 60 * 1000,
-  });
-
-  const zenodoZipEntries = useMemo(() => zenodoZipEntriesQuery.data ?? [], [zenodoZipEntriesQuery.data]);
-  const zenodoZipEntryPrefix = useMemo(
-    () => commonPathPrefix(zenodoZipEntries.map((e) => e.name)),
-    [zenodoZipEntries],
-  );
+  // Query for Zenodo tar/zip entries
   const zenodoTarEntriesQuery = useQuery<ZenodoTarEntryListResponse>({
-    queryKey: ["zenodo-tar-entries", selectedZenodoFile?.contentUrl ?? null, zenodoEntriesOffset, ZENODO_TAR_PAGE_SIZE],
-    enabled: Boolean(isZenodoMode && zenodoIsTar && selectedZenodoFile && !zenodoQuery.isFetching),
-    queryFn: () =>
-      zenodoTarListEntries({
-        contentUrl: selectedZenodoFile?.contentUrl ?? "",
-        filename: selectedZenodoFile?.key ?? "",
+    queryKey: ["zenodo-tar-entries", selectedZenodoFile?.contentUrl, zenodoEntriesOffset],
+    enabled: Boolean(isZenodoMode && selectedZenodoFile && looksLikeTarFilename(selectedZenodoFile.key)),
+    queryFn: () => {
+      if (!selectedZenodoFile) throw new Error("No file selected.");
+      return zenodoTarListEntries({
+        contentUrl: selectedZenodoFile.contentUrl,
+        filename: selectedZenodoFile.key,
         offset: zenodoEntriesOffset,
         length: ZENODO_TAR_PAGE_SIZE,
-      }),
-    staleTime: 10 * 60 * 1000,
+      });
+    },
+    staleTime: 60 * 1000,
   });
 
-  const zenodoTarEntries = useMemo(() => zenodoTarEntriesQuery.data?.entries ?? [], [zenodoTarEntriesQuery.data?.entries]);
-  const zenodoTarCanPrev = zenodoIsTar && zenodoEntriesOffset > 0;
-  const zenodoTarCanNext =
-    zenodoIsTar &&
-    Boolean(
-      zenodoTarEntriesQuery.data?.partial ||
-        (typeof zenodoTarEntriesQuery.data?.numEntriesTotal === "number" &&
-          zenodoEntriesOffset + ZENODO_TAR_PAGE_SIZE < zenodoTarEntriesQuery.data.numEntriesTotal),
-    );
-  const zenodoTarEntryPrefix = useMemo(
-    () => commonPathPrefix(zenodoTarEntries.map((e) => e.name)),
-    [zenodoTarEntries],
-  );
+  const zenodoZipEntriesQuery = useQuery<ZenodoZipEntrySummary[]>({
+    queryKey: ["zenodo-zip-entries", selectedZenodoFile?.contentUrl],
+    enabled: Boolean(isZenodoMode && selectedZenodoFileIsZip && selectedZenodoFile),
+    queryFn: () => {
+      if (!selectedZenodoFile) throw new Error("No file selected.");
+      return zenodoZipListEntries({ contentUrl: selectedZenodoFile.contentUrl, filename: selectedZenodoFile.key });
+    },
+    staleTime: 60 * 1000,
+  });
 
-  const selectedZenodoEntry = useMemo(() => {
-    if (zenodoIsZip) {
-      if (!zenodoZipEntries.length) return null;
-      if (zenodoSelectedEntryName) {
-        const found = zenodoZipEntries.find((e) => e.name === zenodoSelectedEntryName);
-        if (found) return found;
-      }
-      return zenodoZipEntries.find((e) => !e.isDir) ?? null;
-    }
-    if (zenodoIsTar) {
-      if (!zenodoTarEntries.length) return null;
-      if (zenodoSelectedEntryName) {
-        const found = zenodoTarEntries.find((e) => e.name === zenodoSelectedEntryName);
-        if (found) return found;
-      }
-      return zenodoTarEntries.find((e) => !e.isDir) ?? null;
+  // Selected item
+  const selectedItem = useMemo(() => {
+    if (selectedItemIndex === null) return null;
+    if (isLitdataMode && itemsQuery.data) {
+      return itemsQuery.data.find((item) => item.itemIndex === selectedItemIndex) ?? null;
     }
     return null;
-  }, [zenodoIsTar, zenodoIsZip, zenodoSelectedEntryName, zenodoTarEntries, zenodoZipEntries]);
+  }, [isLitdataMode, itemsQuery.data, selectedItemIndex]);
 
-  useEffect(() => {
-    if (!isZenodoMode || !zenodoIsArchive) return;
-    const entries = zenodoIsZip ? zenodoZipEntries : zenodoTarEntries;
-    if (!entries.length) {
-      if (zenodoSelectedEntryName !== null) selectZenodoEntry(null);
-      return;
-    }
-    const exists = zenodoSelectedEntryName ? entries.some((e) => e.name === zenodoSelectedEntryName) : false;
-    if (!exists) {
-      const first = entries.find((e) => !e.isDir)?.name ?? null;
-      selectZenodoEntry(first);
-    }
-  }, [isZenodoMode, selectZenodoEntry, zenodoIsArchive, zenodoIsZip, zenodoSelectedEntryName, zenodoTarEntries, zenodoZipEntries]);
-
-  const zenodoZipEntryPreviewQuery = useQuery<FieldPreview>({
-    queryKey: ["zenodo-zip-entry-preview", selectedZenodoFile?.contentUrl ?? null, selectedZenodoEntry?.name ?? null],
+  // Query for field preview
+  const fieldPreviewQuery = useQuery<FieldPreview>({
+    queryKey: ["field-preview", selectedChunk?.filename ?? null, selectedItemIndex, selectedFieldIndex, requestId],
     enabled: Boolean(
-      isZenodoMode &&
-        zenodoIsZip &&
-        selectedZenodoFile &&
-        selectedZenodoEntry &&
-        !zenodoZipEntriesQuery.isFetching &&
-        !zenodoQuery.isFetching,
+      isLitdataMode && selectedChunk && selectedItemIndex !== null && selectedFieldIndex !== null && indexQuery.data,
     ),
-    queryFn: () =>
-      zenodoZipPeekEntry({
-        contentUrl: selectedZenodoFile?.contentUrl ?? "",
-        filename: selectedZenodoFile?.key ?? "",
-        entryName: selectedZenodoEntry?.name ?? "",
-      }),
-    staleTime: 60 * 1000,
+    queryFn: () => {
+      if (!selectedChunk || selectedItemIndex === null || selectedFieldIndex === null || !indexQuery.data)
+        throw new Error("No field selected.");
+      return peekField({
+        indexPath: indexQuery.data.indexPath,
+        chunkFilename: selectedChunk.filename,
+        itemIndex: selectedItemIndex,
+        fieldIndex: selectedFieldIndex,
+      });
+    },
   });
 
-  const zenodoZipEntryPreview: FieldPreview | null = useMemo(() => {
-    if (!zenodoZipEntryPreviewQuery.data || !selectedZenodoEntry || !zenodoIsZip) return null;
-    return { ...zenodoZipEntryPreviewQuery.data, size: (selectedZenodoEntry as ZenodoZipEntrySummary).uncompressedSize };
-  }, [selectedZenodoEntry, zenodoIsZip, zenodoZipEntryPreviewQuery.data]);
+  const mdsFieldPreviewQuery = useQuery<FieldPreview>({
+    queryKey: ["mds-field-preview", selectedChunk?.filename ?? null, selectedItemIndex, selectedFieldIndex, requestId],
+    enabled: Boolean(
+      isMdsMode && selectedChunk && selectedItemIndex !== null && selectedFieldIndex !== null && indexQuery.data,
+    ),
+    queryFn: () => {
+      if (!selectedChunk || selectedItemIndex === null || selectedFieldIndex === null || !indexQuery.data)
+        throw new Error("No field selected.");
+      return mosaicmlPeekField({
+        indexPath: indexQuery.data.indexPath,
+        shardFilename: selectedChunk.filename,
+        itemIndex: selectedItemIndex,
+        fieldIndex: selectedFieldIndex,
+      });
+    },
+  });
+
+  const wdsMemberPreviewQuery = useQuery<FieldPreview>({
+    queryKey: ["wds-member-preview", selectedShard?.filename ?? null, wdsSelectedMemberPath ?? null, requestId],
+    enabled: Boolean(isWdsMode && selectedShard && wdsSelectedMemberPath && wdsDirQuery.data),
+    queryFn: () => {
+      if (!selectedShard || !wdsSelectedMemberPath || !wdsDirQuery.data) throw new Error("No member selected.");
+      return wdsPeekMember({
+        dirPath: wdsDirQuery.data.dirPath,
+        shardFilename: selectedShard.filename,
+        memberPath: wdsSelectedMemberPath,
+      });
+    },
+  });
+
+  // Build items list for column 2
+  const items = useMemo(() => (isLitdataMode ? itemsQuery.data ?? [] : []), [isLitdataMode, itemsQuery.data]);
+  const mdsItems = useMemo(() => (isMdsMode ? mdsItemsQuery.data ?? [] : []), [isMdsMode, mdsItemsQuery.data]);
+  const wdsSamples = useMemo(() => (isWdsMode ? wdsSamplesQuery.data?.samples ?? [] : []), [isWdsMode, wdsSamplesQuery.data]);
+
+  const wdsSelectedSample = useMemo(() => {
+    if (!isWdsMode || !wdsSelectedSampleKey) return null;
+    return wdsSamples.find((sample) => sample.key === wdsSelectedSampleKey) ?? null;
+  }, [isWdsMode, wdsSamples, wdsSelectedSampleKey]);
+
+  // Auto-select field by name when switching samples (preserve field selection)
+  useEffect(() => {
+    if (!isWdsMode || !wdsSelectedSample || !wdsSelectedMemberName) return;
+    // Find a field with the same name in the new sample
+    const matchingField = wdsSelectedSample.fields.find((f) => f.name === wdsSelectedMemberName);
+    if (matchingField && matchingField.memberPath !== wdsSelectedMemberPath) {
+      selectWdsMember(matchingField.memberPath, matchingField.name);
+    }
+  }, [isWdsMode, wdsSelectedSample, wdsSelectedMemberName, wdsSelectedMemberPath, selectWdsMember]);
+
+  // HF rows
+  const hfRows = useMemo(() => {
+    if (!isHfMode || !hfQuery.data) return EMPTY_ROWS;
+    return hfQuery.data.rows ?? EMPTY_ROWS;
+  }, [hfQuery.data, isHfMode]);
+
+  const hfSelectedRow = useMemo(() => {
+    if (hfSelectedRowIndex === null || !hfRows.length) return null;
+    return (hfRows[hfSelectedRowIndex] as Record<string, unknown>) ?? null;
+  }, [hfRows, hfSelectedRowIndex]);
+
+  // Zenodo entries
+  const zenodoEntries = useMemo(() => {
+    if (zenodoTarEntriesQuery.data) return zenodoTarEntriesQuery.data.entries;
+    if (zenodoZipEntriesQuery.data) return zenodoZipEntriesQuery.data;
+    return [];
+  }, [zenodoTarEntriesQuery.data, zenodoZipEntriesQuery.data]);
+
+  const selectedZenodoEntry = useMemo(() => {
+    if (!zenodoSelectedEntryName) return null;
+    return zenodoEntries.find((e: ZenodoEntry) => e.name === zenodoSelectedEntryName) ?? null;
+  }, [zenodoEntries, zenodoSelectedEntryName]);
+
+  const zenodoFilePreviewQuery = useQuery<FieldPreview>({
+    queryKey: ["zenodo-file-preview", selectedZenodoFile?.contentUrl ?? null, requestId],
+    enabled: Boolean(isZenodoMode && tauri && selectedZenodoFile && !selectedZenodoFileIsTar && !selectedZenodoFileIsZip),
+    queryFn: () => {
+      if (!selectedZenodoFile) throw new Error("No Zenodo file selected.");
+      return zenodoPeekFile({ contentUrl: selectedZenodoFile.contentUrl });
+    },
+  });
 
   const zenodoTarEntryPreviewQuery = useQuery<FieldPreview>({
-    queryKey: ["zenodo-tar-entry-preview", selectedZenodoFile?.contentUrl ?? null, selectedZenodoEntry?.name ?? null],
-    enabled: Boolean(
-      isZenodoMode &&
-        zenodoIsTar &&
-        selectedZenodoFile &&
-        selectedZenodoEntry &&
-        !zenodoTarEntriesQuery.isFetching &&
-        !zenodoQuery.isFetching,
-    ),
-    queryFn: () =>
-      zenodoTarPeekEntry({
-        contentUrl: selectedZenodoFile?.contentUrl ?? "",
-        filename: selectedZenodoFile?.key ?? "",
-        entryName: selectedZenodoEntry?.name ?? "",
-      }),
-    staleTime: 60 * 1000,
-  });
-
-  const zenodoTarEntryPreview: FieldPreview | null = useMemo(() => {
-    if (!zenodoTarEntryPreviewQuery.data || !selectedZenodoEntry || !zenodoIsTar) return null;
-    return { ...zenodoTarEntryPreviewQuery.data, size: (selectedZenodoEntry as ZenodoTarEntrySummary).size };
-  }, [selectedZenodoEntry, zenodoIsTar, zenodoTarEntryPreviewQuery.data]);
-
-  const [zenodoZipInlineMedia, setZenodoZipInlineMedia] = useState<null | { src: string; mime: string; ext: string }>(
-    null,
-  );
-  const [zenodoZipInlineMediaError, setZenodoZipInlineMediaError] = useState<string | null>(null);
-  const zenodoZipVideoRef = useRef<HTMLVideoElement | null>(null);
-  useEffect(() => {
-    setZenodoZipInlineMediaError(null);
-    setZenodoZipInlineMedia((prev) => {
-      if (prev?.src) URL.revokeObjectURL(prev.src);
-      return null;
-    });
-  }, [selectedZenodoFile?.contentUrl, selectedZenodoEntry?.name]);
-
-  const [zenodoTarInlineMedia, setZenodoTarInlineMedia] = useState<null | { src: string; mime: string; ext: string }>(
-    null,
-  );
-  const [zenodoTarInlineMediaError, setZenodoTarInlineMediaError] = useState<string | null>(null);
-  const zenodoTarVideoRef = useRef<HTMLVideoElement | null>(null);
-  useEffect(() => {
-    setZenodoTarInlineMediaError(null);
-    setZenodoTarInlineMedia((prev) => {
-      if (prev?.src) URL.revokeObjectURL(prev.src);
-      return null;
-    });
-  }, [selectedZenodoFile?.contentUrl, selectedZenodoEntry?.name]);
-
-  const openWithAppMutation = useMutation({
-    mutationFn: (params: { path: string; appPath: string }) => openPathWithApp(params),
-    onSuccess: (message) => setStatusMessage(message),
-    onError: (err: unknown) =>
-      setStatusMessage(err instanceof Error ? err.message : "Unable to open the selected file with the chosen app."),
-  });
-
-  const zenodoZipInlineMediaMutation = useMutation({
-    mutationFn: async () => {
-      if (!selectedZenodoFile) throw new Error("Select a Zenodo ZIP file.");
-      if (!selectedZenodoEntry || selectedZenodoEntry.isDir) throw new Error("Select a ZIP entry.");
-      return zenodoZipInlineEntryMedia({
+    queryKey: ["zenodo-tar-entry-preview", selectedZenodoFile?.contentUrl ?? null, selectedZenodoEntry?.name ?? null, requestId],
+    enabled: Boolean(isZenodoMode && tauri && selectedZenodoFileIsTar && selectedZenodoFile && selectedZenodoEntry && !selectedZenodoEntry.isDir),
+    queryFn: () => {
+      if (!selectedZenodoFile || !selectedZenodoEntry) throw new Error("No Zenodo entry selected.");
+      return zenodoTarPeekEntry({
         contentUrl: selectedZenodoFile.contentUrl,
         filename: selectedZenodoFile.key,
         entryName: selectedZenodoEntry.name,
@@ -1116,10 +961,33 @@ export default function InspectorPage() {
     },
   });
 
-  const zenodoTarInlineMediaMutation = useMutation({
-    mutationFn: async () => {
-      if (!selectedZenodoFile) throw new Error("Select a Zenodo TAR file.");
-      if (!selectedZenodoEntry || (selectedZenodoEntry as ZenodoTarEntrySummary).isDir) throw new Error("Select a TAR entry.");
+  const zenodoZipEntryPreviewQuery = useQuery<FieldPreview>({
+    queryKey: ["zenodo-zip-entry-preview", selectedZenodoFile?.contentUrl ?? null, selectedZenodoEntry?.name ?? null, requestId],
+    enabled: Boolean(isZenodoMode && tauri && selectedZenodoFileIsZip && selectedZenodoFile && selectedZenodoEntry && !selectedZenodoEntry.isDir),
+    queryFn: () => {
+      if (!selectedZenodoFile || !selectedZenodoEntry) throw new Error("No Zenodo entry selected.");
+      return zenodoZipPeekEntry({
+        contentUrl: selectedZenodoFile.contentUrl,
+        filename: selectedZenodoFile.key,
+        entryName: selectedZenodoEntry.name,
+      });
+    },
+  });
+
+  const zenodoTarInlineMediaQuery = useQuery<InlineMediaResponse>({
+    queryKey: ["zenodo-tar-inline-media", selectedZenodoFile?.contentUrl ?? null, selectedZenodoEntry?.name ?? null, zenodoTarEntryPreviewQuery.data?.guessedExt ?? null, requestId],
+    enabled: Boolean(
+      isZenodoMode &&
+        tauri &&
+        selectedZenodoFileIsTar &&
+        selectedZenodoFile &&
+        selectedZenodoEntry &&
+        !selectedZenodoEntry.isDir &&
+        zenodoTarEntryPreviewQuery.data?.guessedExt &&
+        isInlineMediaExt(zenodoTarEntryPreviewQuery.data.guessedExt),
+    ),
+    queryFn: () => {
+      if (!selectedZenodoFile || !selectedZenodoEntry) throw new Error("No Zenodo entry selected.");
       return zenodoTarInlineEntryMedia({
         contentUrl: selectedZenodoFile.contentUrl,
         filename: selectedZenodoFile.key,
@@ -1128,319 +996,124 @@ export default function InspectorPage() {
     },
   });
 
-  const inlineMediaToObjectUrl = async (result: InlineMediaResponse) => {
-    const mime = result.mime || "application/octet-stream";
-    const dataUrl = `data:${mime};base64,${result.base64}`;
-    const blob = await (await fetch(dataUrl)).blob();
-    return { src: URL.createObjectURL(blob), mime, ext: result.ext };
-  };
-
-  const loadZenodoZipInlineMedia = async () => {
-    try {
-      setZenodoZipInlineMediaError(null);
-      const result = await zenodoZipInlineMediaMutation.mutateAsync();
-      const next = await inlineMediaToObjectUrl(result);
-      setZenodoZipInlineMedia((prev) => {
-        if (prev?.src) URL.revokeObjectURL(prev.src);
-        return next;
-      });
-      return next;
-    } catch (err) {
-      let message = "Unable to load media preview.";
-      if (err instanceof Error) {
-        message = err.message || message;
-      } else if (typeof err === "string" && err.trim()) {
-        message = err;
-      } else if (err && typeof err === "object") {
-        const maybe = err as Record<string, unknown>;
-        if (typeof maybe.message === "string" && maybe.message.trim()) {
-          message = maybe.message;
-        } else if (typeof maybe.error === "string" && maybe.error.trim()) {
-          message = maybe.error;
-        } else if (typeof maybe.code === "string" && typeof maybe.message === "string") {
-          message = `${maybe.code}: ${maybe.message}`;
-        }
-      }
-      setZenodoZipInlineMediaError(message);
-      throw err;
-    }
-  };
-
-  const autoplayVideoWhenReady = (ref: React.RefObject<HTMLVideoElement | null>) => {
-    let tries = 0;
-    const maxTries = 12;
-    const tick = () => {
-      tries += 1;
-      const el = ref.current;
-      if (el) {
-        void el.play().catch(() => undefined);
-        return;
-      }
-      if (tries >= maxTries) return;
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  };
-
-  const loadZenodoTarInlineMedia = async () => {
-    try {
-      setZenodoTarInlineMediaError(null);
-      const result = await zenodoTarInlineMediaMutation.mutateAsync();
-      const next = await inlineMediaToObjectUrl(result);
-      setZenodoTarInlineMedia((prev) => {
-        if (prev?.src) URL.revokeObjectURL(prev.src);
-        return next;
-      });
-      return next;
-    } catch (err) {
-      let message = "Unable to load media preview.";
-      if (err instanceof Error) {
-        message = err.message || message;
-      } else if (typeof err === "string" && err.trim()) {
-        message = err;
-      } else if (err && typeof err === "object") {
-        const maybe = err as Record<string, unknown>;
-        if (typeof maybe.message === "string" && maybe.message.trim()) {
-          message = maybe.message;
-        } else if (typeof maybe.error === "string" && maybe.error.trim()) {
-          message = maybe.error;
-        } else if (typeof maybe.code === "string" && typeof maybe.message === "string") {
-          message = `${maybe.code}: ${maybe.message}`;
-        }
-      }
-      setZenodoTarInlineMediaError(message);
-      throw err;
-    }
-  };
-
-  const zenodoOpenEntryMutation = useMutation({
-    mutationFn: async (entry: ZenodoZipEntrySummary) => {
-      if (!selectedZenodoFile) throw new Error("Select a Zenodo ZIP file to open.");
-      if (!entry || entry.isDir) throw new Error("Select a ZIP entry to open.");
-      const guessedExt = extFromFilename(entry.name);
-      const openerAppPath = guessedExt ? await readPreferredOpenerForExt(guessedExt) : null;
-      return zenodoZipOpenEntry({
+  const zenodoZipInlineMediaQuery = useQuery<InlineMediaResponse>({
+    queryKey: ["zenodo-zip-inline-media", selectedZenodoFile?.contentUrl ?? null, selectedZenodoEntry?.name ?? null, zenodoZipEntryPreviewQuery.data?.guessedExt ?? null, requestId],
+    enabled: Boolean(
+      isZenodoMode &&
+        tauri &&
+        selectedZenodoFileIsZip &&
+        selectedZenodoFile &&
+        selectedZenodoEntry &&
+        !selectedZenodoEntry.isDir &&
+        zenodoZipEntryPreviewQuery.data?.guessedExt &&
+        isInlineMediaExt(zenodoZipEntryPreviewQuery.data.guessedExt),
+    ),
+    queryFn: () => {
+      if (!selectedZenodoFile || !selectedZenodoEntry) throw new Error("No Zenodo entry selected.");
+      return zenodoZipInlineEntryMedia({
         contentUrl: selectedZenodoFile.contentUrl,
         filename: selectedZenodoFile.key,
-        entryName: entry.name,
-        openerAppPath,
+        entryName: selectedZenodoEntry.name,
       });
     },
-    onSuccess: (result) => {
-      setStatusMessage(result.message);
-      if (!result.needsOpener) return;
-      void (async () => {
-        const picked = await chooseOpenerApp();
-        if (!picked) return;
-        const extLabel = (result.ext ?? "").trim().replace(/^\\./, "") || "bin";
-        const remember = window.confirm(`Remember this app for .${extLabel} files?`);
-        if (remember) {
-          await savePreferredOpenerForExt(extLabel, picked);
-        }
-        openWithAppMutation.mutate({ path: result.path, appPath: picked });
-      })().catch((err) => setStatusMessage(err instanceof Error ? err.message : "Unable to choose an opener app."));
-    },
-    onError: (err: unknown) =>
-      setStatusMessage(err instanceof Error ? err.message : "Unable to open the selected ZIP entry."),
   });
 
-  const zenodoOpenTarEntryMutation = useMutation({
-    mutationFn: async (entry: ZenodoTarEntrySummary) => {
-      if (!selectedZenodoFile) throw new Error("Select a Zenodo TAR file to open.");
-      if (!entry || entry.isDir) throw new Error("Select a TAR entry to open.");
-      const guessedExt = extFromFilename(entry.name);
-      const openerAppPath = guessedExt ? await readPreferredOpenerForExt(guessedExt) : null;
-      return zenodoTarOpenEntry({
-        contentUrl: selectedZenodoFile.contentUrl,
-        filename: selectedZenodoFile.key,
-        entryName: entry.name,
-        openerAppPath,
-      });
-    },
-    onSuccess: (result) => {
-      setStatusMessage(result.message);
-      if (!result.needsOpener) return;
-      void (async () => {
-        const picked = await chooseOpenerApp();
-        if (!picked) return;
-        const extLabel = (result.ext ?? "").trim().replace(/^\\./, "") || "bin";
-        const remember = window.confirm(`Remember this app for .${extLabel} files?`);
-        if (remember) {
-          await savePreferredOpenerForExt(extLabel, picked);
-        }
-        openWithAppMutation.mutate({ path: result.path, appPath: picked });
-      })().catch((err) => setStatusMessage(err instanceof Error ? err.message : "Unable to choose an opener app."));
-    },
-    onError: (err: unknown) =>
-      setStatusMessage(err instanceof Error ? err.message : "Unable to open the selected TAR entry."),
-  });
+  const zenodoPreviewData =
+    zenodoFilePreviewQuery.data ?? zenodoTarEntryPreviewQuery.data ?? zenodoZipEntryPreviewQuery.data ?? null;
+  const zenodoInlineMediaData = zenodoTarInlineMediaQuery.data ?? zenodoZipInlineMediaQuery.data ?? null;
+  const zenodoPreviewLoading =
+    zenodoFilePreviewQuery.isLoading ||
+    zenodoTarEntryPreviewQuery.isLoading ||
+    zenodoZipEntryPreviewQuery.isLoading ||
+    zenodoTarInlineMediaQuery.isLoading ||
+    zenodoZipInlineMediaQuery.isLoading;
 
-  const zenodoOpenFileMutation = useMutation({
-    mutationFn: async (file: ZenodoFileSummary) => {
-      if (!file) throw new Error("Select a Zenodo file to open.");
-      const guessedExt = extFromFilename(file.key) ?? (zenodoPreviewQuery.data?.guessedExt ?? null);
-      const openerAppPath = guessedExt ? await readPreferredOpenerForExt(guessedExt) : null;
-      return zenodoOpenFile({
-        contentUrl: file.contentUrl,
-        filename: file.key,
-        openerAppPath,
-      });
-    },
-    onSuccess: (result) => {
-      setStatusMessage(result.message);
-      if (!result.needsOpener) return;
-      void (async () => {
-        const picked = await chooseOpenerApp();
-        if (!picked) return;
-        const extLabel = (result.ext ?? "").trim().replace(/^\\./, "") || "bin";
-        const remember = window.confirm(`Remember this app for .${extLabel} files?`);
-        if (remember) {
-          await savePreferredOpenerForExt(extLabel, picked);
-        }
-        openWithAppMutation.mutate({ path: result.path, appPath: picked });
-      })().catch((err) => setStatusMessage(err instanceof Error ? err.message : "Unable to choose an opener app."));
-    },
-    onError: (err: unknown) =>
-      setStatusMessage(err instanceof Error ? err.message : "Unable to open the selected Zenodo file."),
-  });
+  // Field names for selected item
+  const fieldNames = useMemo((): FieldMeta[] => {
+    if (selectedItem) return selectedItem.fields;
+    if (isMdsMode && selectedItemIndex !== null) {
+      const mdsItem = mdsItems.find((item) => item.itemIndex === selectedItemIndex);
+      if (mdsItem) return mdsItem.fields;
+    }
+    return [];
+  }, [isMdsMode, mdsItems, selectedItem, selectedItemIndex]);
 
-  const openFieldMutation = useMutation({
-    mutationFn: async () => {
-      if (!indexQuery.data || !selectedChunk || !selectedItem || !selectedField) {
-        throw new Error("Select a field to open.");
-      }
-      const guessedExt = (previewQuery.data?.guessedExt ?? "").trim().replace(/^\\./, "");
-      const openerAppPath = guessedExt ? await readPreferredOpenerForExt(guessedExt) : null;
-      if (mode?.kind === "mds-index") {
-        return mosaicmlOpenLeaf({
-          indexPath: indexQuery.data.indexPath,
-          shardFilename: selectedChunk.filename,
-          itemIndex: selectedItem.itemIndex,
-          fieldIndex: selectedField.fieldIndex,
-          openerAppPath,
-        });
-      }
-      return openLeaf({
-        indexPath: indexQuery.data.indexPath,
-        chunkFilename: selectedChunk.filename,
-        itemIndex: selectedItem.itemIndex,
-        fieldIndex: selectedField.fieldIndex,
-        openerAppPath,
-      });
-    },
-    onSuccess: (result) => {
-      setStatusMessage(result.message);
-      if (!result.needsOpener) return;
-      void (async () => {
-        const picked = await chooseOpenerApp();
-        if (!picked) return;
-        const extLabel = (result.ext ?? "").trim().replace(/^\\./, "") || "bin";
-        const remember = window.confirm(`Remember this app for .${extLabel} files?`);
-        if (remember) {
-          await savePreferredOpenerForExt(extLabel, picked);
-        }
-        openWithAppMutation.mutate({ path: result.path, appPath: picked });
-      })().catch((err) => setStatusMessage(err instanceof Error ? err.message : "Unable to choose an opener app."));
-    },
-    onError: (err: unknown) => setStatusMessage(err instanceof Error ? err.message : "Unable to open the selected field."),
-  });
-
-  const localAudioPreviewMutation = useMutation({
-    mutationFn: async () => {
-      if (!indexQuery.data || !selectedChunk || !selectedItem || !selectedField) {
-        throw new Error("Select an audio field to preview.");
-      }
-      if (mode?.kind === "mds-index") {
-        return mosaicmlPrepareAudioPreview({
-          indexPath: indexQuery.data.indexPath,
-          shardFilename: selectedChunk.filename,
-          itemIndex: selectedItem.itemIndex,
-          fieldIndex: selectedField.fieldIndex,
-        });
-      }
+  // Audio preview
+  const litdataAudioPreviewQuery = useQuery<{ path: string }>({
+    queryKey: ["audio-preview-litdata", selectedChunk?.filename ?? null, selectedItemIndex, selectedFieldIndex, requestId],
+    enabled: Boolean(isLitdataMode && selectedChunk && selectedItemIndex !== null && selectedFieldIndex !== null && indexQuery.data && fieldPreviewQuery.data?.guessedExt && audioMimeFromExt(fieldPreviewQuery.data.guessedExt)),
+    queryFn: () => {
+      if (!selectedChunk || selectedItemIndex === null || selectedFieldIndex === null || !indexQuery.data)
+        throw new Error("No field selected.");
       return prepareAudioPreview({
         indexPath: indexQuery.data.indexPath,
         chunkFilename: selectedChunk.filename,
-        itemIndex: selectedItem.itemIndex,
-        fieldIndex: selectedField.fieldIndex,
+        itemIndex: selectedItemIndex,
+        fieldIndex: selectedFieldIndex,
       });
     },
-    onError: (err: unknown) =>
-      setStatusMessage(err instanceof Error ? err.message : "Unable to prepare the audio preview."),
   });
 
-  const wdsOpenFieldMutation = useMutation({
-    mutationFn: async () => {
-      if (!wdsDirQuery.data || !selectedShard || !selectedWdsSample || !selectedWdsField) {
-        throw new Error("Select a field to open.");
-      }
-      const guessedExt = (wdsPreviewQuery.data?.guessedExt ?? "").trim().replace(/^\\./, "");
-      const openerAppPath = guessedExt ? await readPreferredOpenerForExt(guessedExt) : null;
-      return wdsOpenMember({
-        dirPath: wdsDirQuery.data.dirPath,
-        shardFilename: selectedShard.filename,
-        memberPath: selectedWdsField.memberPath,
-        openerAppPath,
+  const mdsAudioPreviewQuery = useQuery<{ path: string }>({
+    queryKey: ["audio-preview-mds", selectedChunk?.filename ?? null, selectedItemIndex, selectedFieldIndex, requestId],
+    enabled: Boolean(isMdsMode && selectedChunk && selectedItemIndex !== null && selectedFieldIndex !== null && indexQuery.data && mdsFieldPreviewQuery.data?.guessedExt && audioMimeFromExt(mdsFieldPreviewQuery.data.guessedExt)),
+    queryFn: () => {
+      if (!selectedChunk || selectedItemIndex === null || selectedFieldIndex === null || !indexQuery.data)
+        throw new Error("No field selected.");
+      return mosaicmlPrepareAudioPreview({
+        indexPath: indexQuery.data.indexPath,
+        shardFilename: selectedChunk.filename,
+        itemIndex: selectedItemIndex,
+        fieldIndex: selectedFieldIndex,
       });
     },
-    onSuccess: (result) => {
-      setStatusMessage(result.message);
-      if (!result.needsOpener) return;
-      void (async () => {
-        const picked = await chooseOpenerApp();
-        if (!picked) return;
-        const extLabel = (result.ext ?? "").trim().replace(/^\\./, "") || "bin";
-        const remember = window.confirm(`Remember this app for .${extLabel} files?`);
-        if (remember) {
-          await savePreferredOpenerForExt(extLabel, picked);
-        }
-        openWithAppMutation.mutate({ path: result.path, appPath: picked });
-      })().catch((err) => setStatusMessage(err instanceof Error ? err.message : "Unable to choose an opener app."));
-    },
-    onError: (err: unknown) =>
-      setStatusMessage(err instanceof Error ? err.message : "Unable to open the selected WebDataset field."),
   });
 
-  const wdsAudioPreviewMutation = useMutation({
-    mutationFn: async () => {
-      if (!wdsDirQuery.data || !selectedShard || !selectedWdsField) {
-        throw new Error("Select an audio field to preview.");
-      }
+  const wdsAudioPreviewQuery = useQuery<{ path: string }>({
+    queryKey: ["audio-preview-wds", selectedShard?.filename ?? null, wdsSelectedMemberPath ?? null, requestId],
+    enabled: Boolean(isWdsMode && selectedShard && wdsSelectedMemberPath && wdsDirQuery.data && wdsMemberPreviewQuery.data?.guessedExt && audioMimeFromExt(wdsMemberPreviewQuery.data.guessedExt)),
+    queryFn: () => {
+      if (!selectedShard || !wdsSelectedMemberPath || !wdsDirQuery.data) throw new Error("No member selected.");
       return wdsPrepareAudioPreview({
         dirPath: wdsDirQuery.data.dirPath,
         shardFilename: selectedShard.filename,
-        memberPath: selectedWdsField.memberPath,
+        memberPath: wdsSelectedMemberPath,
       });
     },
-    onError: (err: unknown) =>
-      setStatusMessage(err instanceof Error ? err.message : "Unable to prepare the WebDataset audio preview."),
   });
 
-  const copyText = async (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
+  const audioPreviewPath =
+    litdataAudioPreviewQuery.data?.path ?? mdsAudioPreviewQuery.data?.path ?? wdsAudioPreviewQuery.data?.path ?? null;
+
+  const localPreviewData = fieldPreviewQuery.data ?? mdsFieldPreviewQuery.data ?? wdsMemberPreviewQuery.data ?? null;
+  const localPreviewLoading =
+    fieldPreviewQuery.isLoading || mdsFieldPreviewQuery.isLoading || wdsMemberPreviewQuery.isLoading;
+  const previewMetaSource = localPreviewData ?? zenodoPreviewData;
+
+  const handleOpenResult = async (response: OpenLeafResponse) => {
+    setStatusMessage(response.message);
+    if (!response.needsOpener) return;
+
+    const ext = response.ext.trim();
     try {
-      await navigator.clipboard.writeText(trimmed);
-      setStatusMessage("Copied to clipboard.");
-      return;
-    } catch {
-      // Fall back to execCommand for older WebViews / permissions.
+      const preferred = await readPreferredOpenerForExt(ext);
+      if (preferred) {
+        const message = await openPathWithApp({ path: response.path, appPath: preferred });
+        setStatusMessage(message);
+        return;
+      }
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Unable to open with the preferred app.");
     }
 
     try {
-      const textarea = document.createElement("textarea");
-      textarea.value = trimmed;
-      textarea.setAttribute("readonly", "true");
-      textarea.style.position = "fixed";
-      textarea.style.top = "-9999px";
-      textarea.style.left = "-9999px";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textarea);
-      setStatusMessage("Copied to clipboard.");
-    } catch {
-      setStatusMessage("Copy failed.");
+      const picked = await chooseOpenerApp();
+      if (!picked) return;
+      await savePreferredOpenerForExt(ext, picked);
+      const message = await openPathWithApp({ path: response.path, appPath: picked });
+      setStatusMessage(message);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Unable to open with the selected app.");
     }
   };
 
@@ -1532,218 +1205,25 @@ export default function InspectorPage() {
   };
 
   const totalBytes =
-    indexQuery.data?.chunks?.reduce(
-      (acc, chunk) => acc + (Number.isFinite(chunk.chunkBytes) ? chunk.chunkBytes : 0),
-      0,
-    ) ?? 0;
+    indexQuery.data?.chunks?.reduce((acc, chunk) => acc + (Number.isFinite(chunk.chunkBytes) ? chunk.chunkBytes : 0), 0) ??
+    0;
 
   const totalItems =
-    indexQuery.data?.chunks?.reduce(
-      (acc, chunk) => acc + (Number.isFinite(chunk.chunkSize) ? chunk.chunkSize : 0),
-      0,
-    ) ?? 0;
+    indexQuery.data?.chunks?.reduce((acc, chunk) => acc + (Number.isFinite(chunk.chunkSize) ? chunk.chunkSize : 0), 0) ??
+    0;
 
   const wdsTotalBytes =
     wdsDirQuery.data?.shards?.reduce((acc, shard) => acc + (Number.isFinite(shard.bytes) ? shard.bytes : 0), 0) ?? 0;
 
   const hfSplitPairs = useMemo(() => {
-    const configs =
-      hfQuery.data?.configs ?? (hfSplitsCache?.input === hfDatasetInput ? hfSplitsCache.configs : []);
+    // Prefer cached configs (always non-empty after initial load).
+    // Pagination responses have empty configs array, so we fall back to cache.
+    const cachedConfigs = hfSplitsCache?.input === hfDatasetInput ? hfSplitsCache.configs : [];
+    const configs = cachedConfigs.length > 0 ? cachedConfigs : (hfQuery.data?.configs ?? []);
     return configs.flatMap((c) => c.splits.map((s) => ({ config: c.config, split: s })));
   }, [hfDatasetInput, hfQuery.data?.configs, hfSplitsCache]);
 
-  const hfSelectedPairKey =
-    hfConfigOverride && hfSplitOverride
-      ? `${hfConfigOverride}:${hfSplitOverride}`
-      : hfQuery.data
-        ? `${hfQuery.data.config}:${hfQuery.data.split}`
-        : hfSelectedCache?.input === hfDatasetInput
-          ? `${hfSelectedCache.config}:${hfSelectedCache.split}`
-          : null;
-
-  const hfSelectedSplitLabel = useMemo(() => {
-    const selectedConfig = (hfConfigOverride ?? hfQuery.data?.config ?? hfSelectedCache?.config ?? "").trim();
-    const selectedSplit = (hfSplitOverride ?? hfQuery.data?.split ?? hfSelectedCache?.split ?? "").trim();
-    if (!selectedConfig || !selectedSplit) return "—";
-    return `${selectedConfig}/${selectedSplit}`;
-  }, [hfConfigOverride, hfQuery.data?.config, hfQuery.data?.split, hfSelectedCache?.config, hfSelectedCache?.split, hfSplitOverride]);
-
-  const hfRows = useMemo(() => hfQuery.data?.rows ?? EMPTY_ROWS, [hfQuery.data?.rows]);
-  const derivedSelectedRowIndex =
-    hfSelectedRowIndex !== null && hfSelectedRowIndex >= hfOffset && hfSelectedRowIndex < hfOffset + hfRows.length
-      ? hfSelectedRowIndex
-      : hfRows.length
-        ? hfOffset
-        : null;
-  const hfSelectedRow =
-    derivedSelectedRowIndex === null ? null : (hfRows[derivedSelectedRowIndex - hfOffset] as unknown);
-
-  const hfFeatures = useMemo(() => hfQuery.data?.features ?? EMPTY_HF_FEATURES, [hfQuery.data?.features]);
-  const derivedSelectedFieldName = useMemo(() => {
-    const names = new Set(hfFeatures.map((f) => f.name));
-    if (hfSelectedFieldName && names.has(hfSelectedFieldName)) return hfSelectedFieldName;
-    return hfFeatures[0]?.name ?? null;
-  }, [hfFeatures, hfSelectedFieldName]);
-
-  const hfSelectedFeature = useMemo(() => {
-    if (!derivedSelectedFieldName) return null;
-    return hfFeatures.find((feature) => feature.name === derivedSelectedFieldName) ?? null;
-  }, [derivedSelectedFieldName, hfFeatures]);
-
-  const hfSelectedValue = useMemo(() => {
-    if (!hfSelectedRow || !derivedSelectedFieldName) return null;
-    if (typeof hfSelectedRow !== "object" || hfSelectedRow === null) return null;
-    const rowObj = hfSelectedRow as Record<string, unknown>;
-    return rowObj[derivedSelectedFieldName] ?? null;
-  }, [derivedSelectedFieldName, hfSelectedRow]);
-
-  const hfOpenMutation = useMutation({
-    mutationFn: async (fieldName: string) => {
-      if (!mode || mode.kind !== "huggingface") {
-        throw new Error("Select a Hugging Face dataset to open.");
-      }
-      const rowIndex = derivedSelectedRowIndex;
-      if (rowIndex === null) {
-        throw new Error("Select a row to open a field.");
-      }
-      if (!hfQuery.data) {
-        throw new Error("Dataset not loaded.");
-      }
-      const value =
-        hfSelectedRow && typeof hfSelectedRow === "object" && hfSelectedRow !== null
-          ? (hfSelectedRow as Record<string, unknown>)[fieldName]
-          : null;
-      const ext = guessHfFieldExt(value);
-      const openerAppPath = ext ? await readPreferredOpenerForExt(ext) : null;
-      return hfOpenField({
-        input: mode.input,
-        config: hfQuery.data.config,
-        split: hfQuery.data.split,
-        rowIndex,
-        fieldName,
-        openerAppPath,
-        token: hfToken,
-      });
-    },
-    onSuccess: (result) => {
-      setStatusMessage(result.message);
-      if (!result.needsOpener) return;
-      void (async () => {
-        const picked = await chooseOpenerApp();
-        if (!picked) return;
-        const extLabel = (result.ext ?? "").trim().replace(/^\./, "") || "bin";
-        const remember = window.confirm(`Remember this app for .${extLabel} files?`);
-        if (remember) {
-          await savePreferredOpenerForExt(extLabel, picked);
-        }
-        openWithAppMutation.mutate({ path: result.path, appPath: picked });
-      })().catch((err) => setStatusMessage(err instanceof Error ? err.message : "Unable to choose an opener app."));
-    },
-    onError: (err: unknown) =>
-      setStatusMessage(err instanceof Error ? err.message : "Unable to open the selected Hugging Face field."),
-  });
-
-  const canPaginateHf = Boolean(hfQuery.data && !hfQuery.isFetching);
-  const hfCanPrev = canPaginateHf && hfOffset > 0;
-  const hfCanNext =
-    canPaginateHf &&
-    (hfQuery.data?.partial ? hfRows.length === HF_PAGE_SIZE : hfOffset + hfRows.length < (hfQuery.data?.numRowsTotal ?? 0));
-
-  const handleHfJump = () => {
-    const raw = hfOffsetDraft.trim();
-    if (!raw) {
-      setHfOffsetDraft(String(hfOffset));
-      return;
-    }
-    const parsed = Number.parseInt(raw, 10);
-    if (!Number.isFinite(parsed)) {
-      setHfOffsetDraft(String(hfOffset));
-      return;
-    }
-    const max = Math.max(0, (hfQuery.data?.numRowsTotal ?? 0) - 1);
-    const clamped = Math.min(Math.max(0, parsed), max);
-    setHfOffsetDraft(String(clamped));
-    setHfOffset(clamped);
-    selectHfRow(null);
-  };
-
-  const wdsPageSamples = useMemo(() => wdsSamplesQuery.data?.samples ?? [], [wdsSamplesQuery.data?.samples]);
-  const canPaginateWds = Boolean(isWdsMode && wdsSamplesQuery.data && !wdsSamplesQuery.isFetching);
-  const wdsCanPrev = canPaginateWds && wdsOffset > 0;
-  const wdsTotal = wdsSamplesQuery.data?.numSamplesTotal ?? null;
-  const wdsCanNext =
-    canPaginateWds &&
-    (wdsTotal !== null ? wdsOffset + wdsPageSamples.length < wdsTotal : wdsPageSamples.length === WDS_PAGE_SIZE);
-
-  const busy =
-    indexQuery.isFetching ||
-    itemsQuery.isFetching ||
-    previewQuery.isFetching ||
-    wdsDirQuery.isFetching ||
-    wdsSamplesQuery.isFetching ||
-    wdsPreviewQuery.isFetching ||
-    zenodoQuery.isFetching ||
-    zenodoPreviewQuery.isFetching ||
-    zenodoZipEntriesQuery.isFetching ||
-    zenodoZipEntryPreviewQuery.isFetching ||
-    hfQuery.isFetching ||
-    zenodoOpenFileMutation.isPending ||
-    zenodoOpenEntryMutation.isPending ||
-    hfOpenMutation.isPending ||
-    openFieldMutation.isPending ||
-    localAudioPreviewMutation.isPending ||
-    wdsOpenFieldMutation.isPending ||
-    wdsAudioPreviewMutation.isPending ||
-    openWithAppMutation.isPending;
-  const latestError =
-    indexQuery.error ||
-    itemsQuery.error ||
-    previewQuery.error ||
-    wdsDirQuery.error ||
-    wdsSamplesQuery.error ||
-    wdsPreviewQuery.error ||
-    zenodoQuery.error ||
-    zenodoPreviewQuery.error ||
-    zenodoZipEntriesQuery.error ||
-    zenodoZipEntryPreviewQuery.error ||
-    hfQuery.error ||
-    zenodoOpenFileMutation.error ||
-    zenodoOpenEntryMutation.error ||
-    hfOpenMutation.error ||
-    openFieldMutation.error ||
-    localAudioPreviewMutation.error ||
-    wdsOpenFieldMutation.error ||
-    wdsAudioPreviewMutation.error ||
-    openWithAppMutation.error ||
-    undefined;
-  const errorMessage = useMemo(() => {
-    if (!latestError) return null;
-    if (latestError instanceof Error) return latestError.message;
-    if (typeof latestError === "string") return latestError;
-    if (typeof latestError === "object" && latestError !== null) {
-      const maybe = latestError as Record<string, unknown>;
-      if (typeof maybe.message === "string" && maybe.message.trim()) return maybe.message;
-      if (typeof maybe.error === "string" && maybe.error.trim()) return maybe.error;
-      if (typeof maybe.code === "string" && typeof maybe.message === "string") return `${maybe.code}: ${maybe.message}`;
-      try {
-        return JSON.stringify(latestError);
-      } catch {
-        return String(latestError);
-      }
-    }
-    return String(latestError);
-  }, [latestError]);
-  const authHint =
-    errorMessage && errorMessage.toLowerCase().includes("authentication")
-      ? "This dataset may be private or gated. Set a Hugging Face access token to continue."
-      : null;
-  const logMessage = errorMessage ? `${errorMessage}${authHint ? `\n${authHint}` : ""}` : statusMessage ?? "Idle";
-
-  useEffect(() => {
-    if (errorMessage) setLogDockOpen(true);
-  }, [errorMessage]);
-
-  const effectiveKind: Exclude<SourceKind, "auto"> =
+  const effectiveKind: EffectiveKind =
     chunkSelection.length > 0
       ? "litdata"
       : sourceKind === "auto"
@@ -1771,15 +1251,69 @@ export default function InspectorPage() {
               ? "MosaicML MDS index.json (or a .mds shard)"
               : "LitData index.json (or a .bin shard)";
 
-  const loadIcon =
-    effectiveKind === "hf" ? (
-      <Database className="mr-2 h-4 w-4" />
-    ) : effectiveKind === "zenodo" ? (
-      <BadgeInfo className="mr-2 h-4 w-4" />
-    ) : (
-      <HardDrive className="mr-2 h-4 w-4" />
-    );
-  const loadLabel = "Load";
+  const busy =
+    indexQuery.isFetching ||
+    wdsDirQuery.isFetching ||
+    zenodoQuery.isFetching ||
+    hfQuery.isFetching ||
+    zenodoTarEntriesQuery.isFetching ||
+    zenodoZipEntriesQuery.isFetching ||
+    zenodoFilePreviewQuery.isFetching ||
+    zenodoTarEntryPreviewQuery.isFetching ||
+    zenodoZipEntryPreviewQuery.isFetching ||
+    zenodoTarInlineMediaQuery.isFetching ||
+    zenodoZipInlineMediaQuery.isFetching ||
+    itemsQuery.isFetching ||
+    mdsItemsQuery.isFetching ||
+    wdsSamplesQuery.isFetching ||
+    fieldPreviewQuery.isFetching ||
+    mdsFieldPreviewQuery.isFetching ||
+    wdsMemberPreviewQuery.isFetching ||
+    litdataAudioPreviewQuery.isFetching ||
+    mdsAudioPreviewQuery.isFetching ||
+    wdsAudioPreviewQuery.isFetching;
+
+  const latestError =
+    indexQuery.error ||
+    wdsDirQuery.error ||
+    zenodoQuery.error ||
+    hfQuery.error ||
+    zenodoTarEntriesQuery.error ||
+    zenodoZipEntriesQuery.error ||
+    zenodoFilePreviewQuery.error ||
+    zenodoTarEntryPreviewQuery.error ||
+    zenodoZipEntryPreviewQuery.error ||
+    zenodoTarInlineMediaQuery.error ||
+    zenodoZipInlineMediaQuery.error ||
+    itemsQuery.error ||
+    mdsItemsQuery.error ||
+    wdsSamplesQuery.error ||
+    fieldPreviewQuery.error ||
+    mdsFieldPreviewQuery.error ||
+    wdsMemberPreviewQuery.error ||
+    litdataAudioPreviewQuery.error ||
+    mdsAudioPreviewQuery.error ||
+    wdsAudioPreviewQuery.error ||
+    undefined;
+  const errorMessage = useMemo(() => {
+    if (!latestError) return null;
+    if (latestError instanceof Error) return latestError.message;
+    if (typeof latestError === "string") return latestError;
+    // Handle Tauri AppError objects: { code: "...", message: "..." }
+    if (typeof latestError === "object" && latestError !== null) {
+      const err = latestError as Record<string, unknown>;
+      if (typeof err.message === "string") return err.message;
+      try {
+        return JSON.stringify(latestError);
+      } catch {
+        // fall through
+      }
+    }
+    return String(latestError);
+  }, [latestError]);
+
+  const logMessage = errorMessage ? errorMessage : statusMessage ?? "Idle";
+
   const showHfStats = isHfMode || effectiveKind === "hf";
   const showZenodoStats = isZenodoMode || effectiveKind === "zenodo";
   const datasetPreviewLabel = hfQuery.data?.dataset ?? (showHfStats ? displayHfDatasetId(sourceInput) ?? "—" : "—");
@@ -1790,2605 +1324,1125 @@ export default function InspectorPage() {
     const v = version.replace(/^[vV]/, "");
     return v ? `Version ${v}` : "—";
   }, [zenodoQuery.data?.version]);
-  const localFieldKey = useMemo(() => {
-    if (!indexQuery.data || !selectedChunk || !selectedItem || !selectedField) return null;
-    return `${indexQuery.data.indexPath}|${selectedChunk.filename}|${selectedItem.itemIndex}|${selectedField.fieldIndex}`;
-  }, [indexQuery.data, selectedChunk, selectedField, selectedItem]);
-  const wdsFieldKey = useMemo(() => {
-    if (!wdsDirQuery.data || !selectedShard || !selectedWdsField) return null;
-    return `${wdsDirQuery.data.dirPath}|${selectedShard.filename}|${selectedWdsField.memberPath}`;
-  }, [selectedShard, selectedWdsField, wdsDirQuery.data]);
 
-  const localAudioLabel = useMemo(() => {
-    if (!selectedChunk || !selectedItem || !selectedField) return "Local audio preview";
-    const format = indexQuery.data?.dataFormat[selectedField.fieldIndex] ?? "field";
-    return `${selectedChunk.filename} · item ${selectedItem.itemIndex} · ${format}`;
-  }, [indexQuery.data?.dataFormat, selectedChunk, selectedField, selectedItem]);
+  const hfSelectedSplitLabel = useMemo(() => {
+    const selectedConfig = (hfConfigOverride ?? hfQuery.data?.config ?? hfSelectedCache?.config ?? "").trim();
+    const selectedSplit = (hfSplitOverride ?? hfQuery.data?.split ?? hfSelectedCache?.split ?? "").trim();
+    if (!selectedConfig || !selectedSplit) return "—";
+    return `${selectedConfig}/${selectedSplit}`;
+  }, [hfConfigOverride, hfQuery.data?.config, hfQuery.data?.split, hfSelectedCache?.config, hfSelectedCache?.split, hfSplitOverride]);
 
-  const wdsAudioLabel = useMemo(() => {
-    if (!selectedShard || !selectedWdsSample || !selectedWdsField) return "WebDataset audio preview";
-    return `${selectedShard.filename} · ${selectedWdsSample.key} · ${selectedWdsField.name}`;
-  }, [selectedShard, selectedWdsField, selectedWdsSample]);
-
-  const zenodoAudioLabel = useMemo(() => {
-    const entry = selectedZenodoEntry?.name ?? selectedZenodoFile?.key ?? "Zenodo audio preview";
-    return entry;
-  }, [selectedZenodoEntry?.name, selectedZenodoFile?.key]);
-
-  const zenodoInspectorSubtitle = useMemo(() => {
-    if (!selectedZenodoFile) return "Select a file to inspect.";
-    if (zenodoIsArchive) {
-      if (selectedZenodoEntry?.name) return `Entry ${selectedZenodoEntry.name}`;
-      return "Select an entry to inspect.";
-    }
-    return selectedZenodoFile.key;
-  }, [selectedZenodoEntry?.name, selectedZenodoFile, zenodoIsArchive]);
-
-  const wdsInspectorSubtitle = useMemo(() => {
-    if (!selectedWdsSample) return "Select a sample to inspect.";
-    const parts = [`Sample ${selectedWdsSample.sampleIndex}`];
-    if (selectedWdsField?.name) parts.push(selectedWdsField.name);
-    return parts.join(" · ");
-  }, [selectedWdsField?.name, selectedWdsSample]);
-
-  const localInspectorSubtitle = useMemo(() => {
-    if (!selectedItem) return isMdsMode ? "Select a sample to inspect." : "Select an item to inspect.";
-    const label = isMdsMode ? "Sample" : "Item";
-    const parts = [`${label} ${selectedItem.itemIndex}`];
-    if (selectedField) parts.push(`Field #${selectedField.fieldIndex}`);
-    return parts.join(" · ");
-  }, [isMdsMode, selectedField, selectedItem]);
-
-  const localPreviewMeta = useMemo(() => {
-    const out: string[] = [];
-    if (selectedField) {
-      const format = indexQuery.data?.dataFormat[selectedField.fieldIndex] ?? "unknown";
-      if (format) out.push(format);
-      if (Number.isFinite(selectedField.size)) out.push(formatBytes(selectedField.size));
-    }
-    const previewMeta = buildPreviewMeta(previewQuery.data ?? null);
-    previewMeta.forEach((item) => {
-      if (!out.includes(item)) out.push(item);
-    });
-    return out;
-  }, [indexQuery.data?.dataFormat, previewQuery.data, selectedField]);
-
-  const wdsPreviewMeta = useMemo(() => {
-    const out: string[] = [];
-    if (selectedWdsField) {
-      const ext = extFromFilename(selectedWdsField.name);
-      if (ext) out.push(`.${ext}`);
-      if (Number.isFinite(selectedWdsField.size)) out.push(formatBytes(selectedWdsField.size));
-    }
-    const previewMeta = buildPreviewMeta(wdsPreviewQuery.data ?? null);
-    previewMeta.forEach((item) => {
-      if (!out.includes(item)) out.push(item);
-    });
-    return out;
-  }, [selectedWdsField, wdsPreviewQuery.data]);
-
-  const zenodoActivePreview = useMemo(() => {
-    if (zenodoIsZip) return zenodoZipEntryPreview;
-    if (zenodoIsTar) return zenodoTarEntryPreview;
-    return zenodoPreview;
-  }, [zenodoIsTar, zenodoIsZip, zenodoPreview, zenodoTarEntryPreview, zenodoZipEntryPreview]);
-
-  const zenodoPreviewMeta = useMemo(() => {
-    const out: string[] = [];
-    const ext =
-      (zenodoIsZip || zenodoIsTar) && selectedZenodoEntry
-        ? extFromFilename(selectedZenodoEntry.name)
-        : selectedZenodoFile
-          ? extFromFilename(selectedZenodoFile.key)
-          : null;
-    if (ext) out.push(`.${ext}`);
-    const sizeBytes =
-      (zenodoIsZip && selectedZenodoEntry && !selectedZenodoEntry.isDir
-        ? (selectedZenodoEntry as ZenodoZipEntrySummary).uncompressedSize
-        : zenodoIsTar && selectedZenodoEntry && !selectedZenodoEntry.isDir
-          ? (selectedZenodoEntry as ZenodoTarEntrySummary).size
-          : selectedZenodoFile?.size) ?? null;
-    if (sizeBytes !== null && Number.isFinite(sizeBytes)) out.push(formatBytes(sizeBytes));
-    const previewMeta = buildPreviewMeta(zenodoActivePreview ?? null);
-    previewMeta.forEach((item) => {
-      if (!out.includes(item)) out.push(item);
-    });
-    return out;
-  }, [selectedZenodoEntry, selectedZenodoFile, zenodoActivePreview, zenodoIsTar, zenodoIsZip]);
-
-  const hfPreviewMeta = useMemo(() => {
-    const out: string[] = [];
-    if (hfSelectedFeature?.dtype) out.push(hfSelectedFeature.dtype);
-    if (derivedSelectedFieldName) out.push(derivedSelectedFieldName);
-    if (derivedSelectedRowIndex !== null) out.push(`row ${derivedSelectedRowIndex}`);
-    return out;
-  }, [derivedSelectedFieldName, derivedSelectedRowIndex, hfSelectedFeature?.dtype]);
-
-  const hfExplorerMeta = useMemo(() => {
-    const out: string[] = [];
-    if (hfSelectedSplitLabel !== "—") out.push(hfSelectedSplitLabel);
-    if (derivedSelectedRowIndex !== null) out.push(`row ${derivedSelectedRowIndex}`);
-    if (derivedSelectedFieldName) out.push(derivedSelectedFieldName);
-    return out;
-  }, [derivedSelectedFieldName, derivedSelectedRowIndex, hfSelectedSplitLabel]);
-
-  const zenodoExplorerMeta = useMemo(() => {
-    const out: string[] = [];
-    if (selectedZenodoFile?.key) out.push(selectedZenodoFile.key.split(/[\\/]/).pop() ?? selectedZenodoFile.key);
-    if (zenodoIsArchive && selectedZenodoEntry?.name) {
-      out.push(selectedZenodoEntry.name.split(/[\\/]/).pop() ?? selectedZenodoEntry.name);
-    }
-    return out;
-  }, [selectedZenodoEntry?.name, selectedZenodoFile?.key, zenodoIsArchive]);
-
-  const wdsExplorerMeta = useMemo(() => {
-    const out: string[] = [];
-    if (selectedShard?.filename) out.push(selectedShard.filename);
-    if (selectedWdsSample?.key) out.push(selectedWdsSample.key);
-    if (selectedWdsField?.name) out.push(selectedWdsField.name);
-    return out;
-  }, [selectedShard?.filename, selectedWdsField?.name, selectedWdsSample?.key]);
-
-  const localExplorerMeta = useMemo(() => {
-    const out: string[] = [];
-    if (selectedChunk?.filename) out.push(selectedChunk.filename);
-    if (selectedItem) out.push(`${isMdsMode ? "sample" : "item"} ${selectedItem.itemIndex}`);
-    if (selectedField) {
-      const format = indexQuery.data?.dataFormat[selectedField.fieldIndex] ?? null;
-      out.push(format ? `#${selectedField.fieldIndex} ${format}` : `#${selectedField.fieldIndex}`);
-    }
-    return out;
-  }, [indexQuery.data?.dataFormat, isMdsMode, selectedChunk?.filename, selectedField, selectedItem]);
-
-  const cardGridVariants = {
-    hidden: { opacity: 0 },
-    show: {
-      opacity: 1,
-      transition: { staggerChildren: 0.08 },
+  const headerStatsKind: "hf" | "zenodo" | "wds" | "local" = showHfStats ? "hf" : showZenodoStats ? "zenodo" : isWdsMode ? "wds" : "local";
+  const headerStats = {
+    hf: {
+      datasetLabel: datasetPreviewLabel,
+      splitLabel: hfSelectedSplitLabel,
+      rowsLabel:
+        hfQuery.data && hfQuery.data.numRowsTotal !== null && hfQuery.data.numRowsTotal !== undefined
+          ? hfQuery.data.numRowsTotal.toLocaleString()
+          : "—",
     },
-  };
-  const panelVariants = {
-    hidden: { opacity: 0, y: 12, scale: 0.98 },
-    show: {
-      opacity: 1,
-      y: 0,
-      scale: 1,
-      transition: {
-        type: "spring",
-        stiffness: 300,
-        damping: 30,
-      },
+    zenodo: {
+      recordLabel: zenodoRecordLabel,
+      filesLabel: String(zenodoQuery.data?.files.length ?? "—"),
+      sizeLabel: zenodoTotalBytes ? formatBytes(zenodoTotalBytes) : "—",
+    },
+    wds: {
+      shardsLabel: String(wdsDirQuery.data?.shards.length ?? "—"),
+      sizeLabel: wdsTotalBytes ? formatBytes(wdsTotalBytes) : "—",
+    },
+    local: {
+      shardsLabel: String(indexQuery.data?.chunks.length ?? "—"),
+      itemsLabel: totalItems ? totalItems.toLocaleString() : "—",
+      sizeLabel: totalBytes ? formatBytes(totalBytes) : "—",
     },
   };
 
-  const renderLocalPreview = () => {
-    if (previewQuery.isFetching && !previewQuery.data) return <Skeleton className="h-full w-full rounded-xl" />;
-    if (previewQuery.data) {
-      return (
-        <PreviewPanel
-          key={localFieldKey ?? "preview"}
-          preview={previewQuery.data}
-          onCopy={copyText}
-          onOpen={() => openFieldMutation.mutate()}
-          openDisabled={busy || !tauri}
-          openTooltip={tauri ? "Open in default app" : "Opening requires the Tauri runtime."}
-          audioLabel={localAudioLabel}
-          onAudioError={() => setLogDockOpen(true)}
-          onRequestAudioPreview={
-            localFieldKey
-              ? async () => {
-                  const prepared = await localAudioPreviewMutation.mutateAsync();
-                  return {
-                    src: toFileSrc(prepared.path),
-                    ext: prepared.ext,
-                  };
-                }
-              : null
-          }
-        />
-      );
+  const [filterLevel1, setFilterLevel1] = useState("");
+  const [filterLevel2, setFilterLevel2] = useState("");
+  const [filterLevel3, setFilterLevel3] = useState("");
+  const level1Needle = useMemo(() => normalizeFilter(filterLevel1), [filterLevel1]);
+  const level2Needle = useMemo(() => normalizeFilter(filterLevel2), [filterLevel2]);
+  const level3Needle = useMemo(() => normalizeFilter(filterLevel3), [filterLevel3]);
+
+  useEffect(() => {
+    setFilterLevel1("");
+    setFilterLevel2("");
+    setFilterLevel3("");
+  }, [requestId]);
+
+  const [hfOffsetDraft, setHfOffsetDraft] = useState(String(hfOffset));
+  useEffect(() => {
+    setHfOffsetDraft(String(hfOffset));
+  }, [hfOffset, requestId]);
+
+  const commitHfOffset = () => {
+    const trimmed = hfOffsetDraft.trim();
+    if (!trimmed) {
+      setHfOffsetDraft(String(hfOffset));
+      return;
     }
-    return <EmptyState hint="Pick a field to preview its bytes." />;
+    const parsed = Number.parseInt(trimmed, 10);
+    if (!Number.isFinite(parsed)) {
+      setHfOffsetDraft(String(hfOffset));
+      return;
+    }
+    setHfOffset(parsed);
   };
 
-  const renderWdsPreview = () => {
-    if (wdsPreviewQuery.isFetching && !wdsPreviewQuery.data) return <Skeleton className="h-full w-full rounded-xl" />;
-    if (wdsPreviewQuery.data) {
-      return (
-        <PreviewPanel
-          key={wdsFieldKey ?? "wds-preview"}
-          preview={wdsPreviewQuery.data}
-          onCopy={copyText}
-          onOpen={() => wdsOpenFieldMutation.mutate()}
-          openDisabled={busy || !tauri}
-          openTooltip={tauri ? "Open in default app" : "Opening requires the Tauri runtime."}
-          audioLabel={wdsAudioLabel}
-          onAudioError={() => setLogDockOpen(true)}
-          onRequestAudioPreview={
-            wdsFieldKey
-              ? async () => {
-                  const prepared = await wdsAudioPreviewMutation.mutateAsync();
-                  return {
-                    src: toFileSrc(prepared.path),
-                    ext: prepared.ext,
-                  };
-                }
-              : null
-          }
-        />
-      );
-    }
-    return <EmptyState hint="Pick a field to preview its bytes." />;
-  };
+  const headerLoadIcon: ReactNode = busy ? (
+    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+  ) : effectiveKind === "hf" ? (
+    <Database className="mr-2 h-4 w-4" />
+  ) : effectiveKind === "zenodo" ? (
+    <BadgeInfo className="mr-2 h-4 w-4" />
+  ) : (
+    <HardDrive className="mr-2 h-4 w-4" />
+  );
 
-  const renderHfPreview = () => {
-    if (hfQuery.isFetching && !hfQuery.data) return <Skeleton className="h-full w-full rounded-xl" />;
-    if (hfSelectedRow && derivedSelectedFieldName) {
-      return (
-        <JsonPreviewPanel
-          title={`${derivedSelectedFieldName}`}
-          value={hfSelectedValue}
-          onCopy={() => copyText(safeJson(hfSelectedValue))}
-          onOpen={() => hfOpenMutation.mutate(derivedSelectedFieldName)}
-          openDisabled={busy || !tauri}
-          openTooltip={tauri ? "Open in default app" : "Opening requires the Tauri runtime."}
-        />
-      );
-    }
-    return <EmptyState hint="Pick a row and field to preview." />;
-  };
+  const hasDetection = sourceInput.trim() || chunkSelection.length > 0;
+  const detectedBadgeLabel =
+    effectiveKind === "hf"
+      ? "Hugging Face"
+      : effectiveKind === "zenodo"
+        ? "Zenodo"
+        : effectiveKind === "wds"
+          ? "WebDataset"
+          : effectiveKind === "mds"
+            ? "MosaicML MDS"
+            : "LitData";
 
-  const renderZenodoPreview = () => {
-    const isAudioExt = (ext: string | null) =>
-      Boolean(ext && ["wav", "mp3", "flac", "m4a", "ogg", "opus", "aac"].includes(ext));
+  const detectedDescription =
+    effectiveKind === "hf"
+      ? displayHfDatasetId(sourceInput) ?? "Streaming dataset from Hugging Face Hub"
+      : effectiveKind === "zenodo"
+        ? "Remote archive from Zenodo repository"
+        : effectiveKind === "wds"
+          ? "Local WebDataset shards (.tar)"
+          : effectiveKind === "mds"
+            ? "Local MosaicML streaming dataset"
+            : "Local LitData optimized dataset";
 
-    const isVideoExt = (ext: string | null) =>
-      Boolean(ext && ["mp4", "webm", "mov", "m4v"].includes(ext));
+  const level1Pending = isHfMode ? hfQuery.isPending : isZenodoMode ? zenodoQuery.isPending : isWdsMode ? wdsDirQuery.isPending : indexQuery.isPending;
+  const selectedHfConfig = hfConfigOverride ?? hfQuery.data?.config ?? hfSelectedCache?.config ?? null;
+  const selectedHfSplit = hfSplitOverride ?? hfQuery.data?.split ?? hfSelectedCache?.split ?? null;
 
-    const fileExt = selectedZenodoFile ? extFromFilename(selectedZenodoFile.key) : null;
-    const entryExt = selectedZenodoEntry ? extFromFilename(selectedZenodoEntry.name) : null;
-    const directExt = zenodoIsArchive ? null : fileExt;
-    const zipExt = zenodoIsZip ? entryExt : null;
-    const tarExt = zenodoIsTar ? entryExt : null;
-
-    const isDirectVideo = Boolean(!zenodoIsArchive && isVideoExt(directExt) && selectedZenodoFile?.contentUrl);
-    const isZipVideo = Boolean(zenodoIsZip && isVideoExt(zipExt) && selectedZenodoEntry && !selectedZenodoEntry.isDir);
-    const isTarVideo = Boolean(zenodoIsTar && isVideoExt(tarExt) && selectedZenodoEntry && !selectedZenodoEntry.isDir);
-
-	    const formatVideoMeta = (ext: string | null, sizeBytes: number | null) => {
-	      const extLabel = ext ? `.${ext}` : "video";
-	      if (sizeBytes !== null && Number.isFinite(sizeBytes)) return `${extLabel} · ${formatBytes(sizeBytes)}`;
-	      return extLabel;
-	    };
-
-	    if (isDirectVideo) {
-	      const meta = formatVideoMeta(directExt, selectedZenodoFile?.size ?? null);
-	      return (
-	        <MediaPreviewPanel
-	          meta={meta}
-	          onOpen={
-	            selectedZenodoFile
-	              ? () => {
-	                  if (busy || !tauri) return;
-	                  zenodoOpenFileMutation.mutate(selectedZenodoFile);
-	                }
-	              : null
-	          }
-	          openDisabled={busy || !tauri}
-	          openTooltip={tauri ? "Open in default app" : "Opening requires the Tauri runtime."}
-	          onCopy={copyText}
-	          copyPayload={selectedZenodoFile?.contentUrl ?? ""}
-	        >
-	          <video controls preload="metadata" className="h-full w-full" src={selectedZenodoFile?.contentUrl ?? ""} />
-	        </MediaPreviewPanel>
-	      );
-	    }
-
-	    if (isZipVideo) {
-	      const sizeBytes = selectedZenodoEntry
-	        ? (selectedZenodoEntry as ZenodoZipEntrySummary).uncompressedSize
-        : null;
-	      const meta = formatVideoMeta(zipExt, sizeBytes ?? null);
-	      if (zenodoZipInlineMedia?.src) {
-	        return (
-	          <MediaPreviewPanel
-	            meta={meta}
-	            onOpen={
-	              selectedZenodoEntry && !selectedZenodoEntry.isDir
-	                ? () => {
-	                    if (busy || !tauri) return;
-	                    zenodoOpenEntryMutation.mutate(selectedZenodoEntry as ZenodoZipEntrySummary);
-	                  }
-	                : null
-	            }
-	            openDisabled={busy || !tauri}
-	            openTooltip={tauri ? "Open in default app" : "Opening requires the Tauri runtime."}
-	            onCopy={copyText}
-	            copyPayload={selectedZenodoFile && selectedZenodoEntry ? `${selectedZenodoFile.key}::${selectedZenodoEntry.name}` : ""}
-	          >
-	            <video
-	              ref={zenodoZipVideoRef}
-	              controls
-	              preload="metadata"
-	              className="h-full w-full"
-	              src={zenodoZipInlineMedia.src}
-	            />
-	          </MediaPreviewPanel>
-	        );
-	      }
-
-	      return (
-	        <MediaPreviewPanel
-	          meta={meta}
-	          onOpen={
-	            selectedZenodoEntry && !selectedZenodoEntry.isDir
-	              ? () => {
-	                  if (busy || !tauri) return;
-	                  zenodoOpenEntryMutation.mutate(selectedZenodoEntry as ZenodoZipEntrySummary);
-	                }
-	              : null
-	          }
-	          openDisabled={busy || !tauri}
-	          openTooltip={tauri ? "Open in default app" : "Opening requires the Tauri runtime."}
-	          onCopy={copyText}
-	          copyPayload={selectedZenodoFile && selectedZenodoEntry ? `${selectedZenodoFile.key}::${selectedZenodoEntry.name}` : ""}
-	          below={
-	            zenodoZipInlineMediaError ? <div className="text-xs text-amber-700">{zenodoZipInlineMediaError}</div> : null
-	          }
-	        >
-	          <button
-	            type="button"
-	            className={cn(
-	              "relative flex h-full w-full items-center justify-center",
-	              zenodoZipInlineMediaMutation.isPending ? "cursor-wait opacity-80" : "hover:bg-white/75",
-	            )}
-	            isDisabled={zenodoZipInlineMediaMutation.isPending || !isTauri()}
-	            onClick={() => {
-	              void loadZenodoZipInlineMedia().then((media) => {
-	                if (!media?.src) return;
-	                autoplayVideoWhenReady(zenodoZipVideoRef);
-	              });
-	            }}
-	            aria-label="Load and play video"
-	          >
-	            {zenodoZipInlineMediaMutation.isPending ? (
-	              <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
-	            ) : (
-	              <Play className="h-10 w-10 text-slate-500" />
-	            )}
-	          </button>
-	        </MediaPreviewPanel>
-	      );
-	    }
-
-	    if (isTarVideo) {
-	      const sizeBytes = selectedZenodoEntry ? (selectedZenodoEntry as ZenodoTarEntrySummary).size : null;
-	      const meta = formatVideoMeta(tarExt, sizeBytes ?? null);
-	      if (zenodoTarInlineMedia?.src) {
-	        return (
-	          <MediaPreviewPanel
-	            meta={meta}
-	            onOpen={
-	              selectedZenodoEntry && !selectedZenodoEntry.isDir
-	                ? () => {
-	                    if (busy || !tauri) return;
-	                    zenodoOpenTarEntryMutation.mutate(selectedZenodoEntry as ZenodoTarEntrySummary);
-	                  }
-	                : null
-	            }
-	            openDisabled={busy || !tauri}
-	            openTooltip={tauri ? "Open in default app" : "Opening requires the Tauri runtime."}
-	            onCopy={copyText}
-	            copyPayload={selectedZenodoFile && selectedZenodoEntry ? `${selectedZenodoFile.key}::${selectedZenodoEntry.name}` : ""}
-	          >
-	            <video
-	              ref={zenodoTarVideoRef}
-	              controls
-	              preload="metadata"
-	              className="h-full w-full"
-	              src={zenodoTarInlineMedia.src}
-	            />
-	          </MediaPreviewPanel>
-	        );
-	      }
-
-	      return (
-	        <MediaPreviewPanel
-	          meta={meta}
-	          onOpen={
-	            selectedZenodoEntry && !selectedZenodoEntry.isDir
-	              ? () => {
-	                  if (busy || !tauri) return;
-	                  zenodoOpenTarEntryMutation.mutate(selectedZenodoEntry as ZenodoTarEntrySummary);
-	                }
-	              : null
-	          }
-	          openDisabled={busy || !tauri}
-	          openTooltip={tauri ? "Open in default app" : "Opening requires the Tauri runtime."}
-	          onCopy={copyText}
-	          copyPayload={selectedZenodoFile && selectedZenodoEntry ? `${selectedZenodoFile.key}::${selectedZenodoEntry.name}` : ""}
-	          below={
-	            zenodoTarInlineMediaError ? <div className="text-xs text-amber-700">{zenodoTarInlineMediaError}</div> : null
-	          }
-	        >
-	          <button
-	            type="button"
-	            className={cn(
-	              "relative flex h-full w-full items-center justify-center",
-	              zenodoTarInlineMediaMutation.isPending ? "cursor-wait opacity-80" : "hover:bg-white/75",
-	            )}
-	            isDisabled={zenodoTarInlineMediaMutation.isPending || !isTauri()}
-	            onClick={() => {
-	              void loadZenodoTarInlineMedia().then((media) => {
-	                if (!media?.src) return;
-	                autoplayVideoWhenReady(zenodoTarVideoRef);
-	              });
-	            }}
-	            aria-label="Load and play video"
-	          >
-	            {zenodoTarInlineMediaMutation.isPending ? (
-	              <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
-	            ) : (
-	              <Play className="h-10 w-10 text-slate-500" />
-	            )}
-	          </button>
-	        </MediaPreviewPanel>
-	      );
-	    }
-
-    if (zenodoIsZip) {
-      if (zenodoZipEntryPreviewQuery.isFetching && !zenodoZipEntryPreviewQuery.data) {
-        return <Skeleton className="h-full w-full rounded-xl" />;
-      }
-      if (zenodoZipEntryPreview) {
-        const ext = (zenodoZipEntryPreview.guessedExt ?? "").trim().replace(/^\\./, "").toLowerCase();
-        const onRequestAudioPreview = isAudioExt(ext)
-          ? async () => {
-              if (zenodoZipInlineMedia?.src && zenodoZipInlineMedia.ext === ext) {
-                return { src: zenodoZipInlineMedia.src, ext };
-              }
-              const media = await loadZenodoZipInlineMedia();
-              return { src: media.src, ext };
-            }
-          : null;
-	        return (
-	          <PreviewPanel
-	            preview={zenodoZipEntryPreview}
-	            onCopy={copyText}
-	            onOpen={
-	              selectedZenodoEntry && !selectedZenodoEntry.isDir
-	                ? () => {
-	                    if (busy || !tauri) return;
-	                    zenodoOpenEntryMutation.mutate(selectedZenodoEntry as ZenodoZipEntrySummary);
-	                  }
-	                : null
-	            }
-	            openDisabled={busy || !tauri}
-	            openTooltip={tauri ? "Open in default app" : "Opening requires the Tauri runtime."}
-	            onRequestAudioPreview={onRequestAudioPreview}
-	            audioLabel={zenodoAudioLabel}
-	            onAudioError={() => setLogDockOpen(true)}
-	          />
-	        );
-      }
-      return <EmptyState hint="Select a ZIP entry to preview." />;
-    }
-
-    if (zenodoIsTar) {
-      if (zenodoTarEntryPreviewQuery.isFetching && !zenodoTarEntryPreviewQuery.data) {
-        return <Skeleton className="h-full w-full rounded-xl" />;
-      }
-      if (zenodoTarEntryPreview) {
-        const ext = (zenodoTarEntryPreview.guessedExt ?? "").trim().replace(/^\\./, "").toLowerCase();
-        const onRequestAudioPreview = isAudioExt(ext)
-          ? async () => {
-              if (zenodoTarInlineMedia?.src && zenodoTarInlineMedia.ext === ext) {
-                return { src: zenodoTarInlineMedia.src, ext };
-              }
-              const media = await loadZenodoTarInlineMedia();
-              return { src: media.src, ext };
-            }
-          : null;
-	        return (
-	          <PreviewPanel
-	            preview={zenodoTarEntryPreview}
-	            onCopy={copyText}
-	            onOpen={
-	              selectedZenodoEntry && !selectedZenodoEntry.isDir
-	                ? () => {
-	                    if (busy || !tauri) return;
-	                    zenodoOpenTarEntryMutation.mutate(selectedZenodoEntry as ZenodoTarEntrySummary);
-	                  }
-	                : null
-	            }
-	            openDisabled={busy || !tauri}
-	            openTooltip={tauri ? "Open in default app" : "Opening requires the Tauri runtime."}
-	            onRequestAudioPreview={onRequestAudioPreview}
-	            audioLabel={zenodoAudioLabel}
-	            onAudioError={() => setLogDockOpen(true)}
-	          />
-	        );
-      }
-      return <EmptyState hint="Select a TAR entry to preview." />;
-    }
-
-    if (zenodoPreviewQuery.isFetching && !zenodoPreviewQuery.data) return <Skeleton className="h-full w-full rounded-xl" />;
-    if (zenodoPreview) {
-      const ext = (zenodoPreview.guessedExt ?? "").trim().replace(/^\\./, "").toLowerCase();
-      const onRequestAudioPreview = isAudioExt(ext)
-        ? async () => {
-            if (!selectedZenodoFile?.contentUrl) throw new Error("Missing content URL.");
-            return { src: selectedZenodoFile.contentUrl, ext };
-          }
-        : null;
-      if (isVideoExt(ext) && selectedZenodoFile?.contentUrl) {
-        return (
-          <div className="flex h-full min-h-0 overflow-hidden rounded-lg bg-white/60 ring-1 ring-black/[0.05]">
-            <video controls preload="metadata" className="h-full w-full">
-              <source src={selectedZenodoFile?.contentUrl ?? ""} />
-            </video>
-          </div>
-        );
-      }
-	      return (
-	        <PreviewPanel
-	          preview={zenodoPreview}
-	          onCopy={copyText}
-	          onOpen={
-	            selectedZenodoFile
-	              ? () => {
-	                  if (busy || !tauri) return;
-	                  zenodoOpenFileMutation.mutate(selectedZenodoFile);
-	                }
-	              : null
-	          }
-	          openDisabled={busy || !tauri}
-	          openTooltip={tauri ? "Open in default app" : "Opening requires the Tauri runtime."}
-	          onRequestAudioPreview={onRequestAudioPreview}
-	          audioLabel={zenodoAudioLabel}
-	          onAudioError={() => setLogDockOpen(true)}
-	        />
-	      );
-    }
-    return <EmptyState hint="Select a file to preview." />;
-  };
+  const enablePagination = isHfMode || isWdsMode || (isZenodoMode && selectedZenodoFileIsTar);
 
   return (
     <main className="h-full overflow-hidden">
       <div className="flex h-full flex-col gap-2">
         <section className="shrink-0 overflow-hidden rounded-2xl bg-white/55 shadow-[var(--shadow-soft)] backdrop-blur ring-1 ring-black/5">
           <div className="flex gap-4 p-3">
-            {/* Left side: title + input */}
             <div className="flex flex-1 min-w-0 flex-col gap-2">
-              <div className="flex flex-wrap items-center gap-3 min-h-[32px]">
-                <div className="flex items-center gap-2 pr-1 text-sm font-semibold tracking-tight text-slate-900">
-                  <Sparkles className="h-4 w-4 text-emerald-600" />
-                  Dataset Inspector
+              <div className="flex flex-col gap-1">
+                <div className="flex w-full min-w-0 flex-wrap items-center gap-2">
+                  <div className="min-w-[50%] flex-1">
+                    <Input
+                      className="w-full rounded-md"
+                      placeholder={sourcePlaceholder}
+                      value={sourceInput}
+                      onChange={(e) => setSourceInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void handleLoad();
+                      }}
+                      aria-label="Source"
+                    />
+                  </div>
+
+                  <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto sm:flex-nowrap sm:shrink-0">
+                    {canBrowse ? (
+                      <Button variant="outline" onClick={() => void handleChoose()} disabled={busy || !tauri}>
+                        <FolderOpen className="mr-2 h-4 w-4" />
+                        Browse
+                      </Button>
+                    ) : null}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div>
+                          <Button
+                            onClick={() => void handleLoad()}
+                            disabled={busy || (!sourceInput.trim() && chunkSelection.length === 0) || !tauri}
+                          >
+                            {headerLoadIcon}
+                            Load
+                          </Button>
+                        </div>
+                      </TooltipTrigger>
+                      {!tauri && <TooltipContent>Loading requires the Tauri runtime.</TooltipContent>}
+                    </Tooltip>
+                  </div>
                 </div>
 
-                {chunkSelection.length > 0 ? (
-                  <Tooltip
-                    showArrow
-                    placement="bottom-start"
-                    content={
-                      <div className="max-w-[340px] space-y-1 p-1 text-xs text-slate-700">
-                        {chunkSelection.slice(0, 8).map((path) => (
-                          <div key={path} className="truncate">
-                            {path}
-                          </div>
-                        ))}
-                        {chunkSelection.length > 8 ? (
-                          <div className="text-[11px] text-slate-500">… and {chunkSelection.length - 8} more</div>
-                        ) : null}
-                      </div>
-                    }
-                  >
-                    <div>
-                      <Chip variant="flat" radius="full" size="sm" className="bg-white/85 text-slate-700">
+                <div className="flex flex-wrap items-center gap-2 px-0.5 text-[11px] text-slate-400">
+                  {hasDetection ? (
+                    <>
+                      <span>Detected:</span>
+                      <Badge variant="secondary" className="bg-white/70 text-slate-600 text-[11px]">
+                        {detectedBadgeLabel}
+                      </Badge>
+                      <span>·</span>
+                      <span>{detectedDescription}</span>
+                    </>
+                  ) : (
+                    <span>Supports: LitData, MosaicML MDS, WebDataset, Hugging Face, Zenodo</span>
+                  )}
+
+                  {chunkSelection.length > 0 ? (
+                    <>
+                      <Badge variant="secondary" className="bg-white/85 text-slate-700">
                         {chunkSelection.length} shard{chunkSelection.length > 1 ? "s" : ""} selected
-                      </Chip>
-                    </div>
-                  </Tooltip>
-                ) : null}
+                      </Badge>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-2 text-[11px] font-semibold text-slate-600"
+                        onClick={() => setChunkSelection([])}
+                        disabled={busy}
+                      >
+                        Clear
+                      </Button>
+                    </>
+                  ) : null}
 
-                {chunkSelection.length > 0 ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="light"
-                    className="h-7 px-2 text-[11px] font-semibold text-slate-600 hover:bg-black/[0.05]"
-                    onClick={() => setChunkSelection([])}
-                    isDisabled={busy}
-                  >
-                    Clear selection
-                  </Button>
-                ) : null}
-
-                {showHfStats ? (
-                  <div className="ml-auto">
+                  {showHfStats ? (
                     <Button
                       type="button"
                       size="sm"
-                      variant="light"
-                      className="h-8 justify-start overflow-hidden rounded-full bg-transparent px-3 text-slate-700 hover:bg-black/[0.05]"
-                      isDisabled={!tauri}
+                      variant="ghost"
+                      className="h-6 px-2 text-[11px] font-medium text-slate-600"
+                      disabled={!tauri}
                       onClick={() => setHfTokenDialogOpen(true)}
                     >
-                      <KeyRound className="mr-2 h-4 w-4" />
-                      <span className="truncate">{hfTokenMasked ? `HF Token ${hfTokenMasked}` : "HF Token"}</span>
-                    </Button>
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
-                <Input
-                  variant="bordered"
-                  radius="full"
-                  className="w-full bg-white/70"
-                  placeholder={sourcePlaceholder}
-                  value={sourceInput}
-                  onChange={(e) => setSourceInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void handleLoad();
-                  }}
-                  aria-label="Source"
-                />
-                <div className="flex items-center gap-2 shrink-0">
-                  {canBrowse ? (
-                    <Button
-                      variant="light"
-                      className="h-9 rounded-full bg-transparent px-3 text-slate-700 hover:bg-black/[0.05]"
-                      onClick={handleChoose}
-                      isDisabled={busy || !tauri}
-                    >
-                      <FolderOpen className="mr-2 h-4 w-4" />
-                      Browse
+                      <KeyRound className="mr-1 h-3 w-3" />
+                      {hfTokenMasked ? `Token ${hfTokenMasked}` : "Set Token"}
                     </Button>
                   ) : null}
-                  <Tooltip
-                    isDisabled={tauri}
-                    showArrow
-                    placement="bottom-end"
-                    content="Loading requires the Tauri runtime."
-                  >
-                    <div>
-                      <Button
-                        className="shadow-[var(--shadow-glow)]"
-                        onClick={() => void handleLoad()}
-                        isDisabled={busy || (!sourceInput.trim() && chunkSelection.length === 0) || !tauri}
-                      >
-                        {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : loadIcon}
-                        {loadLabel}
-                      </Button>
-                    </div>
-                  </Tooltip>
                 </div>
               </div>
             </div>
 
-            {/* Right side: stats spanning both rows */}
-            <div className="hidden lg:flex shrink-0 w-[400px] items-center justify-center gap-3 rounded-xl bg-white/50 px-4 py-2 ring-1 ring-black/[0.05]">
-              {showHfStats ? (
+            <div className="hidden xl:flex shrink-0 w-[420px] items-center justify-center gap-3 rounded-xl bg-white/50 px-4 py-2 ring-1 ring-black/[0.05]">
+              {headerStatsKind === "hf" ? (
                 <>
-                  <StatBlockLarge label="Dataset" value={datasetPreviewLabel} />
-                  <StatBlockLarge label="Split" value={hfSelectedSplitLabel} />
-                  <StatBlockLarge
-                    label="Rows"
-                    value={
-                      hfQuery.data && hfQuery.data.numRowsTotal !== null && hfQuery.data.numRowsTotal !== undefined
-                        ? `${hfQuery.data.numRowsTotal.toLocaleString()}${hfQuery.data.partial ? " (Partial)" : ""}`
-                        : "—"
-                    }
-                  />
+                  <StatBlockLarge label="Dataset" value={headerStats.hf.datasetLabel} />
+                  <StatBlockLarge label="Split" value={headerStats.hf.splitLabel} />
+                  <StatBlockLarge label="Rows" value={headerStats.hf.rowsLabel} />
                 </>
-              ) : showZenodoStats ? (
+              ) : headerStatsKind === "zenodo" ? (
                 <>
-                  <StatBlockLarge label="Record" value={zenodoRecordLabel} />
-                  <StatBlockLarge label="Files" value={zenodoQuery.data?.files.length ?? "—"} />
-                  <StatBlockLarge label="Size" value={zenodoTotalBytes ? formatBytes(zenodoTotalBytes) : "—"} />
+                  <StatBlockLarge label="Record" value={headerStats.zenodo.recordLabel} />
+                  <StatBlockLarge label="Files" value={headerStats.zenodo.filesLabel} />
+                  <StatBlockLarge label="Size" value={headerStats.zenodo.sizeLabel} />
                 </>
-              ) : isWdsMode ? (
+              ) : headerStatsKind === "wds" ? (
                 <>
-                  <StatBlockLarge label="Shards" value={wdsDirQuery.data?.shards.length ?? "—"} />
-                  <StatBlockLarge
-                    label="Samples"
-                    value={
-                      wdsSamplesQuery.data
-                        ? wdsSamplesQuery.data.numSamplesTotal !== null && wdsSamplesQuery.data.numSamplesTotal !== undefined
-                          ? `${wdsSamplesQuery.data.numSamplesTotal.toLocaleString()}`
-                          : `≥ ${(wdsOffset + (wdsSamplesQuery.data.samples?.length ?? 0)).toLocaleString()}`
-                        : "—"
-                    }
-                  />
-                  <StatBlockLarge label="Size" value={wdsTotalBytes ? formatBytes(wdsTotalBytes) : "—"} />
+                  <StatBlockLarge label="Shards" value={headerStats.wds.shardsLabel} />
+                  <StatBlockLarge label="Size" value={headerStats.wds.sizeLabel} />
                 </>
               ) : (
                 <>
-                  <StatBlockLarge label="Shards" value={indexQuery.data?.chunks.length ?? "—"} />
-                  <StatBlockLarge label="Items" value={totalItems ? totalItems.toLocaleString() : "—"} />
-                  <StatBlockLarge label="Size" value={totalBytes ? formatBytes(totalBytes) : "—"} />
+                  <StatBlockLarge label="Shards" value={headerStats.local.shardsLabel} />
+                  <StatBlockLarge label="Items" value={headerStats.local.itemsLabel} />
+                  <StatBlockLarge label="Size" value={headerStats.local.sizeLabel} />
                 </>
               )}
             </div>
           </div>
         </section>
 
-        <Modal isOpen={hfTokenDialogOpen} onClose={() => setHfTokenDialogOpen(false)} backdrop="blur" size="md">
-          <ModalContent>
-            <ModalHeader className="flex flex-col gap-1">
-              <div className="text-sm font-semibold text-slate-900">Hugging Face Token</div>
+        <Dialog open={hfTokenDialogOpen} onOpenChange={setHfTokenDialogOpen}>
+          <DialogContent aria-describedby={undefined}>
+            <DialogHeader>
+              <DialogTitle>Hugging Face Token</DialogTitle>
               <div className="text-xs text-slate-500">
                 Saved locally on this device. Required for private or gated datasets.
               </div>
-            </ModalHeader>
-            <ModalBody>
-              <form
-                className="space-y-3"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void tokenForm.handleSubmit();
+            </DialogHeader>
+            <div className="space-y-3">
+              <Input
+                type="password"
+                className="rounded-lg"
+                placeholder={hfTokenMasked ? `Token saved (${hfTokenMasked})` : "Paste token here"}
+                value={hfTokenDraft}
+                onChange={(e) => setHfTokenDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setHfTokenDialogOpen(false);
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void handleSaveHfToken();
+                  }
                 }}
-              >
-                <tokenForm.Field name="token">
-                  {(field) => (
-                    <Input
-                      type="password"
-                      variant="bordered"
-                      radius="lg"
-                      placeholder={hfTokenMasked ? `Token saved (${hfTokenMasked})` : "Paste token here"}
-                      value={field.state.value}
-                      onChange={(e) => field.handleChange(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Escape") setHfTokenDialogOpen(false);
-                      }}
-                      autoFocus
-                      aria-label="Hugging Face token"
-                    />
-                  )}
-                </tokenForm.Field>
+                autoFocus
+                aria-label="Hugging Face token"
+              />
 
-                <div className="flex items-center justify-end gap-2">
-                  {hfToken ? (
-                    <Button
-                      size="sm"
-                      variant="bordered"
-                      onClick={() => {
-                        void (async () => {
-                          try {
-                            await clearHfToken();
-                            setHfToken(null);
-                            setHfTokenDialogOpen(false);
-                          } catch (err) {
-                            setStatusMessage(err instanceof Error ? err.message : "Unable to clear token.");
-                          }
-                        })();
-                      }}
-                    >
-                      Clear
-                    </Button>
-                  ) : null}
-                  <Button size="sm" variant="light" onClick={() => setHfTokenDialogOpen(false)}>
-                    Close
+              <div className="flex items-center justify-end gap-2">
+                {hfToken ? (
+                  <Button size="sm" variant="outline" onClick={handleClearSavedHfToken}>
+                    Clear
                   </Button>
-                  <Button size="sm" type="submit">
-                    Save
-                  </Button>
+                ) : null}
+                <Button size="sm" variant="ghost" onClick={() => setHfTokenDialogOpen(false)}>
+                  Close
+                </Button>
+                <Button size="sm" type="button" onClick={() => void handleSaveHfToken()}>
+                  Save
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Explorer area */}
+        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="flex-1 min-h-0">
+          <div className="h-full min-h-0 flex flex-col overflow-hidden rounded-2xl bg-white/80 shadow-sm backdrop-blur-xl ring-1 ring-black/[0.08]">
+            <div className="hidden lg:grid flex-1 min-h-0 grid-cols-3">
+              {/* Column 1 */}
+              <div className="flex min-w-0 min-h-0 flex-col border-r border-black/[0.06]">
+                <div className="flex items-center gap-2 border-b border-black/[0.06] bg-slate-50/50 px-3 py-2">
+                  <HardDrive className="h-4 w-4 text-emerald-600" />
+                  <span className="text-[12px] font-semibold text-slate-700">
+                    {isHfMode ? "Splits" : isZenodoMode ? "Files" : "Shards"}
+                  </span>
+                  <span className="ml-auto text-[11px] font-medium text-slate-500 tabular-nums">
+                    {isHfMode
+                      ? hfSplitPairs.length || "—"
+                      : isZenodoMode
+                        ? zenodoFiles.length || "—"
+                        : isWdsMode
+                          ? (wdsDirQuery.data?.shards.length ?? 0) || "—"
+                          : (indexQuery.data?.chunks.length ?? 0) || "—"}
+                  </span>
                 </div>
-              </form>
-            </ModalBody>
-          </ModalContent>
-        </Modal>
-
-        <motion.div
-          variants={cardGridVariants}
-          initial="hidden"
-          animate="show"
-          className="flex-1 min-h-0"
-        >
-          {isHfMode ? (
-              <motion.div variants={panelVariants} className="min-w-0 h-full min-h-0">
-                <ThreeColumnExplorer
-                  title="Explorer"
-                  subtitle="Splits → Rows → Fields"
-                  icon={<Database className="h-4 w-4 text-emerald-600" />}
-                  meta={hfExplorerMeta}
-                  tabKey={explorerTabKey}
-                  onTabChange={setExplorerTabKey}
-                  previewContent={renderHfPreview()}
-                  logMessage={logMessage}
-                  busy={busy}
-                  errorMessage={errorMessage}
-                  logDockOpen={logDockOpen}
-                  onToggleLogDock={() => setLogDockOpen((prev) => !prev)}
-                  onCopyLog={() => copyText(logMessage)}
-                  onClearLog={() => setStatusMessage(null)}
-                  tabs={[
-                    {
-                      key: "level1",
-                      title: "Splits",
-                      icon: <Database className="h-4 w-4 text-emerald-600" />,
-                      count: hfSplitPairs.length ? hfSplitPairs.length : undefined,
-                      content: (
-                        <div className="flex flex-1 min-h-0 flex-col gap-2">
-                          <ListFilterInput
-                            value={filterLevel1}
-                            onValueChange={setFilterLevel1}
-                            placeholder="Filter splits…"
-                            ariaLabel="Filter splits"
-                          />
-                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
-                            {(() => {
-                              const visible = hfSplitPairs.filter((pair) =>
-                                matchesFilter(`${pair.config}/${pair.split}`, level1Needle),
-                              );
-                              if (visible.length) {
-                                return visible.map((pair) => {
-                                  const key = `${pair.config}:${pair.split}`;
-                                  const selected = key === hfSelectedPairKey;
-                                  return (
-                                    <div
-                                      key={key}
-                                      className={cn(
-                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
-                                        selected
-                                          ? "bg-emerald-50/60"
-                                          : "hover:bg-black/[0.03] hover:shadow-sm",
-                                      )}
-                                      onClick={() => {
-                                        setFilterLevel2("");
-                                        setFilterLevel3("");
-                                        setHfConfigSplit(pair.config, pair.split);
-                                        setExplorerTabKey("level2");
-                                      }}
-                                    >
-                                      <div className="min-w-0">
-                                        <div
-                                          className="truncate font-medium text-slate-900"
-                                          title={`${pair.config}/${pair.split}`}
-                                        >
-                                          {`${pair.config}/${pair.split}`}
-                                        </div>
-                                      </div>
-                                    </div>
-                                  );
-                                });
-                              }
-                              if (hfQuery.isPending) return null;
-                              if (!hfSplitPairs.length) return <EmptyState hint="Load a dataset to list its splits." />;
-                              return <EmptyState hint="No matches. Try a different filter." />;
-                            })()}
-                            {hfQuery.isPending && !hfSplitPairs.length ? (
-                              <div className="p-4">
-                                <Skeleton className="h-10 w-full" />
+                <div className="flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden px-2 py-1.5">
+                  <div className="flex h-full min-h-0 flex-col gap-1.5">
+                    <ListFilterInput
+                      value={filterLevel1}
+                      onValueChange={setFilterLevel1}
+                      placeholder={isHfMode ? "Filter splits…" : isZenodoMode ? "Filter files…" : "Filter shards…"}
+                      ariaLabel="Filter level 1"
+                    />
+                    <ScrollArea className="flex-1 min-h-0 rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+                      {isHfMode ? (
+                        hfSplitPairs
+                          .filter((pair) => matchesFilter(`${pair.config}/${pair.split}`, level1Needle))
+                          .map((pair) => {
+                            const key = `${pair.config}:${pair.split}`;
+                            return (
+                              <SelectableRowButton
+                                key={key}
+                                isSelected={selectedHfConfig === pair.config && selectedHfSplit === pair.split}
+                                className="grid-cols-[1fr] items-center gap-2"
+                                ariaLabel={`Select split ${pair.config}/${pair.split}`}
+                                onClick={() => setHfConfigSplit(pair.config, pair.split)}
+                              >
+                                <div className="truncate font-medium text-slate-900">{`${pair.config}/${pair.split}`}</div>
+                              </SelectableRowButton>
+                            );
+                          })
+                      ) : isZenodoMode ? (
+                        zenodoFiles
+                          .filter((file) => matchesFilter(file.key, level1Needle))
+                          .map((file) => (
+                            <SelectableRowButton
+                              key={file.key}
+                              isSelected={selectedZenodoFile?.key === file.key}
+                              className="grid-cols-[1fr_auto] items-center gap-2"
+                              ariaLabel={`Select file ${file.key}`}
+                              onClick={() => selectZenodoFile(file.key)}
+                            >
+                              <div className="truncate font-medium text-slate-900">{file.key}</div>
+                              <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
+                                {formatBytes(file.size)}
                               </div>
-                            ) : null}
-                          </ScrollShadow>
+                            </SelectableRowButton>
+                          ))
+                      ) : isWdsMode ? (
+                        (wdsDirQuery.data?.shards ?? [])
+                          .filter((shard) => matchesFilter(shard.filename, level1Needle))
+                          .map((shard) => (
+                            <SelectableRowButton
+                              key={shard.filename}
+                              isSelected={selectedShard?.filename === shard.filename}
+                              className="grid-cols-[1fr_auto] items-center gap-2"
+                              ariaLabel={`Select shard ${shard.filename}`}
+                              onClick={() => selectChunk(shard.filename)}
+                            >
+                              <div className="truncate font-medium text-slate-900">{shard.filename}</div>
+                              <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
+                                {formatBytes(shard.bytes)}
+                              </div>
+                            </SelectableRowButton>
+                          ))
+                      ) : (
+                        (indexQuery.data?.chunks ?? [])
+                          .filter((chunk) => matchesFilter(chunk.filename, level1Needle))
+                          .map((chunk) => (
+                            <SelectableRowButton
+                              key={chunk.filename}
+                              isSelected={selectedChunk?.filename === chunk.filename}
+                              className="grid-cols-[1fr_auto] items-center gap-2"
+                              ariaLabel={`Select shard ${chunk.filename}`}
+                              onClick={() => selectChunk(chunk.filename)}
+                            >
+                              <div className="truncate font-medium text-slate-900">{chunk.filename}</div>
+                              <div className="flex items-center gap-2 whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
+                                <span>{chunk.chunkSize.toLocaleString()} items</span>
+                                <span className="text-slate-400">·</span>
+                                <span>{formatBytes(chunk.chunkBytes)}</span>
+                              </div>
+                            </SelectableRowButton>
+                          ))
+                      )}
+                      {level1Pending ? (
+                        <div className="p-4">
+                          <Skeleton className="h-10 w-full" />
                         </div>
-                      ),
-                      hint: "Select a split.",
-                    },
-                    {
-                      key: "level2",
-                      title: "Rows",
-                      icon: <HardDrive className="h-4 w-4 text-sky-600" />,
-                      count: hfQuery.data?.numRowsTotal ?? undefined,
-                      isDisabled: !hfQuery.data,
-                      content: (
-                        <div className="flex flex-1 min-h-0 flex-col gap-2">
-                          <ListFilterInput
-                            value={filterLevel2}
-                            onValueChange={setFilterLevel2}
-                            placeholder="Filter rows…"
-                            ariaLabel="Filter rows"
-                          />
+                      ) : null}
+                    </ScrollArea>
+                  </div>
+                </div>
+              </div>
 
-                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
-                            {(() => {
-                              const visible = hfRows
-                                .map((row, idx) => {
-                                  const rowIndex = hfOffset + idx;
-                                  const rowObj = (row ?? {}) as Record<string, unknown>;
-                                  const firstCol = hfFeatures[0]?.name;
-                                  const snippet = firstCol ? formatCell(rowObj[firstCol]) : formatCell(row);
-                                  return { rowIndex, snippet };
-                                })
-                                .filter(({ rowIndex, snippet }) => matchesFilter(`${rowIndex} ${snippet}`, level2Needle));
-
-                              if (visible.length) {
-                                return visible.map(({ rowIndex, snippet }) => {
-                                  const selected = rowIndex === derivedSelectedRowIndex;
-                                  return (
-                                    <div
-                                      key={rowIndex}
-                                      className={cn(
-                                        "grid min-w-0 cursor-pointer grid-cols-[auto_1fr] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
-                                        selected
-                                          ? "bg-sky-50/60"
-                                          : "hover:bg-black/[0.03] hover:shadow-sm",
-                                      )}
-                                      onClick={() => {
-                                        selectHfRow(rowIndex);
-                                        setExplorerTabKey("level3");
-                                      }}
-                                    >
-                                      <div className="whitespace-nowrap font-medium text-slate-900 tabular-nums">
-                                        Row {rowIndex}
-                                      </div>
-                                      <div className="min-w-0 truncate text-xs text-slate-500">{snippet}</div>
-                                    </div>
-                                  );
-                                });
-                              }
-
-                              if (hfQuery.isPending) return null;
-                              if (!hfRows.length) return <EmptyState hint="Load a split to list its rows." />;
-                              return <EmptyState hint="No matches. Try a different filter." />;
-                            })()}
-                            {hfQuery.isPending ? (
-                              <div className="p-4">
-                                <Skeleton className="h-10 w-full" />
-                              </div>
-                            ) : null}
-                          </ScrollShadow>
-
-                          <div className="shrink-0 rounded-xl bg-white/40 px-2 py-2 ring-1 ring-black/[0.04]">
-                            <div className="flex items-center gap-2">
-                              <Button
-                                size="sm"
-                                variant="bordered"
-                                isDisabled={!hfCanPrev}
-                                onClick={() => setHfOffset(Math.max(0, hfOffset - HF_PAGE_SIZE))}
+              {/* Column 2 */}
+              <div className="flex min-w-0 min-h-0 flex-col border-r border-black/[0.06]">
+                <div className="flex items-center gap-2 border-b border-black/[0.06] bg-slate-50/50 px-3 py-2">
+                  <BadgeInfo className="h-4 w-4 text-sky-600" />
+                  <span className="text-[12px] font-semibold text-slate-700">
+                    {isHfMode ? "Rows" : isZenodoMode ? "Entries" : isMdsMode ? "Samples" : isWdsMode ? "Samples" : "Items"}
+                  </span>
+                  <span className="ml-auto text-[11px] font-medium text-slate-500 tabular-nums">
+                    {isHfMode
+                      ? hfRows.length || "—"
+                      : isZenodoMode
+                        ? zenodoEntries.length || "—"
+                        : isWdsMode
+                          ? wdsSamples.length || "—"
+                          : isMdsMode
+                            ? mdsItems.length || "—"
+                            : items.length || "—"}
+                  </span>
+                </div>
+                <div className="flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden px-2 py-1.5">
+                  <div className="flex h-full min-h-0 flex-col gap-1.5">
+                    <ListFilterInput value={filterLevel2} onValueChange={setFilterLevel2} placeholder="Filter…" ariaLabel="Filter level 2" />
+                    <ScrollArea className="flex-1 min-h-0 rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+                      {isHfMode ? (
+                        hfQuery.isFetching ? (
+                          <div className="p-4">
+                            <Skeleton className="h-10 w-full" />
+                          </div>
+                        ) : hfRows.length > 0 ? (
+                          hfRows
+                            .map((row, idx) => ({ row: row as Record<string, unknown>, idx }))
+                            .filter(({ row }) => {
+                              if (!level2Needle) return true;
+                              const preview = Object.entries(row)
+                                .slice(0, 3)
+                                .map(([k, v]) => `${k}: ${formatCell(v)}`)
+                                .join(" ");
+                              return matchesFilter(preview, level2Needle);
+                            })
+                            .map(({ row, idx }) => (
+                              <SelectableRowButton
+                                key={idx}
+                                isSelected={hfSelectedRowIndex === idx}
+                                className="grid-cols-[1fr_auto] items-center gap-2"
+                                ariaLabel={`Select row ${hfOffset + idx}`}
+                                onClick={() => selectHfRow(idx)}
                               >
-                                <ChevronLeft className="mr-1 h-4 w-4" />
-                                Prev
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="bordered"
-                                isDisabled={!hfCanNext}
-                                onClick={() => setHfOffset(hfOffset + HF_PAGE_SIZE)}
-                              >
-                                Next
-                                <ChevronRight className="ml-1 h-4 w-4" />
-                              </Button>
-
-                              <div className="ml-auto flex items-center gap-2">
-                                <span className="text-[11px] font-medium text-slate-500 whitespace-nowrap">Offset</span>
-                                <Input
-                                  size="sm"
-                                  variant="bordered"
-                                  radius="lg"
-                                  className="w-20"
-                                  classNames={{
-                                    inputWrapper:
-                                      "h-8 min-h-0 bg-white/80 data-[hover=true]:bg-white/90 group-data-[focus=true]:bg-white/90",
-                                    input: "text-xs font-medium text-slate-900 tabular-nums",
-                                  }}
-                                  value={hfOffsetDraft}
-                                  onValueChange={setHfOffsetDraft}
-                                  inputMode="numeric"
-                                  pattern="[0-9]*"
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter") {
-                                      (e.currentTarget as HTMLInputElement).blur();
-                                      handleHfJump();
-                                    }
-                                  }}
-                                  onBlur={handleHfJump}
-                                  isDisabled={!canPaginateHf}
-                                  aria-label="Offset"
-                                />
-                              </div>
+                                <div className="truncate font-medium text-slate-900">Row {hfOffset + idx}</div>
+                                <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
+                                  {Object.keys(row).length} fields
+                                </div>
+                              </SelectableRowButton>
+                            ))
+                        ) : (
+                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
+                            <TriangleAlert className="h-4 w-4 text-slate-400" />
+                            <div className="max-w-[520px] leading-relaxed">No rows available.</div>
+                          </div>
+                        )
+                      ) : isZenodoMode ? (
+                        zenodoEntries.length > 0 ? (
+                          zenodoEntries
+                            .filter((entry) => matchesFilter(entry.name, level2Needle))
+                            .map((entry) => {
+                              const entrySize =
+                                "size" in entry ? entry.size : (entry as ZenodoZipEntrySummary).uncompressedSize;
+                              return (
+                                <SelectableRowButton
+                                  key={entry.name}
+                                  isSelected={selectedZenodoEntry?.name === entry.name}
+                                  className="grid-cols-[1fr_auto] items-center gap-2"
+                                  ariaLabel={`Select entry ${entry.name}`}
+                                  onClick={() => selectZenodoEntry(entry.name)}
+                                >
+                                  <div className="truncate font-medium text-slate-900">{entry.name}</div>
+                                  <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
+                                    {formatBytes(entrySize)}
+                                  </div>
+                                </SelectableRowButton>
+                              );
+                            })
+                        ) : zenodoTarEntriesQuery.isPending || zenodoZipEntriesQuery.isPending ? (
+                          <div className="p-4">
+                            <Skeleton className="h-10 w-full" />
+                          </div>
+                        ) : selectedZenodoFile ? (
+                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
+                            <BadgeInfo className="h-4 w-4 text-slate-400" />
+                            <div className="max-w-[520px] leading-relaxed">
+                              {looksLikeTarFilename(selectedZenodoFile.key) || selectedZenodoFile.key.endsWith(".zip")
+                                ? "Loading entries…"
+                                : "Select a .tar or .zip file to browse entries."}
                             </div>
                           </div>
-                        </div>
-                      ),
-                      hint: "Pick a row to inspect its fields.",
-                    },
-                    {
-                      key: "level3",
-                      title: "Fields",
-                      icon: <Play className="h-4 w-4 text-cyan-600" />,
-                      count: hfFeatures.length ? hfFeatures.length : undefined,
-                      isDisabled: !hfQuery.data,
-                      content: (
-                        <div className="flex flex-1 min-h-0 flex-col gap-2">
-                          <ListFilterInput
-                            value={filterLevel3}
-                            onValueChange={setFilterLevel3}
-                            placeholder="Filter fields…"
-                            ariaLabel="Filter Hugging Face fields"
-                          />
-                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
-                            {(() => {
-                              const visible = hfFeatures.filter((feature) => matchesFilter(feature.name, level3Needle));
-                              if (visible.length) {
-                                return visible.map((feature) => {
-                                  const selected = feature.name === derivedSelectedFieldName;
-                                  return (
-                                    <div
-                                      key={feature.name}
-                                      className={cn(
-                                        "grid min-w-0 cursor-pointer grid-cols-[1fr] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
-                                        selected
-                                          ? "bg-cyan-50/60"
-                                          : "hover:bg-black/[0.03] hover:shadow-sm",
-                                      )}
-                                      onClick={() => {
-                                        selectHfField(feature.name);
-                                      }}
-                                      onDoubleClick={() => {
-                                        if (!hfSelectedRow || busy) return;
-                                        hfOpenMutation.mutate(feature.name);
-                                      }}
-                                    >
-                                      <div className="flex min-w-0 items-center gap-2">
-                                        <div className="min-w-0 truncate font-medium text-slate-900" title={feature.name}>
-                                          {feature.name}
-                                        </div>
-                                        <Chip variant="flat" radius="full" size="sm" className="shrink-0 bg-slate-100/80 text-slate-500">
-                                          {(feature.dtype ?? "raw").toString()}
-                                        </Chip>
-                                      </div>
-                                    </div>
-                                  );
-                                });
-                              }
-                              if (hfQuery.isPending) return null;
-                              if (!hfFeatures.length) return <EmptyState hint="Load a dataset to list its fields." />;
-                              return <EmptyState hint="No matches. Try a different filter." />;
-                            })()}
-                            {hfQuery.isPending ? (
-                              <div className="p-4">
-                                <Skeleton className="h-10 w-full" />
-                              </div>
-                            ) : null}
-                          </ScrollShadow>
-                        </div>
-                      ),
-                    },
-                  ]}
-                />
-              </motion.div>
-	          ) : isZenodoMode ? (
-              <motion.div variants={panelVariants} className="min-w-0 h-full min-h-0">
-                <ThreeColumnExplorer
-                  title="Explorer"
-                  subtitle="Files → Entries → Preview"
-                  icon={<BadgeInfo className="h-4 w-4 text-sky-600" />}
-                  meta={zenodoExplorerMeta}
-                  tabKey={explorerTabKey}
-                  onTabChange={setExplorerTabKey}
-                  previewContent={renderZenodoPreview()}
-                  logMessage={logMessage}
-                  busy={busy}
-                  errorMessage={errorMessage}
-                  logDockOpen={logDockOpen}
-                  onToggleLogDock={() => setLogDockOpen((prev) => !prev)}
-                  onCopyLog={() => copyText(logMessage)}
-                  onClearLog={() => setStatusMessage(null)}
-                  tabs={[
-                    {
-                      key: "level1",
-                      title: "Files",
-                      icon: <HardDrive className="h-4 w-4 text-emerald-600" />,
-                      count: zenodoFiles.length ? zenodoFiles.length : undefined,
-                      content: (
-                        <div className="flex flex-1 min-h-0 flex-col gap-2">
-                          <ListFilterInput
-                            value={filterLevel1}
-                            onValueChange={setFilterLevel1}
-                            placeholder="Filter files…"
-                            ariaLabel="Filter Zenodo files"
-                          />
-                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
-                            {(() => {
-                              const visible = zenodoFiles.filter((file) => matchesFilter(file.key, level1Needle));
-                              if (visible.length) {
-                                return visible.map((file) => {
-                                  const selected = selectedZenodoFile?.key === file.key;
-                                  return (
-                                    <div
-                                      key={file.key}
-                                      className={cn(
-                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
-                                        selected ? "bg-emerald-50/60" : "hover:bg-black/[0.03] hover:shadow-sm",
-                                      )}
-                                      onClick={() => {
-                                        setFilterLevel2("");
-                                        setFilterLevel3("");
-                                        selectZenodoFile(file.key);
-                                        setExplorerTabKey("level2");
-                                      }}
-                                    >
-                                      <div className="min-w-0">
-                                        <div className="truncate font-medium text-slate-900" title={file.key}>
-                                          {file.key}
-                                        </div>
-                                      </div>
-                                      <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
-                                        {formatBytes(file.size)}
-                                      </div>
-                                    </div>
-                                  );
-                                });
-                              }
-                              if (zenodoQuery.isPending) return null;
-                              if (!zenodoFiles.length) return <EmptyState hint="Load a Zenodo record to list files." />;
-                              return <EmptyState hint="No matches. Try a different filter." />;
-                            })()}
-                            {zenodoQuery.isPending ? (
-                              <div className="p-4">
-                                <Skeleton className="h-10 w-full" />
-                              </div>
-                            ) : null}
-                          </ScrollShadow>
-                        </div>
-                      ),
-                      hint: "Select a file.",
-                    },
-                    {
-                      key: "level2",
-                      title: zenodoIsCsv ? "Rows" : "Entries",
-                      icon: <BadgeInfo className="h-4 w-4 text-sky-600" />,
-                      count: zenodoIsCsv
-                        ? zenodoCsvRows.length || undefined
-                        : zenodoIsZip
-                        ? zenodoZipEntries.length || undefined
-                        : zenodoIsTar
-                          ? (zenodoTarEntriesQuery.data?.numEntriesTotal ?? (zenodoTarEntries.length || undefined))
-                          : undefined,
-                      isDisabled: !selectedZenodoFile,
-                      content: (
-                        <div className="flex flex-1 min-h-0 flex-col gap-2">
-                          {zenodoIsArchive || zenodoIsCsv ? (
-                            <ListFilterInput
-                              value={filterLevel2}
-                              onValueChange={setFilterLevel2}
-                              placeholder={zenodoIsCsv ? "Filter rows…" : "Filter entries…"}
-                              ariaLabel={zenodoIsCsv ? "Filter CSV rows" : "Filter Zenodo entries"}
-                            />
-                          ) : null}
-
-                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
-                            {zenodoIsCsv ? (
-                              zenodoCsvRows
-                                .filter((row) => matchesFilter(`${row.rowIndex} ${row.raw}`, level2Needle))
-                                .map((row) => {
-                                  const selected = selectedZenodoCsvRow?.rowIndex === row.rowIndex;
-                                  const snippet = row.values.slice(0, 3).join(" | ");
-                                  return (
-                                    <div
-                                      key={row.rowIndex}
-                                      className={cn(
-                                        "grid min-w-0 cursor-pointer grid-cols-[auto_1fr] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
-                                        selected ? "bg-sky-50/60" : "hover:bg-black/[0.03] hover:shadow-sm",
-                                      )}
-                                      onClick={() => {
-                                        selectZenodoCsvRow(row.rowIndex);
-                                        setExplorerTabKey("level3");
-                                      }}
-                                    >
-                                      <div className="whitespace-nowrap font-medium text-slate-900 tabular-nums">
-                                        Row {row.rowIndex + 1}
-                                      </div>
-                                      <div className="min-w-0 truncate text-xs text-slate-500">{snippet}</div>
-                                    </div>
-                                  );
-                                })
-                            ) : zenodoIsZip ? (
-                              zenodoZipEntries
-                                .filter((entry) => matchesFilter(entry.name, level2Needle))
-                                .map((entry) => {
-                                  const selected = selectedZenodoEntry?.name === entry.name;
-                                  const displayName =
-                                    zenodoZipEntryPrefix &&
-                                    entry.name.startsWith(zenodoZipEntryPrefix) &&
-                                    entry.name.length > zenodoZipEntryPrefix.length
-                                      ? entry.name.slice(zenodoZipEntryPrefix.length)
-                                      : entry.name;
-                                  const label = entry.isDir ? `${displayName.replace(/\/+$/, "")}/` : displayName;
-                                  return (
-                                    <div
-                                      key={entry.name}
-                                      className={cn(
-                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
-                                        selected ? "bg-sky-50/60" : "hover:bg-black/[0.03] hover:shadow-sm",
-                                      )}
-                                      onClick={() => {
-                                        selectZenodoEntry(entry.name);
-                                        setExplorerTabKey("level3");
-                                      }}
-                                    >
-                                      <div className="min-w-0">
-                                        <div className="truncate font-medium text-slate-900" title={entry.name}>
-                                          {label}
-                                        </div>
-                                      </div>
-                                      <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
-                                        {entry.isDir ? "" : formatBytes(entry.uncompressedSize)}
-                                      </div>
-                                    </div>
-                                  );
-                                })
-                            ) : zenodoIsTar ? (
-                              zenodoTarEntries
-                                .filter((entry) => matchesFilter(entry.name, level2Needle))
-                                .map((entry) => {
-                                  const selected = selectedZenodoEntry?.name === entry.name;
-                                  const displayName =
-                                    zenodoTarEntryPrefix &&
-                                    entry.name.startsWith(zenodoTarEntryPrefix) &&
-                                    entry.name.length > zenodoTarEntryPrefix.length
-                                      ? entry.name.slice(zenodoTarEntryPrefix.length)
-                                      : entry.name;
-                                  const label = entry.isDir ? `${displayName.replace(/\/+$/, "")}/` : displayName;
-                                  return (
-                                    <div
-                                      key={entry.name}
-                                      className={cn(
-                                        "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
-                                        selected ? "bg-sky-50/60" : "hover:bg-black/[0.03] hover:shadow-sm",
-                                      )}
-                                      onClick={() => {
-                                        selectZenodoEntry(entry.name);
-                                        setExplorerTabKey("level3");
-                                      }}
-                                    >
-                                      <div className="min-w-0">
-                                        <div className="truncate font-medium text-slate-900" title={entry.name}>
-                                          {label}
-                                        </div>
-                                      </div>
-                                      <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
-                                        {entry.isDir ? "" : formatBytes(entry.size)}
-                                      </div>
-                                    </div>
-                                  );
-                                })
-                            ) : selectedZenodoFile ? (
-                              <div className="grid min-w-0 grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] bg-sky-50/50 px-3 py-2 text-sm">
-                                <div className="min-w-0">
-                                  <div className="truncate font-medium text-slate-900" title={selectedZenodoFile.key}>
-                                    {selectedZenodoFile.key}
-                                  </div>
-                                </div>
+                        ) : (
+                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
+                            <TriangleAlert className="h-4 w-4 text-slate-400" />
+                            <div className="max-w-[520px] leading-relaxed">Select a file from the first column.</div>
+                          </div>
+                        )
+                      ) : isWdsMode ? (
+                        wdsSamples.length > 0 ? (
+                          wdsSamples
+                            .filter((sample) => matchesFilter(sample.key, level2Needle))
+                            .map((sample) => (
+                              <SelectableRowButton
+                                key={sample.key}
+                                isSelected={wdsSelectedSampleKey === sample.key}
+                                className="grid-cols-[1fr_auto] items-center gap-2"
+                                ariaLabel={`Select sample ${sample.key}`}
+                                onClick={() => selectWdsSample(sample.key)}
+                              >
+                                <div className="truncate font-medium text-slate-900">{sample.key}</div>
                                 <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
-                                  {formatBytes(selectedZenodoFile.size)}
+                                  {sample.fields.length} field{sample.fields.length !== 1 ? "s" : ""}
                                 </div>
-                              </div>
-                            ) : null}
-
-                            {zenodoIsZip && zenodoZipEntriesQuery.isPending ? (
-                              <div className="p-4">
-                                <Skeleton className="h-10 w-full" />
-                              </div>
-                            ) : null}
-                            {zenodoIsTar && zenodoTarEntriesQuery.isPending ? (
-                              <div className="p-4">
-                                <Skeleton className="h-10 w-full" />
-                              </div>
-                            ) : null}
-                            {zenodoIsZip &&
-                            level2Needle &&
-                            !zenodoZipEntriesQuery.isPending &&
-                            zenodoZipEntries.length &&
-                            !zenodoZipEntries.some((entry) => matchesFilter(entry.name, level2Needle)) ? (
-                              <EmptyState hint="No matches. Try a different filter." />
-                            ) : null}
-                            {zenodoIsTar &&
-                            level2Needle &&
-                            !zenodoTarEntriesQuery.isPending &&
-                            zenodoTarEntries.length &&
-                            !zenodoTarEntries.some((entry) => matchesFilter(entry.name, level2Needle)) ? (
-                              <EmptyState hint="No matches. Try a different filter." />
-                            ) : null}
-                            {zenodoIsZip && !zenodoZipEntries.length && !zenodoZipEntriesQuery.isPending ? (
-                              <EmptyState hint="No ZIP entries found." />
-                            ) : null}
-                            {zenodoIsTar && !zenodoTarEntries.length && !zenodoTarEntriesQuery.isPending ? (
-                              <EmptyState hint="No TAR entries found." />
-                            ) : null}
-                            {zenodoIsCsv && !zenodoCsvRows.length && !zenodoPreviewQuery.isPending ? (
-                              <EmptyState hint="No CSV rows found." />
-                            ) : null}
-                            {zenodoIsCsv && zenodoPreviewQuery.isPending ? (
-                              <div className="p-4">
-                                <Skeleton className="h-10 w-full" />
-                              </div>
-                            ) : null}
-                            {zenodoIsCsv &&
-                            level2Needle &&
-                            !zenodoPreviewQuery.isPending &&
-                            zenodoCsvRows.length &&
-                            !zenodoCsvRows.some((row) => matchesFilter(`${row.rowIndex} ${row.raw}`, level2Needle)) ? (
-                              <EmptyState hint="No matches. Try a different filter." />
-                            ) : null}
-                            {!zenodoIsArchive && !zenodoIsCsv && !selectedZenodoFile && !zenodoQuery.isPending ? (
-                              <EmptyState hint="Load a Zenodo record to list files." />
-                            ) : null}
-                          </ScrollShadow>
-
-                          {zenodoIsTar ? (
-                            <div className="shrink-0 rounded-xl bg-white/40 px-2 py-2 ring-1 ring-black/[0.04]">
-                              <div className="flex items-center gap-2">
-                                <Button
-                                  size="sm"
-                                  variant="bordered"
-                                  isDisabled={!zenodoTarCanPrev || !isTauri()}
-                                  onClick={() =>
-                                    setZenodoEntriesOffset(Math.max(0, zenodoEntriesOffset - ZENODO_TAR_PAGE_SIZE))
-                                  }
-                                >
-                                  <ChevronLeft className="mr-1 h-4 w-4" />
-                                  Prev
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="bordered"
-                                  isDisabled={!zenodoTarCanNext || !isTauri()}
-                                  onClick={() => setZenodoEntriesOffset(zenodoEntriesOffset + ZENODO_TAR_PAGE_SIZE)}
-                                >
-                                  Next
-                                  <ChevronRight className="ml-1 h-4 w-4" />
-                                </Button>
-
-                                <div className="ml-auto flex items-center gap-2">
-                                  <Chip variant="flat" radius="full" size="sm" className="bg-slate-100/80">
-                                    Offset {zenodoEntriesOffset}
-                                  </Chip>
-                                  {zenodoTarEntriesQuery.data?.partial ? (
-                                    <Chip variant="flat" radius="full" size="sm" className="bg-amber-100/80 text-amber-800">
-                                      Partial
-                                    </Chip>
-                                  ) : null}
+                              </SelectableRowButton>
+                            ))
+                        ) : wdsSamplesQuery.isPending ? (
+                          <div className="p-4">
+                            <Skeleton className="h-10 w-full" />
+                          </div>
+                        ) : (
+                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
+                            <TriangleAlert className="h-4 w-4 text-slate-400" />
+                            <div className="max-w-[520px] leading-relaxed">Select a shard from the first column.</div>
+                          </div>
+                        )
+                      ) : isMdsMode ? (
+                        mdsItems.length > 0 ? (
+                          mdsItems
+                            .filter((item) => matchesFilter(`Sample ${item.itemIndex}`, level2Needle))
+                            .map((item) => (
+                              <SelectableRowButton
+                                key={item.itemIndex}
+                                isSelected={selectedItemIndex === item.itemIndex}
+                                className="grid-cols-[1fr_auto] items-center gap-2"
+                                ariaLabel={`Select sample ${item.itemIndex}`}
+                                onClick={() => selectItem(item.itemIndex)}
+                              >
+                                <div className="truncate font-medium text-slate-900">Sample {item.itemIndex}</div>
+                                <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
+                                  {item.fields.length} field{item.fields.length !== 1 ? "s" : ""} · {formatBytes(item.totalBytes)}
                                 </div>
+                              </SelectableRowButton>
+                            ))
+                        ) : mdsItemsQuery.isPending ? (
+                          <div className="p-4">
+                            <Skeleton className="h-10 w-full" />
+                          </div>
+                        ) : selectedChunk ? (
+                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
+                            <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                            <div className="max-w-[520px] leading-relaxed">Loading samples…</div>
+                          </div>
+                        ) : (
+                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
+                            <TriangleAlert className="h-4 w-4 text-slate-400" />
+                            <div className="max-w-[520px] leading-relaxed">Select a shard from the first column.</div>
+                          </div>
+                        )
+                      ) : items.length > 0 ? (
+                        items
+                          .filter((item) => matchesFilter(`Item ${item.itemIndex}`, level2Needle))
+                          .map((item) => (
+                            <SelectableRowButton
+                              key={item.itemIndex}
+                              isSelected={selectedItemIndex === item.itemIndex}
+                              className="grid-cols-[1fr_auto] items-center gap-2"
+                              ariaLabel={`Select item ${item.itemIndex}`}
+                              onClick={() => selectItem(item.itemIndex)}
+                            >
+                              <div className="truncate font-medium text-slate-900">Item {item.itemIndex}</div>
+                              <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
+                                {item.fields.length} field{item.fields.length !== 1 ? "s" : ""}
                               </div>
-                            </div>
-                          ) : null}
+                            </SelectableRowButton>
+                          ))
+                      ) : itemsQuery.isPending ? (
+                        <div className="p-4">
+                          <Skeleton className="h-10 w-full" />
                         </div>
-                      ),
-                      hint: zenodoIsCsv ? "CSV rows." : zenodoIsZip ? "ZIP entries." : zenodoIsTar ? "TAR entries." : "Selected file.",
-                    },
-                    {
-                      key: "level3",
-                      title: zenodoIsCsv ? "Fields" : "Details",
-                      icon: <Play className="h-4 w-4 text-cyan-600" />,
-                      count: zenodoIsCsv && selectedZenodoCsvRow ? zenodoCsvHeaders.length || undefined : undefined,
-                      isDisabled: zenodoIsCsv ? !selectedZenodoCsvRow : !selectedZenodoEntry && !selectedZenodoFile,
-                      content: zenodoIsCsv && selectedZenodoCsvRow ? (
-                        <div className="flex flex-1 min-h-0 flex-col gap-2">
-                          <ListFilterInput
-                            value={filterLevel3}
-                            onValueChange={setFilterLevel3}
-                            placeholder="Filter fields…"
-                            ariaLabel="Filter CSV fields"
-                          />
-                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
-                            {zenodoCsvHeaders
-                              .map((header, idx) => ({
-                                header,
-                                value: selectedZenodoCsvRow.values[idx] ?? "",
-                                idx,
-                              }))
-                              .filter(({ header, value }) =>
-                                matchesFilter(`${header} ${value}`, level3Needle),
-                              )
-                              .map(({ header, value, idx }) => {
-                                const selected = zenodoCsvSelectedFieldIndex === idx;
-                                return (
-                                  <div
-                                    key={idx}
-                                    className={cn(
-                                      "grid min-w-0 cursor-pointer grid-cols-[auto_1fr] items-start gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
-                                      selected ? "bg-cyan-50/60" : "hover:bg-black/[0.03] hover:shadow-sm",
-                                    )}
-                                    onClick={() => selectZenodoCsvField(idx)}
-                                  >
-                                    <div className="whitespace-nowrap font-medium text-slate-600">
-                                      {header || `[${idx}]`}
-                                    </div>
-                                    <div className="min-w-0 break-words text-slate-900">{value}</div>
-                                  </div>
-                                );
-                              })}
-                            {level3Needle &&
-                            zenodoCsvHeaders.length &&
-                            !zenodoCsvHeaders.some((header, idx) =>
-                              matchesFilter(`${header} ${selectedZenodoCsvRow.values[idx] ?? ""}`, level3Needle),
-                            ) ? (
-                              <EmptyState hint="No matches. Try a different filter." />
-                            ) : null}
-                          </ScrollShadow>
+                      ) : selectedChunk ? (
+                        <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
+                          <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                          <div className="max-w-[520px] leading-relaxed">Loading items…</div>
                         </div>
                       ) : (
-                        <div className="flex flex-1 min-h-0 flex-col items-center justify-center text-center text-xs text-slate-500">
-                          <Sparkles className="h-5 w-5 text-slate-400 mb-2" />
-                          <div>Preview shown below</div>
+                        <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
+                          <TriangleAlert className="h-4 w-4 text-slate-400" />
+                          <div className="max-w-[520px] leading-relaxed">Select a shard from the first column.</div>
                         </div>
-                      ),
-                    },
-                  ]}
-                />
-              </motion.div>
-          ) : isWdsMode ? (
-              <motion.div variants={panelVariants} className="min-w-0 h-full min-h-0">
-                <ThreeColumnExplorer
-                  title="Explorer"
-                  subtitle="Shards → Samples → Fields"
-                  icon={<HardDrive className="h-4 w-4 text-emerald-600" />}
-                  meta={wdsExplorerMeta}
-                  tabKey={explorerTabKey}
-                  onTabChange={setExplorerTabKey}
-                  previewContent={renderWdsPreview()}
-                  logMessage={logMessage}
-                  busy={busy}
-                  errorMessage={errorMessage}
-                  logDockOpen={logDockOpen}
-                  onToggleLogDock={() => setLogDockOpen((prev) => !prev)}
-                  onCopyLog={() => copyText(logMessage)}
-                  onClearLog={() => setStatusMessage(null)}
-                  tabs={[
-                    {
-                      key: "level1",
-                      title: "Shards",
-                      icon: <HardDrive className="h-4 w-4 text-emerald-600" />,
-                      count: wdsDirQuery.data?.shards.length ?? undefined,
-                      content: (
-                        <div className="flex flex-1 min-h-0 flex-col gap-2">
-                          <ListFilterInput
-                            value={filterLevel1}
-                            onValueChange={setFilterLevel1}
-                            placeholder="Filter shards…"
-                            ariaLabel="Filter WebDataset shards"
-                          />
-                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
-                            {(() => {
-                              const shards = wdsDirQuery.data?.shards ?? [];
-                              const visible = shards.filter((shard) => matchesFilter(shard.filename, level1Needle));
-                              if (visible.length) {
-                                return visible.map((shard) => (
-                                  <div
-                                    key={shard.filename}
-                                    className={cn(
-                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
-                                      selectedShard?.filename === shard.filename ? "bg-emerald-50/60" : "hover:bg-black/[0.03] hover:shadow-sm",
-                                    )}
-                                    onClick={() => {
-                                      setFilterLevel2("");
-                                      setFilterLevel3("");
-                                      selectChunk(shard.filename);
-                                      setExplorerTabKey("level2");
-                                    }}
-                                  >
-                                    <div className="min-w-0">
-                                      <div className="truncate font-medium text-slate-900" title={shard.filename}>
-                                        {shard.filename}
-                                      </div>
-                                    </div>
-                                    <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
-                                      {formatBytes(shard.bytes)}
-                                    </div>
-                                  </div>
-                                ));
-                              }
-                              if (!shards.length) return <EmptyState hint="Load a WebDataset directory to list shards." />;
-                              return <EmptyState hint="No matches. Try a different filter." />;
-                            })()}
-                          </ScrollShadow>
-                        </div>
-                      ),
-                      hint: "Pick a shard.",
-                    },
-                    {
-                      key: "level2",
-                      title: "Samples",
-                      icon: <BadgeInfo className="h-4 w-4 text-sky-600" />,
-                      count: wdsSamplesQuery.data
-                        ? wdsSamplesQuery.data.numSamplesTotal !== null && wdsSamplesQuery.data.numSamplesTotal !== undefined
-                          ? `${wdsSamplesQuery.data.numSamplesTotal.toLocaleString()}`
-                          : `≥ ${(wdsOffset + (wdsSamplesQuery.data.samples?.length ?? 0)).toLocaleString()}`
-                        : undefined,
-                      isDisabled: !selectedShard,
-                      content: (
-                        <div className="flex flex-1 min-h-0 flex-col gap-2">
-                          <ListFilterInput
-                            value={filterLevel2}
-                            onValueChange={setFilterLevel2}
-                            placeholder="Filter samples…"
-                            ariaLabel="Filter WebDataset samples"
-                          />
-                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
-                            {(() => {
-                              const visible = wdsPageSamples.filter(
-                                (sample) =>
-                                  matchesFilter(sample.key, level2Needle) ||
-                                  matchesFilter(String(sample.sampleIndex), level2Needle),
-                              );
-                              if (visible.length) {
-                                return visible.map((sample) => (
-                                  <div
-                                    key={`${sample.sampleIndex}:${sample.key}`}
-                                    className={cn(
-                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
-                                      selectedWdsSample?.sampleIndex === sample.sampleIndex ? "bg-sky-50/60" : "hover:bg-black/[0.03] hover:shadow-sm",
-                                    )}
-                                    onClick={() => {
-                                      setFilterLevel3("");
-                                      selectItem(sample.sampleIndex);
-                                      setExplorerTabKey("level3");
-                                    }}
-                                  >
-                                    <div className="min-w-0">
-                                      <div className="truncate font-medium text-slate-900">{sample.key}</div>
-                                      <div className="text-xs text-slate-500">Sample {sample.sampleIndex}</div>
-                                    </div>
-                                    <div className="flex items-center gap-2 whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
-                                      <span>{sample.fields.length.toLocaleString()} files</span>
-                                      <span className="text-slate-400">·</span>
-                                      <span>{formatBytes(sample.totalBytes)}</span>
-                                    </div>
-                                  </div>
-                                ));
-                              }
-                              if (wdsSamplesQuery.isPending) return null;
-                              if (!wdsPageSamples.length) {
-                                return <EmptyState hint={selectedShard ? "No samples at this offset." : "Pick a shard."} />;
-                              }
-                              return <EmptyState hint="No matches." />;
-                            })()}
-                            {wdsSamplesQuery.isPending ? (
-                              <div className="p-4">
-                                <Skeleton className="h-10 w-full" />
-                              </div>
-                            ) : null}
-                          </ScrollShadow>
+                      )}
+                    </ScrollArea>
+                  </div>
+                </div>
 
-                          <div className="shrink-0 rounded-xl bg-white/40 px-2 py-2 ring-1 ring-black/[0.04]">
-                            <div className="flex items-center gap-2">
-                              <Button
-                                size="sm"
-                                variant="bordered"
-                                isDisabled={!wdsCanPrev}
-                                onClick={() => setWdsOffset(Math.max(0, wdsOffset - WDS_PAGE_SIZE))}
-                              >
-                                <ChevronLeft className="mr-1 h-4 w-4" />
-                                Prev
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="bordered"
-                                isDisabled={!wdsCanNext}
-                                onClick={() => setWdsOffset(wdsOffset + WDS_PAGE_SIZE)}
-                              >
-                                Next
-                                <ChevronRight className="ml-1 h-4 w-4" />
-                              </Button>
-                              <div className="ml-auto flex items-center gap-2">
-                                <Chip variant="flat" radius="full" size="sm" className="bg-slate-100/80">
-                                  Offset {wdsOffset}
-                                </Chip>
-                                {wdsSamplesQuery.data?.partial ? (
-                                  <Chip variant="flat" radius="full" size="sm" className="bg-amber-100/80 text-amber-800">
-                                    Partial
-                                  </Chip>
-                                ) : null}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      ),
-                      hint: "Pick a sample.",
-                    },
-                    {
-                      key: "level3",
-                      title: "Fields",
-                      icon: <Play className="h-4 w-4 text-cyan-600" />,
-                      count: selectedWdsSample?.fields.length ?? undefined,
-                      isDisabled: !selectedWdsSample,
-                      content: (
-                        <div className="flex flex-1 min-h-0 flex-col gap-2">
-                          {selectedWdsSample ? (
-                            <>
-                              <ListFilterInput
-                                value={filterLevel3}
-                                onValueChange={setFilterLevel3}
-                                placeholder="Filter fields…"
-                                ariaLabel="Filter WebDataset fields"
-                              />
-                              <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
-                                {(() => {
-                                  const visible = selectedWdsSample.fields
-                                    .map((field, index) => ({ field, index }))
-                                    .filter(({ field }) => matchesFilter(`${field.name} ${field.memberPath}`, level3Needle));
-                                  if (visible.length) {
-                                    return visible.map(({ field, index }) => {
-                                      const ext = extFromFilename(field.name) ?? extFromFilename(field.memberPath);
-                                      const selected = selectedWdsField?.memberPath === field.memberPath;
-                                      return (
-                                        <div
-                                          key={`${field.memberPath}:${index}`}
-                                          className={cn(
-                                            "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
-                                            selected ? "bg-cyan-50/60" : "hover:bg-black/[0.03] hover:shadow-sm",
-                                          )}
-                                          onClick={() => selectField(index)}
-                                          onDoubleClick={() => wdsOpenFieldMutation.mutate()}
-                                        >
-                                          <div className="min-w-0">
-                                            <div className="truncate font-medium text-slate-900">
-                                              {field.name} · {field.memberPath}
-                                            </div>
-                                          </div>
-                                          <div className="flex items-center gap-2 whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
-                                            {ext ? (
-                                              <Chip variant="flat" radius="full" size="sm" className="bg-slate-100/80 text-slate-500">
-                                                .{ext}
-                                              </Chip>
-                                            ) : null}
-                                            <span>{formatBytes(field.size)}</span>
-                                          </div>
-                                        </div>
-                                      );
-                                    });
-                                  }
-                                  return <EmptyState hint={level3Needle ? "No matches." : "Select a field."} />;
-                                })()}
-                              </ScrollShadow>
-                            </>
-                          ) : (
-                            <EmptyState hint="Select a sample to see its fields." />
-                          )}
-                        </div>
-                      ),
-                    },
-                  ]}
-                />
-              </motion.div>
-          ) : (
-              <motion.div variants={panelVariants} className="min-w-0 h-full min-h-0">
-                <ThreeColumnExplorer
-                  title="Explorer"
-                  subtitle={isMdsMode ? "Shards → Samples → Fields" : "Shards → Items → Fields"}
-                  icon={<HardDrive className="h-4 w-4 text-emerald-600" />}
-                  meta={localExplorerMeta}
-                  tabKey={explorerTabKey}
-                  onTabChange={setExplorerTabKey}
-                  previewContent={renderLocalPreview()}
-                  logMessage={logMessage}
-                  busy={busy}
-                  errorMessage={errorMessage}
-                  logDockOpen={logDockOpen}
-                  onToggleLogDock={() => setLogDockOpen((prev) => !prev)}
-                  onCopyLog={() => copyText(logMessage)}
-                  onClearLog={() => setStatusMessage(null)}
-                  tabs={[
-                    {
-                      key: "level1",
-                      title: "Shards",
-                      icon: <HardDrive className="h-4 w-4 text-emerald-600" />,
-                      count: indexQuery.data?.chunks.length ?? undefined,
-                      content: (
-                        <div className="flex flex-1 min-h-0 flex-col gap-2">
-                          <ListFilterInput
-                            value={filterLevel1}
-                            onValueChange={setFilterLevel1}
-                            placeholder="Filter shards…"
-                            ariaLabel="Filter local shards"
-                          />
-                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
-                            {(() => {
-                              const chunks = indexQuery.data?.chunks ?? [];
-                              const visible = chunks.filter((chunk) => matchesFilter(chunk.filename, level1Needle));
-                              if (visible.length) {
-                                return visible.map((chunk) => (
-                                  <div
-                                    key={chunk.filename}
-                                    className={cn(
-                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
-                                      selectedChunk?.filename === chunk.filename
-                                        ? "bg-emerald-50/60"
-                                        : "hover:bg-black/[0.03] hover:shadow-sm",
-                                    )}
-                                    onClick={() => {
-                                      setFilterLevel2("");
-                                      setFilterLevel3("");
-                                      selectChunk(chunk.filename);
-                                      setExplorerTabKey("level2");
-                                    }}
-                                  >
-                                    <div className="min-w-0">
-                                      <div className="truncate font-medium text-slate-900" title={chunk.filename}>
-                                        {chunk.filename}
-                                      </div>
-                                    </div>
-                                    <div className="flex items-center gap-2 whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
-                                      <span>
-                                        {chunk.chunkSize.toLocaleString()} {isMdsMode ? "samples" : "items"}
-                                      </span>
-                                      <span className="text-slate-400">·</span>
-                                      <span>{formatBytes(chunk.chunkBytes)}</span>
-                                    </div>
-                                  </div>
-                                ));
-                              }
-                              if (!chunks.length) return <EmptyState hint="Load a dataset to list shards." />;
-                              return <EmptyState hint="No matches. Try a different filter." />;
-                            })()}
-                          </ScrollShadow>
-                        </div>
-                      ),
-                      hint: "Pick a shard.",
-                    },
-                    {
-                      key: "level2",
-                      title: isMdsMode ? "Samples" : "Items",
-                      icon: <BadgeInfo className="h-4 w-4 text-sky-600" />,
-                      count: itemsQuery.data?.length ?? undefined,
-                      isDisabled: !selectedChunk,
-                      content: (
-                        <div className="flex flex-1 min-h-0 flex-col gap-2">
-                          <ListFilterInput
-                            value={filterLevel2}
-                            onValueChange={setFilterLevel2}
-                            placeholder={isMdsMode ? "Filter samples…" : "Filter items…"}
-                            ariaLabel={isMdsMode ? "Filter samples" : "Filter items"}
-                          />
-                          <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
-                            {(() => {
-                              const items = itemsQuery.data ?? [];
-                              const visible = items.filter((item) =>
-                                matchesFilter(`${isMdsMode ? "sample" : "item"} ${item.itemIndex}`, level2Needle),
-                              );
-                              if (visible.length) {
-                                return visible.map((item) => (
-                                  <div
-                                    key={item.itemIndex}
-                                    className={cn(
-                                      "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
-                                      selectedItem?.itemIndex === item.itemIndex
-                                        ? "bg-sky-50/60"
-                                        : "hover:bg-black/[0.03] hover:shadow-sm",
-                                    )}
-                                    onClick={() => {
-                                      setFilterLevel3("");
-                                      selectItem(item.itemIndex);
-                                      setExplorerTabKey("level3");
-                                    }}
-                                  >
-                                    <div className="font-medium text-slate-900">
-                                      {isMdsMode ? "Sample" : "Item"} {item.itemIndex}
-                                    </div>
-                                    <div className="flex items-center gap-2 whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
-                                      <span>
-                                        {item.fields.length.toLocaleString()} {isMdsMode ? "fields" : "leaves"}
-                                      </span>
-                                      <span className="text-slate-400">·</span>
-                                      <span>{formatBytes(item.totalBytes)}</span>
-                                    </div>
-                                  </div>
-                                ));
-                              }
-                              if (!items.length) return <EmptyState hint="Pick a shard to list its samples." />;
-                              return <EmptyState hint="No matches. Try a different filter." />;
-                            })()}
-                          </ScrollShadow>
-                        </div>
-                      ),
-                      hint: isMdsMode ? "Pick a sample." : "Pick an item.",
-                    },
-                    {
-                      key: "level3",
-                      title: "Fields",
-                      icon: <Play className="h-4 w-4 text-cyan-600" />,
-                      count: selectedItem?.fields.length ?? undefined,
-                      isDisabled: !selectedItem,
-                      content: (
-                        <div className="flex flex-1 min-h-0 flex-col gap-2">
-                          <ListFilterInput
-                            value={filterLevel3}
-                            onValueChange={setFilterLevel3}
-                            placeholder="Filter fields…"
-                            ariaLabel="Filter local fields"
-                          />
-                          {selectedItem ? (
-                            <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 overflow-x-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
-                              {(() => {
-                                const fields = selectedItem.fields ?? [];
-                                const visible = fields.filter((field) => {
-                                  const format = indexQuery.data?.dataFormat[field.fieldIndex] ?? "unknown";
-                                  return matchesFilter(`#${field.fieldIndex} ${format}`, level3Needle);
-                                });
-                                if (visible.length) {
-                                  return visible.map((field) => {
-                                    const format = indexQuery.data?.dataFormat[field.fieldIndex] ?? "unknown";
-                                    return (
-                                      <div
-                                        key={field.fieldIndex}
-                                        className={cn(
-                                          "grid min-w-0 cursor-pointer grid-cols-[1fr_auto] items-center gap-2 border-b border-black/[0.04] px-3 py-2 text-[13px] transition-all duration-150",
-                                          selectedField?.fieldIndex === field.fieldIndex
-                                            ? "bg-cyan-50/60"
-                                            : "hover:bg-black/[0.03] hover:shadow-sm",
-                                        )}
-                                        onClick={() => selectField(field.fieldIndex)}
-                                        onDoubleClick={() => openFieldMutation.mutate()}
-                                      >
-                                        <div className="flex min-w-0 items-center gap-2">
-                                          <div className="shrink-0 font-medium text-slate-900">#{field.fieldIndex}</div>
-                                          <Chip
-                                            variant="flat"
-                                            radius="full"
-                                            size="sm"
-                                            className="min-w-0 max-w-full bg-slate-100/80 text-slate-500"
-                                          >
-                                            <span className="truncate">{format}</span>
-                                          </Chip>
-                                        </div>
-                                        <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
-                                          {formatBytes(field.size)}
-                                        </div>
-                                      </div>
-                                    );
-                                  });
+                {enablePagination ? (
+                  <div className="shrink-0 border-t border-black/[0.06] bg-slate-50/50 px-2 py-2">
+                    <div className="flex w-full items-center justify-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={
+                          busy ||
+                          (isHfMode && hfOffset <= 0) ||
+                          (isWdsMode && wdsOffset <= 0) ||
+                          (isZenodoMode && zenodoEntriesOffset <= 0)
+                        }
+                        onClick={() => {
+                          if (isHfMode) setHfOffset(hfOffset - HF_PAGE_SIZE);
+                          else if (isWdsMode) setWdsOffset(wdsOffset - WDS_PAGE_SIZE);
+                          else if (isZenodoMode) setZenodoEntriesOffset(zenodoEntriesOffset - ZENODO_TAR_PAGE_SIZE);
+                        }}
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        Prev
+                      </Button>
+                      <div className="flex flex-1 flex-col items-center justify-center text-center min-w-0">
+                        {isHfMode ? (
+                          <div className="flex items-center gap-1.5">
+                            <Input
+                              className="h-7 w-20 rounded-md bg-white text-xs tabular-nums text-center"
+                              value={hfOffsetDraft}
+                              onChange={(e) => setHfOffsetDraft(e.target.value)}
+                              onBlur={commitHfOffset}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  commitHfOffset();
                                 }
-                                if (!fields.length) return <EmptyState hint="Select an item to see its fields." />;
-                                return <EmptyState hint="No matches. Try a different filter." />;
-                              })()}
-                            </ScrollShadow>
-                          ) : (
-                            <EmptyState hint="Select an item to see its fields." />
-                          )}
-                        </div>
-                      ),
-                    },
-                  ]}
-                />
-              </motion.div>
-          )}
-        </motion.div>
-
-      </div>
-    </main>
-  );
-}
-
-type ExplorerTabKey = "level1" | "level2" | "level3";
-
-function MediaPreviewPanel({
-	  meta,
-	  onOpen,
-	  openDisabled,
-	  openTooltip,
-	  onCopy,
-	  copyPayload,
-	  below,
-	  children,
-	}: {
-	  meta: string;
-	  onOpen?: null | (() => void);
-	  openDisabled?: boolean;
-	  openTooltip?: string;
-	  onCopy?: null | ((text: string) => void);
-	  copyPayload?: string;
-	  below?: ReactNode;
-	  children: ReactNode;
-	}) {
-	  const copyTextPayload = (copyPayload ?? "").trim();
-	  return (
-	    <div className="flex h-full min-h-0 flex-col gap-2">
-	      <div className="flex items-center justify-between gap-2 shrink-0">
-	        <div className="text-xs font-semibold text-slate-700">Preview</div>
-	        <div className="flex items-center gap-1">
-	          {meta ? (
-	            <Chip variant="flat" radius="full" size="sm" className="bg-white/70 text-slate-600">
-	              {meta}
-	            </Chip>
-	          ) : null}
-	          {onOpen ? (
-	            <Tooltip content={openTooltip ?? "Open in default app"} showArrow placement="bottom-end">
-	              <div>
-	                <Button
-	                  type="button"
-	                  isIconOnly
-	                  size="sm"
-	                  variant="light"
-	                  className="h-8 w-8 rounded-full bg-transparent text-slate-600 hover:bg-black/[0.05]"
-	                  onClick={onOpen}
-	                  aria-label="Open in default app"
-	                  isDisabled={openDisabled}
-	                >
-	                  <ArrowUpRightFromSquare className="h-4 w-4" />
-	                </Button>
-	              </div>
-	            </Tooltip>
-	          ) : null}
-	          {onCopy && copyTextPayload ? (
-	            <Button
-	              type="button"
-	              isIconOnly
-	              size="sm"
-	              variant="light"
-	              className="h-8 w-8 rounded-full bg-transparent text-slate-600 hover:bg-black/[0.05]"
-	              onClick={() => onCopy(copyTextPayload)}
-	              aria-label="Copy preview"
-	            >
-	              <Copy className="h-4 w-4" />
-	            </Button>
-	          ) : null}
-	        </div>
-	      </div>
-
-	      <div className="flex-1 min-h-0 overflow-hidden rounded-lg bg-white/60 ring-1 ring-black/[0.05]">
-	        {children}
-	      </div>
-
-	      {below ? <div className="shrink-0">{below}</div> : null}
-	    </div>
-	  );
-	}
-
-	function PreviewPanel({
-	  preview,
-	  onCopy,
-	  onRequestAudioPreview,
-	  onOpen,
-  openDisabled,
-  openTooltip,
-  onAudioError,
-  audioLabel,
-}: {
-  preview: FieldPreview;
-  onCopy: (text: string) => void;
-  onRequestAudioPreview: null | (() => Promise<{ src: string; ext: string }>);
-  onOpen?: null | (() => void);
-  openDisabled?: boolean;
-  openTooltip?: string;
-  onAudioError?: (message: string) => void;
-  audioLabel?: string;
-}) {
-  const [audioSource, setAudioSource] = useState<{ src: string; type?: string } | null>(null);
-  const [audioPreparing, setAudioPreparing] = useState(false);
-  const [audioError, setAudioError] = useState<string | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  const ext = (preview.guessedExt ?? "").trim().replace(/^\./, "").toLowerCase();
-  const supportsAudio = ["wav", "mp3", "flac", "sph", "m4a", "ogg", "opus", "aac"].includes(ext);
-  const looksLikeImage = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff"].includes(ext);
-  const canTryAudio =
-    Boolean(onRequestAudioPreview) && (supportsAudio || (preview.isBinary && !looksLikeImage));
-
-  const prepareAndPlayAudio = async () => {
-    if (!onRequestAudioPreview || audioPreparing) return;
-    if (audioSource) {
-      void audioRef.current?.play().catch(() => undefined);
-      return;
-    }
-    setAudioPreparing(true);
-    setAudioError(null);
-    try {
-      const prepared = await onRequestAudioPreview();
-      setAudioSource({ src: prepared.src, type: audioMimeFromExt(prepared.ext) });
-      setTimeout(() => {
-        audioRef.current?.load();
-        void audioRef.current?.play().catch(() => undefined);
-      }, 0);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error("Audio preview failed:", err);
-      setAudioError(message || "Audio preview failed.");
-      onAudioError?.(message || "Audio preview failed.");
-    } finally {
-      setAudioPreparing(false);
-    }
-  };
-
-  const copyPayload = preview.previewText ? preview.previewText : preview.hexSnippet ? `Hex: ${preview.hexSnippet}` : "";
-  const showAudioPanel = Boolean(audioSource || audioError || canTryAudio);
-  const hasTextPreview = Boolean(preview.previewText && preview.previewText.trim());
-  return (
-    <div className="flex h-full min-h-0 flex-col gap-2">
-      <div className="flex items-center justify-between gap-2 shrink-0">
-        <div className="text-xs font-semibold text-slate-700">Preview</div>
-        <div className="flex items-center gap-1">
-          <Chip variant="flat" radius="full" size="sm" className="bg-white/70 text-slate-600">
-            {preview.guessedExt ? `.${preview.guessedExt}` : "unknown"} · {formatBytes(preview.size)} ·{" "}
-            {preview.isBinary ? "binary" : "text"}
-          </Chip>
-          {audioPreparing ? <Loader2 className="h-4 w-4 animate-spin text-slate-500" /> : null}
-          {canTryAudio ? (
-            <Tooltip content="Audio preview" showArrow placement="bottom-end">
-              <div>
-                <Button
-                  type="button"
-                  isIconOnly
-                  size="sm"
-                  variant="light"
-                  className="h-8 w-8 rounded-full bg-transparent text-slate-600 hover:bg-black/[0.05]"
-                  onClick={() => void prepareAndPlayAudio()}
-                  aria-label="Audio preview"
-                >
-                  <Play className="h-4 w-4" />
-                </Button>
-              </div>
-            </Tooltip>
-          ) : null}
-          {onOpen ? (
-            <Tooltip content={openTooltip ?? "Open in default app"} showArrow placement="bottom-end">
-              <div>
-                <Button
-                  type="button"
-                  isIconOnly
-                  size="sm"
-                  variant="light"
-                  className="h-8 w-8 rounded-full bg-transparent text-slate-600 hover:bg-black/[0.05]"
-                  onClick={onOpen}
-                  aria-label="Open in default app"
-                  isDisabled={openDisabled}
-                >
-                  <ArrowUpRightFromSquare className="h-4 w-4" />
-                </Button>
-              </div>
-            </Tooltip>
-          ) : null}
-          <Button
-            type="button"
-            isIconOnly
-            size="sm"
-            variant="light"
-            className="h-8 w-8 rounded-full bg-transparent text-slate-600 hover:bg-black/[0.05]"
-            onClick={() => onCopy(copyPayload)}
-            aria-label="Copy preview"
-          >
-            <Copy className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-
-      {showAudioPanel ? (
-        <div className="shrink-0 space-y-2">
-          {audioLabel ? <div className="text-xs text-slate-600">{audioLabel}</div> : null}
-          <div
-            className={cn(
-              "relative rounded-lg bg-white/60 p-2 ring-1 ring-black/[0.05]",
-              canTryAudio && !audioSource ? "cursor-pointer" : "",
-            )}
-            onClick={() => {
-              if (!audioSource) void prepareAndPlayAudio();
-            }}
-          >
-            <audio
-              ref={audioRef}
-              controls
-              preload="none"
-              className={cn("h-10 w-full", !audioSource ? "pointer-events-none opacity-70" : "")}
-            >
-              {audioSource ? <source src={audioSource.src} type={audioSource.type} /> : null}
-            </audio>
-          </div>
-          {audioError ? <div className="text-xs text-amber-700">{audioError}</div> : null}
-        </div>
-      ) : null}
-
-      <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 rounded-lg bg-white/60 ring-1 ring-black/[0.05]">
-        <pre className="whitespace-pre-wrap break-all px-2 py-2 text-[11px] text-slate-800 font-mono select-text cursor-text">
-          {hasTextPreview ? preview.previewText : `Hex: ${preview.hexSnippet}`}
-        </pre>
-      </ScrollShadow>
-    </div>
-  );
-}
-
-function JsonPreviewPanel({
-  title,
-  value,
-  onCopy,
-  onOpen,
-  openDisabled,
-  openTooltip,
-}: {
-  title: string;
-  value: unknown;
-  onCopy: () => void;
-  onOpen?: null | (() => void);
-  openDisabled?: boolean;
-  openTooltip?: string;
-}) {
-  const [imageFailedSrc, setImageFailedSrc] = useState<string | null>(null);
-  const [audioFailedSrc, setAudioFailedSrc] = useState<string | null>(null);
-  const [videoFailedSrc, setVideoFailedSrc] = useState<string | null>(null);
-  const previewText = useMemo(() => {
-    const limit = 900;
-    const ellipsis = "…";
-
-    if (typeof value === "string") {
-      const raw = value;
-      return raw.length > limit ? `${raw.slice(0, limit)}${ellipsis}` : raw;
-    }
-
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      const obj = value as Record<string, unknown>;
-      const src = typeof obj.src === "string" ? obj.src.trim() : "";
-      if (src) {
-        const width = typeof obj.width === "number" && Number.isFinite(obj.width) ? obj.width : undefined;
-        const height = typeof obj.height === "number" && Number.isFinite(obj.height) ? obj.height : undefined;
-        let cleanedSrc = src;
-        try {
-          const u = new URL(src);
-          u.search = "";
-          cleanedSrc = u.toString();
-        } catch {
-          // ignore
-        }
-        const compact = safeJson({ width, height, src: cleanedSrc });
-        return compact.length > limit ? `${compact.slice(0, limit)}${ellipsis}` : compact;
-      }
-    }
-
-    if (Array.isArray(value)) {
-      const entries = value
-        .filter((it) => it && typeof it === "object" && !Array.isArray(it))
-        .slice(0, 5)
-        .map((it) => {
-          const obj = it as Record<string, unknown>;
-          const src = typeof obj.src === "string" ? obj.src.trim() : "";
-          if (!src) return null;
-          let cleanedSrc = src;
-          try {
-            const u = new URL(src);
-            u.search = "";
-            cleanedSrc = u.toString();
-          } catch {
-            // ignore
-          }
-          const type = typeof obj.type === "string" ? obj.type.trim() : undefined;
-          return { type, src: cleanedSrc };
-        })
-        .filter(Boolean);
-      if (entries.length) {
-        const compact = safeJson(entries);
-        return compact.length > limit ? `${compact.slice(0, limit)}${ellipsis}` : compact;
-      }
-    }
-
-    const raw = safeJson(value);
-    return raw.length > limit ? `${raw.slice(0, limit)}${ellipsis}` : raw;
-  }, [value]);
-
-  const imageCandidate = useMemo(() => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    const obj = value as Record<string, unknown>;
-    const src = typeof obj.src === "string" ? obj.src.trim() : "";
-    if (!src) return null;
-    if (imageFailedSrc === src) return null;
-    const isAllowed = src.startsWith("https://") || src.startsWith("http://") || src.startsWith("data:image/");
-    if (!isAllowed) return null;
-    const width = typeof obj.width === "number" && Number.isFinite(obj.width) ? obj.width : undefined;
-    const height = typeof obj.height === "number" && Number.isFinite(obj.height) ? obj.height : undefined;
-    return { src, width, height };
-  }, [imageFailedSrc, value]);
-
-  const audioCandidates = useMemo(() => {
-    const guessIsAudio = (src: string, mime?: string) => {
-      const t = (mime ?? "").trim().toLowerCase();
-      if (t.startsWith("audio/")) return true;
-      const ext = extFromUrl(src) ?? "";
-      return ["wav", "mp3", "flac", "m4a", "ogg", "opus", "aac"].includes(ext);
-    };
-
-    const normalizeCandidate = (src: string, mime?: string) => {
-      const cleaned = src.trim();
-      if (!cleaned) return null;
-      if (audioFailedSrc === cleaned) return null;
-      const isAllowed =
-        cleaned.startsWith("https://") || cleaned.startsWith("http://") || cleaned.startsWith("data:audio/");
-      if (!isAllowed) return null;
-      if (!guessIsAudio(cleaned, mime)) return null;
-      return { src: cleaned, type: mime?.trim() || undefined };
-    };
-
-    if (!value) return null;
-
-    if (Array.isArray(value)) {
-      const out = value
-        .filter((it) => it && typeof it === "object" && !Array.isArray(it))
-        .map((it) => {
-          const obj = it as Record<string, unknown>;
-          const src = typeof obj.src === "string" ? obj.src : "";
-          const type = typeof obj.type === "string" ? obj.type : undefined;
-          return normalizeCandidate(src, type);
-        })
-        .filter(Boolean) as Array<{ src: string; type?: string }>;
-      return out.length ? out.slice(0, 3) : null;
-    }
-
-    if (typeof value === "object") {
-      const obj = value as Record<string, unknown>;
-      const src = typeof obj.src === "string" ? obj.src : "";
-      const type = typeof obj.type === "string" ? obj.type : undefined;
-      return normalizeCandidate(src, type) ? [normalizeCandidate(src, type)!] : null;
-    }
-
-    return null;
-  }, [audioFailedSrc, value]);
-
-  const videoCandidates = useMemo(() => {
-    const guessIsVideo = (src: string, mime?: string) => {
-      const t = (mime ?? "").trim().toLowerCase();
-      if (t.startsWith("video/")) return true;
-      const ext = extFromUrl(src) ?? "";
-      return ["mp4", "webm", "mov", "m4v"].includes(ext);
-    };
-
-    const normalizeCandidate = (src: string, mime?: string) => {
-      const cleaned = src.trim();
-      if (!cleaned) return null;
-      if (videoFailedSrc === cleaned) return null;
-      const isAllowed =
-        cleaned.startsWith("https://") || cleaned.startsWith("http://") || cleaned.startsWith("data:video/");
-      if (!isAllowed) return null;
-      if (!guessIsVideo(cleaned, mime)) return null;
-      return { src: cleaned, type: mime?.trim() || undefined };
-    };
-
-    if (!value) return null;
-
-    if (Array.isArray(value)) {
-      const out = value
-        .filter((it) => it && typeof it === "object" && !Array.isArray(it))
-        .map((it) => {
-          const obj = it as Record<string, unknown>;
-          const src = typeof obj.src === "string" ? obj.src : "";
-          const type = typeof obj.type === "string" ? obj.type : undefined;
-          return normalizeCandidate(src, type);
-        })
-        .filter(Boolean) as Array<{ src: string; type?: string }>;
-      return out.length ? out.slice(0, 2) : null;
-    }
-
-    if (typeof value === "object") {
-      const obj = value as Record<string, unknown>;
-      const src = typeof obj.src === "string" ? obj.src : "";
-      const type = typeof obj.type === "string" ? obj.type : undefined;
-      return normalizeCandidate(src, type) ? [normalizeCandidate(src, type)!] : null;
-    }
-
-    return null;
-  }, [videoFailedSrc, value]);
-
-  return (
-    <div className="flex h-full min-h-0 flex-col gap-2">
-      <div className="flex items-center justify-between gap-2 shrink-0">
-        <div className="min-w-0 truncate text-xs font-semibold text-slate-700">{title}</div>
-        <div className="flex items-center gap-1">
-          {onOpen ? (
-            <Tooltip content={openTooltip ?? "Open in default app"} showArrow placement="bottom-end">
-              <div>
-                <Button
-                  type="button"
-                  isIconOnly
-                  size="sm"
-                  variant="light"
-                  className="h-8 w-8 rounded-full bg-transparent text-slate-600 hover:bg-black/[0.05]"
-                  onClick={onOpen}
-                  aria-label="Open in default app"
-                  isDisabled={openDisabled}
-                >
-                  <ArrowUpRightFromSquare className="h-4 w-4" />
-                </Button>
-              </div>
-            </Tooltip>
-          ) : null}
-          <Button
-            type="button"
-            isIconOnly
-            size="sm"
-            variant="light"
-            className="h-8 w-8 rounded-full bg-transparent text-slate-600 hover:bg-black/[0.05]"
-            onClick={onCopy}
-            aria-label="Copy JSON value"
-          >
-            <Copy className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-      {audioCandidates ? (
-        <div className="shrink-0 space-y-2">
-          {audioCandidates.map((candidate) => (
-            <div key={candidate.src} className="rounded-lg bg-white/60 p-2 ring-1 ring-black/[0.05]">
-              <audio
-                controls
-                preload="none"
-                className="w-full"
-                onError={() => setAudioFailedSrc(candidate.src)}
-              >
-                <source src={candidate.src} type={candidate.type} />
-              </audio>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {videoCandidates ? (
-        <div className="shrink-0 space-y-2">
-          {videoCandidates.map((candidate) => (
-            <div key={candidate.src} className="rounded-lg bg-white/60 p-2 ring-1 ring-black/[0.05]">
-              <video
-                controls
-                preload="metadata"
-                className="w-full max-h-[360px] rounded-lg bg-slate-50"
-                onError={() => setVideoFailedSrc(candidate.src)}
-              >
-                <source src={candidate.src} type={candidate.type} />
-              </video>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {imageCandidate ? (
-        <div className="shrink-0 rounded-lg bg-white/60 p-2 ring-1 ring-black/[0.05]">
-          <img
-            src={imageCandidate.src}
-            alt={title}
-            width={imageCandidate.width}
-            height={imageCandidate.height}
-            loading="lazy"
-            decoding="async"
-            className="max-h-[360px] w-full rounded-lg object-contain bg-slate-50"
-            onError={() => setImageFailedSrc(imageCandidate.src)}
-          />
-        </div>
-      ) : null}
-      <ScrollShadow hideScrollBar className="overflow-y-autoflex-1 min-h-0 rounded-lg bg-white/60 ring-1 ring-black/[0.05]">
-        <pre className="whitespace-pre-wrap break-all px-2 py-2 text-[11px] text-slate-800 font-mono select-text cursor-text">
-          {previewText}
-        </pre>
-      </ScrollShadow>
-    </div>
-  );
-}
-
-function EmptyState({ hint }: { hint: string }) {
-  return (
-    <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
-      <TriangleAlert className="h-4 w-4 text-slate-400" />
-      <div className="max-w-[520px] leading-relaxed">{hint}</div>
-    </div>
-  );
-}
-
-/** Apple-style three-column explorer with preview integrated in the third column */
-function ThreeColumnExplorer({
-  title,
-  subtitle,
-  icon,
-  meta,
-  tabKey,
-  onTabChange,
-  tabs,
-  previewContent,
-  logMessage,
-  busy,
-  errorMessage,
-  logDockOpen,
-  onToggleLogDock,
-  onCopyLog,
-  onClearLog,
-}: {
-  title: string;
-  subtitle?: string | null;
-  icon: ReactNode;
-  meta: string[];
-  tabKey: ExplorerTabKey;
-  onTabChange: (next: ExplorerTabKey) => void;
-  tabs: Array<{
-    key: ExplorerTabKey;
-    title: string;
-    icon: ReactNode;
-    count?: string | number;
-    isDisabled?: boolean;
-    content: ReactNode;
-    hint?: string;
-  }>;
-  previewContent: ReactNode;
-  logMessage: string;
-  busy: boolean;
-  errorMessage: string | null;
-  logDockOpen: boolean;
-  onToggleLogDock: () => void;
-  onCopyLog: () => void;
-  onClearLog: () => void;
-}) {
-  const statusLabel = busy ? "Working" : errorMessage ? "Error" : "Ready";
-  const statusBadgeClass = errorMessage
-    ? "bg-rose-100/80 text-rose-700"
-    : busy
-      ? "bg-amber-100/80 text-amber-800"
-      : "bg-emerald-100/80 text-emerald-800";
-  const logSummary = useMemo(() => {
-    const trimmed = logMessage.trim();
-    if (!trimmed) return "—";
-    const lines = trimmed.split("\n").map((l) => l.trim()).filter(Boolean);
-    return lines[0] ?? trimmed;
-  }, [logMessage]);
-
-  return (
-    <div className="min-w-0 flex h-full flex-col overflow-hidden rounded-2xl bg-white/80 shadow-sm backdrop-blur-xl ring-1 ring-black/[0.08]">
-      {/* Desktop: Three columns - no header bar */}
-      <div className="hidden lg:grid flex-1 min-h-0 grid-cols-3">
-        {tabs.map((tab, idx) => {
-          const isLastColumn = idx === tabs.length - 1;
-          return (
-            <div
-              key={tab.key}
-              className={cn(
-                "flex min-w-0 min-h-0 flex-col",
-                idx < tabs.length - 1 ? "border-r border-black/[0.06]" : "",
-                tab.isDisabled ? "opacity-50 pointer-events-none" : "",
-              )}
-            >
-              {/* Column header */}
-              <div className="flex items-center gap-2 border-b border-black/[0.06] bg-slate-50/50 px-3 py-2">
-                <span className="text-slate-500">{tab.icon}</span>
-                <span className="text-[12px] font-semibold text-slate-700">{tab.title}</span>
-                {tab.count !== undefined ? (
-                  <span className="ml-auto text-[11px] font-medium text-slate-500 tabular-nums">{tab.count}</span>
+                              }}
+                              aria-label="Row offset"
+                            />
+                            <span className="text-[11px] text-slate-500 tabular-nums">
+                              {hfQuery.data?.numRowsTotal !== null && hfQuery.data?.numRowsTotal !== undefined
+                                ? `/ ${hfQuery.data.numRowsTotal.toLocaleString()}`
+                                : ""}
+                            </span>
+                          </div>
+                        ) : isWdsMode ? (
+                          <span className="text-[11px] font-medium text-slate-600 tabular-nums">
+                            Offset {wdsOffset.toLocaleString()}
+                            {wdsSamplesQuery.data?.numSamplesTotal !== null && wdsSamplesQuery.data?.numSamplesTotal !== undefined
+                              ? ` / ${wdsSamplesQuery.data.numSamplesTotal.toLocaleString()}`
+                              : ""}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] font-medium text-slate-600 tabular-nums">
+                            Offset {zenodoEntriesOffset.toLocaleString()}
+                            {zenodoTarEntriesQuery.data?.numEntriesTotal !== null && zenodoTarEntriesQuery.data?.numEntriesTotal !== undefined
+                              ? ` / ${zenodoTarEntriesQuery.data.numEntriesTotal.toLocaleString()}`
+                              : ""}
+                          </span>
+                        )}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={
+                          busy ||
+                          (isHfMode &&
+                            hfQuery.data?.numRowsTotal !== null &&
+                            hfQuery.data?.numRowsTotal !== undefined &&
+                            hfOffset + HF_PAGE_SIZE >= hfQuery.data.numRowsTotal) ||
+                          (isWdsMode &&
+                            wdsSamplesQuery.data?.numSamplesTotal !== null &&
+                            wdsSamplesQuery.data?.numSamplesTotal !== undefined &&
+                            wdsOffset + WDS_PAGE_SIZE >= wdsSamplesQuery.data.numSamplesTotal) ||
+                          (isZenodoMode &&
+                            zenodoTarEntriesQuery.data?.numEntriesTotal !== null &&
+                            zenodoTarEntriesQuery.data?.numEntriesTotal !== undefined &&
+                            zenodoEntriesOffset + ZENODO_TAR_PAGE_SIZE >= zenodoTarEntriesQuery.data.numEntriesTotal)
+                        }
+                        onClick={() => {
+                          if (isHfMode) setHfOffset(hfOffset + HF_PAGE_SIZE);
+                          else if (isWdsMode) setWdsOffset(wdsOffset + WDS_PAGE_SIZE);
+                          else if (isZenodoMode) setZenodoEntriesOffset(zenodoEntriesOffset + ZENODO_TAR_PAGE_SIZE);
+                        }}
+                      >
+                        Next
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
                 ) : null}
               </div>
 
-              {/* Column content */}
-              {isLastColumn ? (
+              {/* Column 3 */}
+              <div className="flex min-w-0 min-h-0 flex-col">
+                <div className="flex items-center gap-2 border-b border-black/[0.06] bg-slate-50/50 px-3 py-2">
+                  <Play className="h-4 w-4 text-cyan-600" />
+                  <span className="text-[12px] font-semibold text-slate-700">Fields</span>
+                  <span className="ml-auto text-[11px] font-medium text-slate-500 tabular-nums">
+                    {isHfMode
+                      ? hfSelectedRow
+                        ? Object.keys(hfSelectedRow).length
+                        : "—"
+                      : isWdsMode
+                        ? wdsSelectedSample?.fields.length ?? "—"
+                        : fieldNames.length || "—"}
+                  </span>
+                </div>
                 <div className="flex flex-1 min-h-0 flex-col">
-                  {/* Fields list - flexible height */}
                   <div className="flex flex-col min-h-0 flex-1 overflow-hidden">
                     <div className="flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden px-2 py-1.5">
                       <div className="flex h-full min-h-0 flex-col gap-1.5">
-                        {tab.content}
+                        <ListFilterInput
+                          value={filterLevel3}
+                          onValueChange={setFilterLevel3}
+                          placeholder="Filter fields…"
+                          ariaLabel="Filter level 3"
+                        />
+                        <ScrollArea className="flex-1 min-h-0 rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
+                          {isHfMode && hfSelectedRow ? (
+                            Object.keys(hfSelectedRow)
+                              .filter((key) => matchesFilter(key, level3Needle))
+                              .sort((a, b) => a.localeCompare(b))
+                              .map((key) => {
+                                const fieldValue = hfSelectedRow[key];
+                                const typeHint =
+                                  fieldValue === null
+                                    ? "null"
+                                    : Array.isArray(fieldValue)
+                                      ? `array(${fieldValue.length})`
+                                      : typeof fieldValue === "number"
+                                        ? "number"
+                                        : typeof fieldValue === "boolean"
+                                          ? "bool"
+                                          : typeof fieldValue === "string"
+                                            ? "text"
+                                            : "json";
+                                return (
+                                  <SelectableRowButton
+                                    key={key}
+                                    isSelected={hfSelectedFieldName === key}
+                                    className="grid-cols-[1fr_auto] items-center gap-2"
+                                    ariaLabel={`Select field ${key}`}
+                                    onClick={() => selectHfField(key)}
+                                  >
+                                    <div className="truncate font-medium text-slate-900">{key}</div>
+                                    <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
+                                      {typeHint}
+                                    </div>
+                                  </SelectableRowButton>
+                                );
+                              })
+                          ) : isWdsMode && wdsSelectedSample ? (
+                            wdsSelectedSample.fields
+                              .filter((field) => matchesFilter(field.name, level3Needle))
+                              .map((field) => (
+                                <SelectableRowButton
+                                  key={field.memberPath}
+                                  isSelected={wdsSelectedMemberPath === field.memberPath}
+                                  className="grid-cols-[1fr_auto] items-center gap-2"
+                                  ariaLabel={`Select field ${field.name}`}
+                                  onClick={() => selectWdsMember(field.memberPath, field.name)}
+                                >
+                                  <div className="truncate font-medium text-slate-900">{field.name}</div>
+                                  <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
+                                    {formatBytes(field.size)}
+                                  </div>
+                                </SelectableRowButton>
+                              ))
+                          ) : fieldNames.length > 0 ? (
+                            fieldNames
+                              .filter((field) => matchesFilter(`Field ${field.fieldIndex}`, level3Needle))
+                              .map((field) => (
+                                <SelectableRowButton
+                                  key={field.fieldIndex}
+                                  isSelected={selectedFieldIndex === field.fieldIndex}
+                                  className="grid-cols-[1fr_auto] items-center gap-2"
+                                  ariaLabel={`Select field ${field.fieldIndex}`}
+                                  onClick={() => selectField(field.fieldIndex)}
+                                >
+                                  <div className="truncate font-medium text-slate-900">Field {field.fieldIndex}</div>
+                                  <div className="whitespace-nowrap text-[11px] text-slate-500 tabular-nums">
+                                    {formatBytes(field.size)}
+                                  </div>
+                                </SelectableRowButton>
+                              ))
+                          ) : selectedItemIndex !== null ? (
+                            <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
+                              <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                              <div className="max-w-[520px] leading-relaxed">Loading fields…</div>
+                            </div>
+                          ) : (
+                            <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
+                              <TriangleAlert className="h-4 w-4 text-slate-400" />
+                              <div className="max-w-[520px] leading-relaxed">Select an item to see its fields.</div>
+                            </div>
+                          )}
+                        </ScrollArea>
                       </div>
                     </div>
                   </div>
 
-                  {/* Preview section - auto height with max */}
-                  <div className="shrink-0 max-h-[40%] flex flex-col border-t border-black/[0.06]">
+                  <div className="shrink min-h-0 max-h-[50%] flex flex-col border-t border-black/[0.06]">
                     <div className="flex items-center gap-2 border-b border-black/[0.06] bg-slate-50/50 px-3 py-1.5">
                       <Sparkles className="h-3.5 w-3.5 text-slate-400" />
                       <span className="text-[11px] font-semibold text-slate-600">Preview</span>
+                      {previewMetaSource && (
+                        <div className="ml-auto flex items-center gap-1.5">
+                          {buildPreviewMeta(previewMetaSource).map((tag, i) => (
+                            <Badge key={i} variant="secondary" className="text-[10px]">
+                              {tag}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <div className="flex flex-1 min-h-0 flex-col overflow-auto px-2 py-1.5">
-                      {previewContent}
+                      {localPreviewLoading ? (
+                        <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
+                          <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                          <div>Loading preview…</div>
+                        </div>
+                      ) : localPreviewData ? (
+                        <div className="space-y-2">
+                          {audioPreviewPath ? (
+                            <audio controls className="w-full" src={toFileSrc(audioPreviewPath)} />
+                          ) : null}
+                          <ScrollArea className="max-h-32 rounded-none bg-slate-50/70 px-3 py-2 text-xs select-text cursor-text">
+                            <pre
+                              className={cn(
+                                "font-mono text-slate-700",
+                                localPreviewData.isBinary ? "whitespace-pre" : "whitespace-pre-wrap break-words",
+                              )}
+                            >
+                              {buildPreviewBodyText(localPreviewData)}
+                            </pre>
+                          </ScrollArea>
+                          <div className="flex items-center gap-2">
+                            <CopyButton text={buildPreviewBodyText(localPreviewData)} />
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                void (async () => {
+                                  try {
+                                    if (isLitdataMode) {
+                                      if (
+                                        !selectedChunk ||
+                                        selectedItemIndex === null ||
+                                        selectedFieldIndex === null ||
+                                        !indexQuery.data?.indexPath
+                                      )
+                                        return;
+                                      const response = await openLeaf({
+                                        indexPath: indexQuery.data.indexPath,
+                                        chunkFilename: selectedChunk.filename,
+                                        itemIndex: selectedItemIndex,
+                                        fieldIndex: selectedFieldIndex,
+                                      });
+                                      await handleOpenResult(response);
+                                      return;
+                                    }
+
+                                    if (isMdsMode) {
+                                      if (
+                                        !selectedChunk ||
+                                        selectedItemIndex === null ||
+                                        selectedFieldIndex === null ||
+                                        !indexQuery.data?.indexPath
+                                      )
+                                        return;
+                                      const response = await mosaicmlOpenLeaf({
+                                        indexPath: indexQuery.data.indexPath,
+                                        shardFilename: selectedChunk.filename,
+                                        itemIndex: selectedItemIndex,
+                                        fieldIndex: selectedFieldIndex,
+                                      });
+                                      await handleOpenResult(response);
+                                      return;
+                                    }
+
+                                    if (isWdsMode) {
+                                      if (!selectedShard || !wdsSelectedMemberPath || !wdsDirQuery.data?.dirPath) return;
+                                      const response = await wdsOpenMember({
+                                        dirPath: wdsDirQuery.data.dirPath,
+                                        shardFilename: selectedShard.filename,
+                                        memberPath: wdsSelectedMemberPath,
+                                      });
+                                      await handleOpenResult(response);
+                                    }
+                                  } catch (err) {
+                                    setStatusMessage(err instanceof Error ? err.message : "Unable to open the selected field.");
+                                  }
+                                })();
+                              }}
+                            >
+                              <ArrowUpRightFromSquare className="mr-1 h-3.5 w-3.5" />
+                              Open
+                            </Button>
+                          </div>
+                        </div>
+                      ) : isZenodoMode ? (
+                        zenodoPreviewLoading ? (
+                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
+                            <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                            <div>Loading preview…</div>
+                          </div>
+                        ) : zenodoPreviewData ? (
+                          <div className="space-y-2">
+                            {!zenodoInlineMediaData &&
+                            selectedZenodoFile &&
+                            !selectedZenodoFileIsTar &&
+                            !selectedZenodoFileIsZip &&
+                            zenodoPreviewData.guessedExt &&
+                            videoMimeFromExt(zenodoPreviewData.guessedExt) ? (
+                              <div className="rounded-lg bg-slate-900 p-2 overflow-hidden">
+                                <video controls preload="metadata" className="w-full max-h-[40vh]" src={selectedZenodoFile.contentUrl}>
+                                  Your browser does not support the video tag.
+                                </video>
+                              </div>
+                            ) : null}
+                            {zenodoInlineMediaData ? (
+                              zenodoInlineMediaData.mime.startsWith("image/") ? (
+                                <div className="rounded-lg bg-slate-50/70 px-3 py-2 overflow-hidden">
+                                  <img
+                                    alt={selectedZenodoEntry?.name ?? selectedZenodoFile?.key ?? "Zenodo preview"}
+                                    src={`data:${zenodoInlineMediaData.mime};base64,${zenodoInlineMediaData.base64}`}
+                                    className="w-full max-h-[40vh] object-contain"
+                                  />
+                                </div>
+                              ) : zenodoInlineMediaData.mime.startsWith("video/") ? (
+                                <div className="rounded-lg bg-slate-900 p-2 overflow-hidden">
+                                  <video
+                                    controls
+                                    className="w-full max-h-[40vh]"
+                                    src={`data:${zenodoInlineMediaData.mime};base64,${zenodoInlineMediaData.base64}`}
+                                  >
+                                    Your browser does not support the video tag.
+                                  </video>
+                                </div>
+                              ) : zenodoInlineMediaData.mime.startsWith("audio/") ? (
+                                <audio controls className="w-full" src={`data:${zenodoInlineMediaData.mime};base64,${zenodoInlineMediaData.base64}`} />
+                              ) : null
+                            ) : null}
+                            <ScrollArea className="max-h-32 rounded-none bg-slate-50/70 px-3 py-2 text-xs select-text cursor-text">
+                              <pre
+                                className={cn(
+                                  "font-mono text-slate-700",
+                                  zenodoPreviewData.isBinary ? "whitespace-pre" : "whitespace-pre-wrap break-words",
+                                )}
+                              >
+                                {buildPreviewBodyText(zenodoPreviewData)}
+                              </pre>
+                            </ScrollArea>
+                            <div className="flex items-center gap-2">
+                              <CopyButton text={buildPreviewBodyText(zenodoPreviewData)} />
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => {
+                                  void (async () => {
+                                    try {
+                                      if (!selectedZenodoFile) return;
+                                      const response = selectedZenodoEntry
+                                        ? selectedZenodoFileIsTar
+                                          ? await zenodoTarOpenEntry({
+                                              contentUrl: selectedZenodoFile.contentUrl,
+                                              filename: selectedZenodoFile.key,
+                                              entryName: selectedZenodoEntry.name,
+                                            })
+                                          : selectedZenodoFileIsZip
+                                            ? await zenodoZipOpenEntry({
+                                                contentUrl: selectedZenodoFile.contentUrl,
+                                                filename: selectedZenodoFile.key,
+                                                entryName: selectedZenodoEntry.name,
+                                              })
+                                            : await zenodoOpenFile({ contentUrl: selectedZenodoFile.contentUrl })
+                                        : await zenodoOpenFile({ contentUrl: selectedZenodoFile.contentUrl });
+                                      await handleOpenResult(response);
+                                    } catch (err) {
+                                      setStatusMessage(err instanceof Error ? err.message : "Unable to open the selected file.");
+                                    }
+                                  })();
+                                }}
+                              >
+                                <ArrowUpRightFromSquare className="mr-1 h-3.5 w-3.5" />
+                                Open
+                              </Button>
+                            </div>
+                          </div>
+                        ) : selectedZenodoFile ? (
+                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
+                            <Sparkles className="h-5 w-5 text-slate-400" />
+                            <div>
+                              {selectedZenodoEntry ? "Pick an entry to preview its bytes." : "Pick a file to preview its bytes."}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
+                            <Sparkles className="h-5 w-5 text-slate-400" />
+                            <div>Pick a file to preview its bytes.</div>
+                          </div>
+                        )
+                      ) : isHfMode && hfSelectedFieldName && hfSelectedRow ? (
+                        (() => {
+                          const fieldValue = hfSelectedRow[hfSelectedFieldName];
+                          const media = extractHfMedia(fieldValue, hfSelectedFieldName);
+                          const isAudio = isHfAudioMedia(media);
+                          const isImage = isHfImageMedia(media);
+                          const isVideo = isHfVideoMedia(media);
+
+                          const isBase64Media = media && media.src.startsWith("data:");
+                          const showRawValue = !isBase64Media;
+
+                          return (
+                            <div className="space-y-2">
+                              {isVideo && media ? (
+                                <div className="rounded-lg bg-slate-900 p-2 overflow-hidden">
+                                  <video controls className="w-full max-h-[40vh]" src={media.src}>
+                                    Your browser does not support the video tag.
+                                  </video>
+                                </div>
+                              ) : isAudio && media ? (
+                                <audio controls className="w-full" src={media.src} />
+                              ) : isImage && media ? (
+                                <div className="rounded-lg bg-slate-50/70 p-2 overflow-hidden">
+                                  <img src={media.src} alt={hfSelectedFieldName} className="w-full max-h-[40vh] object-contain" />
+                                </div>
+                              ) : null}
+                              {showRawValue && (
+                                <ScrollArea className="max-h-32 rounded-none bg-slate-50/70 px-3 py-2 text-xs select-text cursor-text">
+                                  <pre className="whitespace-pre-wrap break-words font-mono text-slate-700">
+                                    {safeJson(fieldValue)}
+                                  </pre>
+                                </ScrollArea>
+                              )}
+                              {isBase64Media && (
+                                <div className="text-xs text-slate-500 px-1">
+                                  Base64-encoded {isVideo ? "video" : isAudio ? "audio" : "media"} (
+                                  {typeof fieldValue === "string" ? Math.round(fieldValue.length / 1024) : 0} KB)
+                                </div>
+                              )}
+                              <div className="flex items-center gap-2">
+                                <CopyButton text={safeJson(fieldValue)} />
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => {
+                                    void (async () => {
+                                      try {
+                                        const effectiveConfig = hfConfigOverride ?? hfQuery.data?.config;
+                                        const effectiveSplit = hfSplitOverride ?? hfQuery.data?.split;
+                                        if (!hfDatasetInput || !hfSelectedFieldName || !effectiveConfig || !effectiveSplit) return;
+                                        const response = await hfOpenField({
+                                          input: hfDatasetInput,
+                                          config: effectiveConfig,
+                                          split: effectiveSplit,
+                                          rowIndex: hfOffset + (hfSelectedRowIndex ?? 0),
+                                          fieldName: hfSelectedFieldName,
+                                          token: hfToken,
+                                        });
+                                        await handleOpenResult(response);
+                                      } catch (err) {
+                                        setStatusMessage(err instanceof Error ? err.message : "Unable to open the selected field.");
+                                      }
+                                    })();
+                                  }}
+                                >
+                                  <ArrowUpRightFromSquare className="mr-1 h-3.5 w-3.5" />
+                                  Open
+                                </Button>
+                              </div>
+                            </div>
+                          );
+                        })()
+                      ) : (
+                        <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-slate-500">
+                          <Sparkles className="h-5 w-5 text-slate-400" />
+                          <div>Pick a field to preview its bytes.</div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
-              ) : (
-                <div className="flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden px-2 py-1.5">
-                  <div className="flex h-full min-h-0 flex-col gap-1.5">
-                    {tab.content}
-                  </div>
-                </div>
-              )}
+              </div>
             </div>
-          );
-        })}
-      </div>
 
-      {/* Mobile: Tabbed interface */}
-      <div className="flex flex-1 min-h-0 flex-col overflow-hidden px-3 pb-3 lg:hidden">
-        <Tabs
-          aria-label="Explorer tabs"
-          variant="solid"
-          fullWidth
-          selectedKey={tabKey}
-          onSelectionChange={(key) => {
-            const next = String(key);
-            if (next === "level1" || next === "level2" || next === "level3") {
-              onTabChange(next);
-            }
-          }}
-          classNames={{
-            base: "shrink-0",
-            tabList: "shrink-0 rounded-full bg-black/[0.04] p-1 ring-1 ring-black/[0.04]",
-            tab: "h-9 px-3 text-xs font-semibold text-slate-600 data-[selected=true]:text-slate-900",
-            tabContent: "gap-2",
-            cursor: "rounded-full bg-white/90 shadow-sm",
-            panel: "flex-1 min-h-0 overflow-hidden pt-2",
-          }}
-        >
-          {tabs.map((tab) => (
-            <Tab
-              key={tab.key}
-              isDisabled={tab.isDisabled}
-              title={
+            {/* Log dock */}
+            <div className="shrink-0 border-t border-black/[0.04] bg-white/40">
+              <Button
+                type="button"
+                variant="ghost"
+                className={cn(
+                  "flex h-auto w-full items-center gap-3 rounded-none px-4 py-2.5 text-left justify-start",
+                  logDockOpen ? "bg-white/50 hover:bg-white/50" : "hover:bg-white/60",
+                )}
+                onClick={() => setLogDockOpen((prev) => !prev)}
+              >
                 <div className="flex items-center gap-2">
-                  {tab.icon}
-                  <span>{tab.title}</span>
-                  {tab.count !== undefined ? (
-                    <Chip variant="flat" radius="full" size="sm" className="bg-white/75 text-slate-600">
-                      {tab.count}
-                    </Chip>
-                  ) : null}
+                  <Terminal className="h-4 w-4 text-slate-500" />
+                  <span className="text-[12px] font-medium text-slate-700">Log</span>
+                  <Badge variant={errorMessage ? "danger" : busy ? "warning" : "success"} className="text-[10px] font-semibold">
+                    {busy ? "Working" : errorMessage ? "Error" : "Ready"}
+                  </Badge>
                 </div>
-              }
-            >
-              <div className="flex h-full min-h-0 flex-col gap-2">
-                {tab.content}
-                {tab.hint ? (
-                  <div className="flex items-center gap-2 text-xs text-slate-500">
-                    <ArrowRight className="h-3.5 w-3.5 text-slate-400" />
-                    {tab.hint}
+                <div className="ml-auto flex min-w-0 items-center gap-2 text-[11px] text-slate-500">
+                  <span className="truncate">{logMessage}</span>
+                  <ChevronRight className={cn("h-4 w-4 shrink-0 text-slate-400 transition", logDockOpen ? "rotate-90" : "")} />
+                </div>
+              </Button>
+
+              {logDockOpen ? (
+                <div className="space-y-3 border-t border-black/[0.04] bg-white/50 px-4 py-3">
+                  <ScrollArea
+                    className={cn(
+                      "max-h-48 rounded-lg px-3 py-2 text-xs select-text cursor-text",
+                      errorMessage ? "bg-rose-50/70 text-rose-700" : "bg-slate-50/70 text-slate-700",
+                    )}
+                  >
+                    <pre className="whitespace-pre-wrap break-words font-mono">{logMessage}</pre>
+                  </ScrollArea>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <CopyButton text={logMessage.trim()} />
+                      <Button size="sm" variant="ghost" onClick={() => setStatusMessage(null)}>
+                        Clear
+                      </Button>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-slate-500">
+                      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600" /> : null}
+                      {errorMessage ? <TriangleAlert className="h-3.5 w-3.5 text-rose-500" /> : null}
+                      <span className="whitespace-nowrap">{busy ? "Working" : errorMessage ? "Resolve and retry" : "Idle"}</span>
+                    </div>
                   </div>
-                ) : null}
-              </div>
-            </Tab>
-          ))}
-        </Tabs>
-
-        {/* Mobile: Preview section below tabs */}
-        {tabKey === "level3" ? (
-          <div className="mt-3 flex-1 min-h-0 flex flex-col overflow-hidden rounded-xl bg-white/50 ring-1 ring-black/[0.04]">
-            <div className="flex items-center gap-2 border-b border-black/[0.04] px-3 py-2">
-              <Sparkles className="h-4 w-4 text-slate-500" />
-              <span className="text-[12px] font-medium text-slate-700">Preview</span>
-            </div>
-            <div className="flex flex-1 min-h-0 flex-col overflow-hidden p-2">
-              {previewContent}
+                </div>
+              ) : null}
             </div>
           </div>
-        ) : null}
+        </motion.div>
       </div>
-
-      {/* Log dock - fixed at bottom */}
-      <div className="shrink-0 border-t border-black/[0.04] bg-white/40">
-        <button
-          type="button"
-          className={cn(
-            "flex w-full items-center gap-3 px-4 py-2.5 text-left transition",
-            logDockOpen ? "bg-white/50" : "hover:bg-white/60",
-          )}
-          onClick={onToggleLogDock}
-        >
-          <div className="flex items-center gap-2">
-            <Terminal className="h-4 w-4 text-slate-500" />
-            <span className="text-[12px] font-medium text-slate-700">Log</span>
-            <Chip variant="flat" radius="full" size="sm" className={cn("text-[10px] font-semibold", statusBadgeClass)}>
-              {statusLabel}
-            </Chip>
-          </div>
-          <div className="ml-auto flex min-w-0 items-center gap-2 text-[11px] text-slate-500">
-            <span className="truncate">{logSummary}</span>
-            <ChevronRight className={cn("h-4 w-4 shrink-0 text-slate-400 transition", logDockOpen ? "rotate-90" : "")} />
-          </div>
-        </button>
-
-        {logDockOpen ? (
-          <div className="space-y-3 border-t border-black/[0.04] bg-white/50 px-4 py-3">
-            <ScrollShadow
-              hideScrollBar
-              className={cn(
-                "overflow-y-auto max-h-48 rounded-lg px-3 py-2 text-xs select-text cursor-text",
-                errorMessage ? "bg-rose-50/70 text-rose-700" : "bg-slate-50/70 text-slate-700",
-              )}
-            >
-              <pre className="whitespace-pre-wrap break-words font-mono">{logMessage}</pre>
-            </ScrollShadow>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Button size="sm" variant="light" onClick={onCopyLog}>
-                  <Copy className="mr-1 h-3.5 w-3.5" />
-                  Copy
-                </Button>
-                <Button size="sm" variant="light" onClick={onClearLog}>
-                  Clear
-                </Button>
-              </div>
-              <div className="flex items-center gap-2 text-xs text-slate-500">
-                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600" /> : null}
-                {errorMessage ? <TriangleAlert className="h-3.5 w-3.5 text-rose-500" /> : null}
-                <span className="whitespace-nowrap">{busy ? "Working" : errorMessage ? "Resolve and retry" : "Idle"}</span>
-              </div>
-            </div>
-          </div>
-        ) : null}
-      </div>
-    </div>
+    </main>
   );
 }
