@@ -1,6 +1,6 @@
 # MosaicML Streaming (MDS) support
 
-Dataset Inspector supports the MosaicML Streaming dataset format (MDS v2).
+Dataset Inspector supports the MosaicML Streaming dataset format (MDS).
 
 Dataset Inspector treats an MDS dataset as:
 
@@ -11,7 +11,7 @@ Dataset Inspector treats an MDS dataset as:
 
 ## Notes and limitations
 
-- Only MDS v2 is supported.
+- Only MDS is supported.
 - The app reads raw field bytes and does not deserialize unsafe Python types (for example, pickled objects).
 - Scalar encodings are decoded to text for preview when possible.
 - Compressed shards are decompressed to a temporary cache directory under system temp (`dataset-inspector/mds-cache`).
