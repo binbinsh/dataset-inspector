@@ -4,11 +4,11 @@
 
 <h1 align="center">Dataset Inspector</h1>
 
-Dataset Inspector is a desktop UI for inspecting local [Lightning-AI/litData](https://github.com/Lightning-AI/litData) shards, [MosaicML Streaming](https://github.com/mosaicml/streaming) (MDS v2) shards, and [WebDataset](https://github.com/webdataset/webdataset) tar shards, with support for previewing [Hugging Face](https://huggingface.co/blog/streaming-datasets) and [Zenodo](https://www.zenodo.org) datasets directly over HTTP without full downloads.
+Dataset Inspector is a desktop UI for inspecting local [Lightning-AI/litData](https://github.com/Lightning-AI/litData) shards, [MosaicML Streaming](https://github.com/mosaicml/streaming) (MDS) shards, and [WebDataset](https://github.com/webdataset/webdataset) tar shards, with support for previewing [Hugging Face](https://huggingface.co/blog/streaming-datasets) and [Zenodo](https://www.zenodo.org) datasets directly over HTTP without full downloads.
 Supported platforms: Windows, macOS, and Linux (web planned).
 
 ## Features
-- Auto-detect local LitData indexes/chunks, MosaicML MDS v2, and WebDataset shards.
+- Auto-detect local LitData indexes/chunks, MosaicML MDS, and WebDataset shards.
 - Preview Hugging Face datasets via the dataset viewer API (optional token).
 - Preview Zenodo records and browse ZIP/TAR entries with HTTP range requests.
 - Rich previews for JSON/text, images, audio, and video.

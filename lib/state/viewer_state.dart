@@ -190,8 +190,12 @@ class ViewerState extends ChangeNotifier {
     }
   }
 
-  Future<void> downloadUpdate(UpdateInfo update, {void Function(int, int?)? onProgress}) async {
-    await _updates.downloadAndInstall(update, onProgress: onProgress);
+  Future<File> downloadUpdate(UpdateInfo update, {void Function(int, int?)? onProgress}) async {
+    return _updates.download(update, onProgress: onProgress);
+  }
+
+  Future<void> installUpdate(File file) async {
+    await _updates.installUpdate(file);
   }
 
   Future<String?> chooseOpenerApp() async {

@@ -63,6 +63,11 @@ class UpdateService {
   }
 
   Future<void> downloadAndInstall(UpdateInfo update, {void Function(int, int?)? onProgress}) async {
+    final outFile = await download(update, onProgress: onProgress);
+    await _openInstaller(outFile);
+  }
+
+  Future<File> download(UpdateInfo update, {void Function(int, int?)? onProgress}) async {
     final url = Uri.parse(update.downloadUrl);
     final request = http.Request('GET', url);
     final response = await _client.send(request);
@@ -78,18 +83,24 @@ class UpdateService {
     final sink = outFile.openWrite();
     var received = 0;
 
-    await response.stream.listen((chunk) {
-      received += chunk.length;
-      sink.add(chunk);
-      if (onProgress != null) {
-        onProgress(received, contentLength);
-      }
-    }).asFuture();
+    try {
+      await response.stream.listen((chunk) {
+        received += chunk.length;
+        sink.add(chunk);
+        if (onProgress != null) {
+          onProgress(received, contentLength);
+        }
+      }).asFuture();
+    } finally {
+      await sink.flush();
+      await sink.close();
+    }
 
-    await sink.flush();
-    await sink.close();
+    return outFile;
+  }
 
-    await _openInstaller(outFile);
+  Future<void> installUpdate(File file) async {
+    await _openInstaller(file);
   }
 
   Future<void> _openInstaller(File file) async {
