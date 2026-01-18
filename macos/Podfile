@@ -1,0 +1,99 @@
+platform :osx, '10.15'
+
+# CocoaPods analytics sends network stats synchronously affecting flutter build latency.
+ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+project 'Runner', {
+  'Debug' => :debug,
+  'Profile' => :release,
+  'Release' => :release,
+}
+
+def flutter_root
+  generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'ephemeral', 'Flutter-Generated.xcconfig'), __FILE__)
+  unless File.exist?(generated_xcode_build_settings_path)
+    raise "#{generated_xcode_build_settings_path} must exist. If you're running pod install manually, make sure \"flutter pub get\" is executed first"
+  end
+
+  File.foreach(generated_xcode_build_settings_path) do |line|
+    matches = line.match(/FLUTTER_ROOT\=(.*)/)
+    return matches[1].strip if matches
+  end
+  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Flutter-Generated.xcconfig, then run \"flutter pub get\""
+end
+
+require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+
+flutter_macos_podfile_setup
+
+target 'Runner' do
+  use_frameworks!
+
+  flutter_install_all_macos_pods File.dirname(File.realpath(__FILE__))
+  target 'RunnerTests' do
+    inherit! :search_paths
+  end
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    flutter_additional_macos_build_settings(target)
+  end
+
+  frameworks_script = File.join(
+    __dir__,
+    'Pods',
+    'Target Support Files',
+    'Pods-Runner',
+    'Pods-Runner-frameworks.sh',
+  )
+  if File.exist?(frameworks_script)
+    script = File.read(frameworks_script)
+    script = script.gsub(
+      'echo "$(realpath -mq "${0}"):$1: error: Unexpected failure"',
+      'echo "${0}:$1: error: Unexpected failure"',
+    )
+
+    script = script.gsub(/# dataset-inspector zstd sign.*# end dataset-inspector zstd sign\n?/m, '')
+
+    fix_marker = '# dataset-inspector zstd fix'
+    unless script.include?(fix_marker)
+      fix_block = <<~REPLACEMENT
+        #{fix_marker}
+        if [ "${basename}" = "zstd" ]; then
+          zstd_dir="${destination}/${basename}.framework"
+          if [ -d "${zstd_dir}/Versions/Current" ]; then
+            version_dir="$(ls -1 "${zstd_dir}/Versions" | grep -v '^Current$' | head -n 1)"
+            if [ -n "${version_dir}" ]; then
+              if [ -d "${zstd_dir}/Versions/Current" ] && [ ! -L "${zstd_dir}/Versions/Current" ]; then
+                rm -rf "${zstd_dir}/Versions/Current"
+                ln -s "${version_dir}" "${zstd_dir}/Versions/Current"
+              fi
+            fi
+            if [ -f "${zstd_dir}/zstd" ] && [ ! -L "${zstd_dir}/zstd" ]; then
+              rm -f "${zstd_dir}/zstd"
+              ln -s "Versions/Current/zstd" "${zstd_dir}/zstd"
+            fi
+            if [ -d "${zstd_dir}/Resources" ] && [ ! -L "${zstd_dir}/Resources" ]; then
+              rm -rf "${zstd_dir}/Resources"
+              ln -s "Versions/Current/Resources" "${zstd_dir}/Resources"
+            fi
+          fi
+          if [ -d "${zstd_dir}" ]; then
+            SIGN_ID="${EXPANDED_CODE_SIGN_IDENTITY:-}"
+            if [ -z "$SIGN_ID" ]; then
+              SIGN_ID="-"
+            fi
+            /usr/bin/codesign --force --sign "$SIGN_ID" --preserve-metadata=identifier,entitlements "${zstd_dir}"
+          fi
+        fi
+        # end dataset-inspector zstd fix
+      REPLACEMENT
+
+      resign_pattern = /(^\s*# Resign the code if required by the build settings to avoid unstable apps\s*\n^\s*code_sign_if_enabled .*?$)/m
+      script = script.sub(resign_pattern) { |match| "#{fix_block}#{match}" }
+    end
+
+    File.write(frameworks_script, script)
+  end
+end
