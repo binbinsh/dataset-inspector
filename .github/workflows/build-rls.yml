@@ -2,7 +2,6 @@ name: Build Desktop (Flutter)
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -71,8 +70,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
-            label: macOS (Apple Silicon)
+          - os: macos-15
+            label: macOS 15 (Apple Silicon)
             asset: dataset_inspector-macos-aarch64.zip
           - os: macos-15-intel
             label: macOS 15 (Intel)
@@ -117,6 +116,26 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Prepare macOS signing keychain
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          CERT_PATH="$RUNNER_TEMP/apple_cert.p12"
+          echo "$APPLE_CERTIFICATE" | base64 -D > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security find-identity -p codesigning "$KEYCHAIN_PATH"
+
       - name: Build (macOS)
         if: runner.os == 'macOS'
         run: flutter build macos --release
@@ -129,11 +148,39 @@ jobs:
         if: runner.os == 'Linux'
         run: flutter build linux --release
 
+      - name: Sign + notarize (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_NAME="Dataset Inspector.app"
+          APP_PATH="build/macos/Build/Products/Release/${APP_NAME}"
+          /usr/bin/codesign --force --deep --options runtime --timestamp \
+            --entitlements macos/Runner/Release.entitlements \
+            --sign "$APPLE_DEVELOPER_ID" \
+            "$APP_PATH"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+          NOTARIZE_ZIP="$RUNNER_TEMP/dataset-inspector-notarize.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$NOTARIZE_ZIP"
+          xcrun notarytool submit "$NOTARIZE_ZIP" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_PASSWORD" \
+            --wait
+          xcrun stapler staple "$APP_PATH"
+
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
+          APP_NAME="Dataset Inspector.app"
           ditto -c -k --sequesterRsrc --keepParent \
-            build/macos/Build/Products/Release/dataset_inspector.app \
+            "build/macos/Build/Products/Release/${APP_NAME}" \
             "${{ matrix.asset }}"
 
       - name: Package (Windows)

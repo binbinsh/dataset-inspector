@@ -74,7 +74,7 @@
 		335BBD1A22A9A15E00E9071D /* GeneratedPluginRegistrant.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = GeneratedPluginRegistrant.swift; sourceTree = "<group>"; };
 		25FC139D186C48CB8A69600D /* shorten_x.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = shorten_x.c; path = "../vendor/sph2pipe/shorten_x.c"; sourceTree = SOURCE_ROOT; };
 		0D10CBA2CB464636B4322A7A /* sph2pipe_shorten_decode.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = sph2pipe_shorten_decode.c; path = "../vendor/sph2pipe/sph2pipe_shorten_decode.c"; sourceTree = SOURCE_ROOT; };
-		33CC10ED2044A3C60003C045 /* dataset_inspector.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = dataset_inspector.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		33CC10ED2044A3C60003C045 /* Dataset Inspector.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Dataset Inspector.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		33CC10F02044A3C60003C045 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		33CC10F22044A3C60003C045 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = Runner/Assets.xcassets; sourceTree = "<group>"; };
 		33CC10F52044A3C60003C045 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.xib; name = Base; path = Base.lproj/MainMenu.xib; sourceTree = "<group>"; };
@@ -148,7 +148,7 @@
 		33CC10EE2044A3C60003C045 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				33CC10ED2044A3C60003C045 /* dataset_inspector.app */,
+				33CC10ED2044A3C60003C045 /* Dataset Inspector.app */,
 				331C80D5294CF71000263BE5 /* RunnerTests.xctest */,
 			);
 			name = Products;
@@ -255,7 +255,7 @@
 			);
 			name = Runner;
 			productName = Runner;
-			productReference = 33CC10ED2044A3C60003C045 /* dataset_inspector.app */;
+			productReference = 33CC10ED2044A3C60003C045 /* Dataset Inspector.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -490,7 +490,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = sh.train.datasetinspector.RunnerTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/dataset_inspector.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/dataset_inspector";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Dataset Inspector.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Dataset Inspector";
 			};
 			name = Debug;
 		};
@@ -505,7 +505,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = sh.train.datasetinspector.RunnerTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/dataset_inspector.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/dataset_inspector";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Dataset Inspector.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Dataset Inspector";
 			};
 			name = Release;
 		};
@@ -520,7 +520,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = sh.train.datasetinspector.RunnerTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/dataset_inspector.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/dataset_inspector";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Dataset Inspector.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Dataset Inspector";
 			};
 			name = Profile;
 		};
