@@ -1,31 +1,20 @@
 <p align="center">
-  <img src="src-tauri/icons/icon.png" alt="Dataset Inspector Icon" width="128">
+  <img src="assets/icon.png" alt="Dataset Inspector Icon" width="128">
 </p>
 
 <h1 align="center">Dataset Inspector</h1>
 
-<p align="center">
-  <a href="https://github.com/binbinsh/dataset-inspector/actions/workflows/build-tauri.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/binbinsh/dataset-inspector/build-tauri.yml?branch=main&label=macOS&logo=apple&logoColor=white" alt="macOS build">
-  </a>
-  <a href="https://github.com/binbinsh/dataset-inspector/actions/workflows/build-tauri.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/binbinsh/dataset-inspector/build-tauri.yml?branch=main&label=Ubuntu&logo=ubuntu&logoColor=white" alt="Ubuntu build">
-  </a>
-  <a href="https://github.com/binbinsh/dataset-inspector/actions/workflows/build-tauri.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/binbinsh/dataset-inspector/build-tauri.yml?branch=main&label=Windows&logo=windows&logoColor=white" alt="Windows build">
-  </a>
-</p>
-
 ## About
-Dataset Inspector is a desktop UI for inspecting local [Lightning-AI/litData](https://github.com/Lightning-AI/litData) shards, [MosaicML Streaming](https://github.com/mosaicml/streaming) (MDS) shards, and [WebDataset](https://github.com/webdataset/webdataset) tar shards, with support for previewing [Hugging Face](https://huggingface.co/blog/streaming-datasets) and [Zenodo](https://www.zenodo.org) datasets directly online without downloading.
+Dataset Inspector is a desktop UI for inspecting local [Lightning-AI/litData](https://github.com/Lightning-AI/litData) shards, [MosaicML Streaming](https://github.com/mosaicml/streaming) (MDS v2) shards, and [WebDataset](https://github.com/webdataset/webdataset) tar shards, with support for previewing [Hugging Face](https://huggingface.co/blog/streaming-datasets) and [Zenodo](https://www.zenodo.org) datasets directly over HTTP without full downloads.
+Supported platforms: Windows, macOS, and Linux (web planned).
 
 ## Features
-- Inspect local LitData shards (`index.json` + `.bin/.zst` chunks).
-- Inspect local MosaicML Streaming (MDS) shards (`index.json` + `.mds/.mds.zst`).
-- Inspect local WebDataset shards (`.tar`, `.tar.gz`, `.tar.zst`).
-- Inspect Hugging Face datasets via streaming API (no full local download).
-- Inspect Zenodo datasets via HTTP Range request (no full local download).
-- Preview json/audio/image, copy values, and open extracted fields with your default app.
+- Auto-detect local LitData indexes/chunks, MosaicML MDS v2, and WebDataset shards (`.tar`, `.tar.gz`, `.tar.zst`).
+- Preview Hugging Face datasets via the dataset viewer API (optional token).
+- Preview Zenodo records and browse ZIP/TAR entries with HTTP range requests.
+- Rich previews for JSON/text, images, audio, and video.
+- Open fields with the default app, or choose and remember a custom opener per extension.
+- Built-in update checks and installer download.
 
 <table align="center">
   <tr>
@@ -58,8 +47,17 @@ Dataset Inspector is a desktop UI for inspecting local [Lightning-AI/litData](ht
 
 ## Usage
 1. Download Dataset Inspector installers from [Releases](https://github.com/binbinsh/dataset-inspector/releases).
-2. Browse local LitData/MosaicML/WebDataset folders, or HF URLs, or Zenodo URLs, then press **Load**.
-3. LitData / MosaicML shards: pick a shard → item → field, then preview fields.
-4. WebDataset shards: pick a shard → sample → field, then preview/open files.
-5. Hugging Face datasets: pick a split → row → field to preview values.
-6. Report issues/ feature requests: https://github.com/binbinsh/dataset-inspector/issues
+2. Paste a local dataset path or Hugging Face/Zenodo URL, then press **Load**.
+3. Local shards: pick a shard/chunk -> item/sample -> field, then preview fields.
+4. Hugging Face: pick a config/split -> row -> field (add a token if needed).
+5. Zenodo: pick a record -> file -> entry (ZIP/TAR), then preview/open files.
+6. Report issues/feature requests: https://github.com/binbinsh/dataset-inspector/issues
+
+## Docs
+- LitData: `docs/litdata.md`
+- MosaicML MDS: `docs/mosaicml.md`
+- WebDataset: `docs/webdataset.md`
+- Hugging Face: `docs/huggingface.md`
+- Zenodo: `docs/zenodo.md`
+- Audio preview: `docs/audio.md`
+- Development: `docs/development.md`

@@ -12,33 +12,35 @@ Fastest response time, arbitrary viewing, and maximum file preview support.
 ## Python Instructions
 - Always use `uv` for python package manager. The `.venv` is located in the project root.
 
-## Tauri App Instructions
+## Flutter App Instructions
 
 ### Tech Stack
-- **Platform**: Tauri v2 + Rust (Tokio async runtime)
-- **Frontend**: React 19 + Vite + TanStack (Router, Query, Form)
-- **Styling**: Tailwind CSS v4 + shadcn/ui
-- **Remote**: gRPC (tonic + protobuf-ts)
-- **Animations**: Motion (framer-motion)
+- **Platform**: Flutter (desktop)
+- **State**: Provider + ChangeNotifier
+- **Remote**: HTTP (Dart)
+- **Styling**: Material 3 + custom ThemeData
+- **Audio**: audioplayers
 
-### Rust Rules
-- All `#[tauri::command]` must be async
-- Use `thiserror` for errors, return `Result<T, CustomError>`
-- gRPC client lives in Rust, frontend never connects directly
-
-### Frontend Rules
-- Wrap all Tauri commands in `src/lib/tauri-api.ts`
-- Use TanStack Query for caching and state management
-- Generate types from `.proto` files, keep types in sync
+### Dart Rules
+- Keep heavy dataset parsing inside `lib/services/*`.
+- Avoid blocking the UI isolate; prefer async IO or isolates for large scans.
+- Use `shared_preferences` for persisted settings.
 
 ### UI Rules
-- Use shadcn/ui components first
-- Root layout: `select-none cursor-default h-screen overflow-hidden`
-- shadcn/ui components + Motion for micro-interactions
-- Add page transitions, hover effects, skeleton loading
-- Use CSS variables + Tailwind for theming (config in `globals.css`)
+- Root layout uses `SafeArea` + `Scaffold`.
+- Add hover feedback, simple transitions, and skeleton loading.
+- Keep preview panes scrollable and selectable.
+
+### Flutter Performance Best Practices
+- Keep `build()` cheap: avoid heavy work in `build()`, split large widgets, localize `setState()`, reuse widget instances, and prefer `const` constructors with `StatelessWidget` for reusable UI.
+- Use `StringBuffer` for repeated string concatenation inside loops.
+- Treat `saveLayer()` as expensive: use only when required, precompute overlapping transparency when possible, avoid unnecessary overlap, and audit packages that trigger it.
+- Minimize opacity and clipping: apply alpha directly when possible, prefer `FadeInImage` or `AnimatedOpacity` for fades, avoid `Clip.antiAliasWithSaveLayer`, and use `borderRadius` instead of clipping for rounded corners.
+- Build lists and grids lazily with builder APIs; avoid concrete child lists when most items are offscreen.
+- Avoid intrinsic layout passes by using fixed sizes or an anchor cell strategy; use DevTools layout tracking to spot intrinsic passes.
+- Target <=16ms total frame time on 60Hz (<=8ms build + <=8ms render) to improve battery life, thermals, and low-end/120Hz device smoothness.
+- Pitfalls: avoid opacity or clipping in animations, keep static subtrees out of `AnimatedBuilder` by using the `child` parameter, and avoid overriding `operator ==` on `Widget` except rare leaf cases.
 
 ### Security Rules
-- Minimize Tauri capabilities exposure
-- Validate all inputs in Rust layer
-
+- Validate all inputs in Dart before processing.
+- Restrict remote hosts for Hugging Face/Zenodo access.

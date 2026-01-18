@@ -4,8 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - package.json
-      - src-tauri/tauri.conf.json
+      - pubspec.yaml
 
 permissions:
   contents: write
@@ -25,7 +24,8 @@ jobs:
         id: get_version
         shell: bash
         run: |
-          VERSION=$(node -p "require('./package.json').version")
+          RAW_VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          VERSION="${RAW_VERSION%%+*}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Check if tag exists
@@ -60,5 +60,5 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/build-tauri.yml/dispatches" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/build-rls.yml/dispatches" \
             -d '{"ref":"'"${TAG}"'", "inputs": {"ref": "'"${TAG}"'"}}'

@@ -1,24 +1,32 @@
 # Development
 
 ## Prerequisites
-- Node.js 20+
-- Rust toolchain
+- Flutter SDK (stable, Dart >= 3.4)
+- Platform toolchains for your target OS
+  - macOS: Xcode
+  - Windows: Visual Studio Build Tools
+  - Linux: gcc + gtk3/gtk4 dev packages
+- Supported targets: Windows, macOS, Linux (web planned).
 
 ## Commands
-- Install deps: `npm install`
-- Dev (web only): `npm run dev`
-- Dev (Tauri): `npm run tauri dev`
-- Build web assets: `npm run build` (outputs `dist/`)
-- Build desktop app: `npm run tauri build`
+- Install deps: `flutter pub get`
+- Generate desktop runners (first time only): `flutter create --platforms=windows,macos,linux .`
+- Run desktop app: `flutter run -d macos|windows|linux`
+- Build desktop app: `flutter build macos|windows|linux`
 
-## Frontend layout
-- `src/main.tsx`: providers and app bootstrap
-- `src/router.tsx`: TanStack Router setup and page transitions
-- `src/routes/inspector.tsx`: primary UI and data flows
-- `src/lib/tauri-api.ts`: all Tauri invoke wrappers
-- `src/store/viewer.ts`: UI state store
-- `src/styles/app.css` + `src/hero.ts`: Tailwind v4 + HeroUI theme
+## Layout
+- `lib/main.dart`: app entry point
+- `lib/app.dart`: app theme + root wiring
+- `lib/state/viewer_state.dart`: UI state + orchestration
+- `lib/services/*`: dataset parsers + remote clients
+- `lib/services/huggingface_service.dart`: Hugging Face dataset viewer client
+- `lib/services/zenodo_service.dart`: Zenodo record + entry preview
+- `lib/services/update_service.dart`: update checks + downloads
+- `lib/widgets/inspector_screen.dart`: primary UI
+- `lib/widgets/audio_preview.dart`: audio playback
+- `lib/widgets/video_preview.dart`: video playback
 
-## Theming
-- `src/hero.ts` defines the HeroUI theme (`atlas`)
-- `src/styles/app.css` handles global typography, background, and Tailwind v4 tokens
+## Notes
+- Heavy dataset parsing runs in Dart services; keep UI responsive by avoiding synchronous loops on the main isolate.
+- Zstd/tar decompression uses temp caches under the system temp directory.
+- See `docs/audio.md` for audio preview details.
