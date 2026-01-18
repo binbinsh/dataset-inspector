@@ -94,7 +94,6 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          cache: true
 
       - name: Enable desktop platforms
         run: flutter config --enable-macos-desktop --enable-linux-desktop --enable-windows-desktop
