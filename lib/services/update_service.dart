@@ -95,6 +95,14 @@ class UpdateService {
   Future<void> _openInstaller(File file) async {
     final path = file.path;
     if (Platform.isMacOS) {
+      final lower = path.toLowerCase();
+      if (lower.endsWith('.zip')) {
+        final appBundle = await _extractMacAppBundle(file);
+        if (appBundle != null) {
+          await Process.start('open', [appBundle.path]);
+          return;
+        }
+      }
       await Process.start('open', [path]);
       return;
     }
@@ -103,6 +111,22 @@ class UpdateService {
       return;
     }
     await Process.start('xdg-open', [path]);
+  }
+
+  Future<Directory?> _extractMacAppBundle(File file) async {
+    final tempRoot = Directory('${Directory.systemTemp.path}/dataset-inspector/updates');
+    final extractDir = Directory('${tempRoot.path}/unpacked-${DateTime.now().millisecondsSinceEpoch}');
+    await extractDir.create(recursive: true);
+    final result = await Process.run('ditto', ['-x', '-k', file.path, extractDir.path]);
+    if (result.exitCode != 0) {
+      return null;
+    }
+    await for (final entity in extractDir.list(recursive: true, followLinks: false)) {
+      if (entity is Directory && entity.path.toLowerCase().endsWith('.app')) {
+        return entity;
+      }
+    }
+    return null;
   }
 
   bool _isNewerVersion(String current, String latest) {
