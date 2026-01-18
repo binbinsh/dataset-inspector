@@ -1,6 +1,6 @@
 name: dataset_inspector
 description: Desktop UI for inspecting local and remote dataset shards.
-version: 2.4.0+20260118
+version: 2.4.1+20260118
 publish_to: "none"
 
 environment:
