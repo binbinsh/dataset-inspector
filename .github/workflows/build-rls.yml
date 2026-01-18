@@ -74,8 +74,8 @@ jobs:
           - os: macos-14
             label: macOS (Apple Silicon)
             asset: dataset_inspector-macos-aarch64.zip
-          - os: macos-13
-            label: macOS (Intel)
+          - os: macos-15-intel
+            label: macOS 15 (Intel)
             asset: dataset_inspector-macos-x86_64.zip
           - os: ubuntu-24.04
             label: Linux
@@ -107,6 +107,8 @@ jobs:
           sudo apt-get install -y \
             clang \
             cmake \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer1.0-dev \
             ninja-build \
             pkg-config \
             libgtk-3-dev \
