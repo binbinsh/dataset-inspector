@@ -4,17 +4,15 @@
 
 <h1 align="center">Dataset Inspector</h1>
 
-## About
 Dataset Inspector is a desktop UI for inspecting local [Lightning-AI/litData](https://github.com/Lightning-AI/litData) shards, [MosaicML Streaming](https://github.com/mosaicml/streaming) (MDS v2) shards, and [WebDataset](https://github.com/webdataset/webdataset) tar shards, with support for previewing [Hugging Face](https://huggingface.co/blog/streaming-datasets) and [Zenodo](https://www.zenodo.org) datasets directly over HTTP without full downloads.
 Supported platforms: Windows, macOS, and Linux (web planned).
 
 ## Features
-- Auto-detect local LitData indexes/chunks, MosaicML MDS v2, and WebDataset shards (`.tar`, `.tar.gz`, `.tar.zst`).
+- Auto-detect local LitData indexes/chunks, MosaicML MDS v2, and WebDataset shards.
 - Preview Hugging Face datasets via the dataset viewer API (optional token).
 - Preview Zenodo records and browse ZIP/TAR entries with HTTP range requests.
 - Rich previews for JSON/text, images, audio, and video.
-- Open fields with the default app, or choose and remember a custom opener per extension.
-- Built-in update checks and installer download.
+- Open fields with the system default app.
 
 <table align="center">
   <tr>
@@ -54,10 +52,10 @@ Supported platforms: Windows, macOS, and Linux (web planned).
 6. Report issues/feature requests: https://github.com/binbinsh/dataset-inspector/issues
 
 ## Docs
-- LitData: `docs/litdata.md`
-- MosaicML MDS: `docs/mosaicml.md`
-- WebDataset: `docs/webdataset.md`
-- Hugging Face: `docs/huggingface.md`
-- Zenodo: `docs/zenodo.md`
-- Audio preview: `docs/audio.md`
-- Development: `docs/development.md`
+- LitData: [docs/litdata.md](docs/litdata.md)
+- MosaicML MDS: [docs/mosaicml.md](docs/mosaicml.md)
+- WebDataset: [docs/webdataset.md](docs/webdataset.md)
+- Hugging Face: [docs/huggingface.md](docs/huggingface.md)
+- Zenodo: [docs/zenodo.md](docs/zenodo.md)
+- Audio preview: [docs/audio.md](docs/audio.md)
+- Development: [docs/development.md](docs/development.md)
