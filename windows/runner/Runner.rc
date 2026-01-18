@@ -89,11 +89,11 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.example" "\0"
+            VALUE "CompanyName", "train.sh" "\0"
             VALUE "FileDescription", "dataset_inspector" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "dataset_inspector" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"
+            VALUE "LegalCopyright", "Copyright © 2026 train.sh. All rights reserved." "\0"
             VALUE "OriginalFilename", "dataset_inspector.exe" "\0"
             VALUE "ProductName", "dataset_inspector" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
