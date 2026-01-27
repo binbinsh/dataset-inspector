@@ -57,6 +57,7 @@ Future<void> _configureWindow() async {
     size: initialSize,
     minimumSize: minSize,
     center: true,
+    titleBarStyle: TitleBarStyle.hidden,
   );
   await windowManager.waitUntilReadyToShow(options, () async {
     await windowManager.show();
