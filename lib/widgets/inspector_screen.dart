@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../models/common.dart';
 import '../models/huggingface.dart';
@@ -328,48 +330,74 @@ class _InspectorScreenState extends State<InspectorScreen> {
     final loadLabel = state.detectedSourceLabel;
     final showHfToken = state.isHuggingFaceDetected;
     final hfTokenActionLabel = (state.hfToken == null || state.hfToken!.isEmpty) ? 'Add token' : 'Edit token';
-    return Column(
+
+    final isDesktop = !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.macOS ||
+            defaultTargetPlatform == TargetPlatform.windows ||
+            defaultTargetPlatform == TargetPlatform.linux);
+    final isMacOS = defaultTargetPlatform == TargetPlatform.macOS;
+
+    Widget titleContent = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Dataset Inspector',
-                  style: textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Inspect LitData, MosaicML, WebDataset, Hugging Face, and Zenodo sources.',
-                  style: textTheme.bodySmall?.copyWith(color: scheme.onSurface.withOpacity(0.7)),
-                ),
-              ],
-            ),
-            const Spacer(),
-            if (showHfToken) ...[
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Text(
-                    'Hugging Face token',
-                    style: textTheme.labelMedium?.copyWith(color: scheme.onSurface.withOpacity(0.7)),
-                  ),
-                  const SizedBox(width: 8),
-                  OutlinedButton.icon(
-                    onPressed: () => _showHfTokenDialog(context, state),
-                    icon: const Icon(Icons.key),
-                    label: Text(hfTokenActionLabel),
-                  ),
-              ],
-            ),
-            const SizedBox(width: 12),
-          ],
-            _buildUpdateButton(state),
+        Text(
+          'Dataset Inspector',
+          style: textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Inspect LitData, MosaicML, WebDataset, Hugging Face, and Zenodo sources.',
+          style: textTheme.bodySmall?.copyWith(color: scheme.onSurface.withOpacity(0.7)),
+        ),
+      ],
+    );
+
+    Widget titleRow = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: isDesktop
+              ? GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onPanStart: (_) => windowManager.startDragging(),
+                  onDoubleTap: () async {
+                    if (await windowManager.isMaximized()) {
+                      await windowManager.unmaximize();
+                    } else {
+                      await windowManager.maximize();
+                    }
+                  },
+                  child: titleContent,
+                )
+              : titleContent,
+        ),
+        if (showHfToken) ...[
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Text(
+                'Hugging Face token',
+                style: textTheme.labelMedium?.copyWith(color: scheme.onSurface.withOpacity(0.7)),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: () => _showHfTokenDialog(context, state),
+                icon: const Icon(Icons.key),
+                label: Text(hfTokenActionLabel),
+              ),
           ],
         ),
+        const SizedBox(width: 12),
+      ],
+        _buildUpdateButton(state),
+      ],
+    );
+
+    return Column(
+      children: [
+        const SizedBox(height: 10),
+        titleRow,
         const SizedBox(height: 14),
         Container(
           padding: const EdgeInsets.all(14),
@@ -423,10 +451,17 @@ class _InspectorScreenState extends State<InspectorScreen> {
                           key: _sourceFieldKey,
                           controller: _inputController,
                           focusNode: _inputFocus,
-                          decoration: const InputDecoration(
+                          decoration: InputDecoration(
                             labelText: 'Dataset source',
                             hintText: 'Paste a dataset path or URL',
-                            prefixIcon: Icon(Icons.link),
+                            prefixIcon: const Icon(Icons.link),
+                            suffixIcon: Tooltip(
+                              message: 'Browse for folder',
+                              child: IconButton(
+                                onPressed: () => state.chooseIndexSource(),
+                                icon: const Icon(Icons.folder_open),
+                              ),
+                            ),
                           ),
                           onTap: () => _showRecentSourcesOverlay(context, state),
                           onChanged: state.setSourceInput,
@@ -434,12 +469,6 @@ class _InspectorScreenState extends State<InspectorScreen> {
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  OutlinedButton.icon(
-                    onPressed: () => state.chooseIndexSource(),
-                    icon: const Icon(Icons.folder_open),
-                    label: const Text('Browse'),
                   ),
                   const SizedBox(width: 8),
                   FilledButton.icon(
@@ -531,11 +560,11 @@ class _InspectorScreenState extends State<InspectorScreen> {
   }
 
   String? _sourcesSubtitle(ViewerState state) {
-    if (state.mode == ViewerMode.huggingface && state.hfPreview != null) {
-      final preview = state.hfPreview!;
-      final config = state.hfConfigOverride ?? preview.config;
-      final split = state.hfSplitOverride ?? preview.split;
-      return '${preview.dataset} · $config/$split';
+    if (state.mode == ViewerMode.huggingface && state.hfConfigOptions != null) {
+      final configs = state.hfConfigOptions!;
+      final numSubsets = configs.length;
+      final numParts = configs.fold<int>(0, (sum, c) => sum + c.splits.length);
+      return '$numSubsets subsets, $numParts parts';
     }
     if (state.mode == ViewerMode.zenodo && state.zenodoRecord != null) {
       final record = state.zenodoRecord!;
@@ -554,17 +583,28 @@ class _InspectorScreenState extends State<InspectorScreen> {
   String? _itemsSubtitle(ViewerState state) {
     if (state.mode == ViewerMode.huggingface && state.hfPreview != null) {
       final preview = state.hfPreview!;
-      final start = preview.offset + 1;
-      final end = preview.offset + preview.rows.length;
-      return 'Rows $start–$end';
+      final totalLabel = preview.numRowsTotal > 0 ? preview.numRowsTotal.toString() : '-';
+      return 'Total: $totalLabel';
     }
     if (state.mode == ViewerMode.webdatasetDir && state.wdsSamples != null) {
-      final start = state.wdsOffset + 1;
-      final end = state.wdsOffset + state.wdsSamples!.samples.length;
-      return 'Samples $start–$end';
+      final pageSize = state.wdsSamples!.length;
+      final pageLabel = pageSize > 0 ? state.wdsOffset ~/ pageSize + 1 : 1;
+      return 'Page $pageLabel';
     }
     if (state.mode == ViewerMode.zenodo && state.zenodoSelectedFileKey != null) {
       return 'File ${state.zenodoSelectedFileKey}';
+    }
+    if ((state.mode == ViewerMode.litdataIndex ||
+            state.mode == ViewerMode.litdataChunks ||
+            state.mode == ViewerMode.mdsIndex) &&
+        state.indexSummary != null &&
+        state.selectedChunkName != null) {
+      final chunk = state.indexSummary!.chunks
+          .where((c) => c.filename == state.selectedChunkName)
+          .firstOrNull;
+      if (chunk != null) {
+        return 'Total: ${chunk.chunkSize}';
+      }
     }
     if (state.selectedChunkName != null) {
       return state.selectedChunkName;
@@ -1060,22 +1100,25 @@ class _InspectorScreenState extends State<InspectorScreen> {
               ),
             ),
             const Divider(height: 1),
-            Row(
-              children: [
-                IconButton(
-                  onPressed: canGoPrev ? () => state.setWdsOffset(prevOffset < 0 ? 0 : prevOffset) : null,
-                  icon: const Icon(Icons.chevron_left),
-                ),
-                Expanded(
-                  child: Center(
-                    child: Text('Page $pageLabel'),
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(
+                children: [
+                  IconButton(
+                    onPressed: canGoPrev ? () => state.setWdsOffset(prevOffset < 0 ? 0 : prevOffset) : null,
+                    icon: const Icon(Icons.chevron_left),
                   ),
-                ),
-                IconButton(
-                  onPressed: canGoNext ? () => state.setWdsOffset(response.offset + pageSize) : null,
-                  icon: const Icon(Icons.chevron_right),
-                ),
-              ],
+                  Expanded(
+                    child: Center(
+                      child: Text('Samples ${response.offset + 1}–${response.offset + samples.length}'),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: canGoNext ? () => state.setWdsOffset(response.offset + pageSize) : null,
+                    icon: const Icon(Icons.chevron_right),
+                  ),
+                ],
+              ),
             ),
           ],
         );
@@ -1151,54 +1194,53 @@ class _InspectorScreenState extends State<InspectorScreen> {
               ),
             ),
             const Divider(height: 1),
-            Row(
-              children: [
-                IconButton(
-                  onPressed: preview.offset > 0
-                      ? () => state.setHfOffset(
-                          (preview.offset - preview.length).clamp(0, preview.numRowsTotal).toInt(),
-                        )
-                      : null,
-                  icon: const Icon(Icons.chevron_left),
-                ),
-                Expanded(
-                  child: Center(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Text('Rows'),
-                        const SizedBox(width: 8),
-                        SizedBox(
-                          width: 72,
-                          child: TextField(
-                            controller: _hfOffsetController,
-                            focusNode: _hfOffsetFocus,
-                            textAlign: TextAlign.center,
-                            keyboardType: TextInputType.number,
-                            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                            decoration: const InputDecoration(
-                              isDense: true,
-                              contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(
+                children: [
+                  IconButton(
+                    onPressed: preview.offset > 0
+                        ? () => state.setHfOffset(
+                            (preview.offset - preview.length).clamp(0, preview.numRowsTotal).toInt(),
+                          )
+                        : null,
+                    icon: const Icon(Icons.chevron_left),
+                  ),
+                  Expanded(
+                    child: Center(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 72,
+                            child: TextField(
+                              controller: _hfOffsetController,
+                              focusNode: _hfOffsetFocus,
+                              textAlign: TextAlign.center,
+                              keyboardType: TextInputType.number,
+                              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                              decoration: const InputDecoration(
+                                isDense: true,
+                                contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                              ),
+                              onSubmitted: (_) => _applyHfOffsetInput(state, preview),
+                              onEditingComplete: () => _applyHfOffsetInput(state, preview),
                             ),
-                            onSubmitted: (_) => _applyHfOffsetInput(state, preview),
-                            onEditingComplete: () => _applyHfOffsetInput(state, preview),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text('- ${preview.offset + preview.rows.length}'),
-                        const SizedBox(width: 12),
-                        Text('Total: $totalLabel', style: Theme.of(context).textTheme.bodySmall),
-                      ],
+                          const SizedBox(width: 8),
+                          Text('- ${preview.offset + preview.rows.length}'),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-                IconButton(
-                  onPressed: preview.offset + preview.length < preview.numRowsTotal
-                      ? () => state.setHfOffset(preview.offset + preview.length)
-                      : null,
-                  icon: const Icon(Icons.chevron_right),
-                ),
-              ],
+                  IconButton(
+                    onPressed: preview.offset + preview.length < preview.numRowsTotal
+                        ? () => state.setHfOffset(preview.offset + preview.length)
+                        : null,
+                    icon: const Icon(Icons.chevron_right),
+                  ),
+                ],
+              ),
             ),
           ],
         );
