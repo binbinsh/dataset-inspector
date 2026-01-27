@@ -108,12 +108,10 @@ class UpdateService {
     if (Platform.isMacOS) {
       final lower = path.toLowerCase();
       if (lower.endsWith('.zip')) {
-        final appBundle = await _extractMacAppBundle(file);
-        if (appBundle != null) {
-          await Process.start('open', [appBundle.path]);
-          return;
-        }
+        await _installMacUpdate(file);
+        return;
       }
+      // For .dmg or .pkg, just open them
       await Process.start('open', [path]);
       return;
     }
@@ -124,20 +122,95 @@ class UpdateService {
     await Process.start('xdg-open', [path]);
   }
 
-  Future<Directory?> _extractMacAppBundle(File file) async {
+  Future<void> _installMacUpdate(File zipFile) async {
+    // 1. Find current app bundle location
+    final currentExecutable = Platform.resolvedExecutable;
+    // Executable is at: /path/to/App.app/Contents/MacOS/app_name
+    final appBundlePath = currentExecutable
+        .split('/Contents/MacOS/')
+        .first;
+
+    if (!appBundlePath.endsWith('.app')) {
+      throw Exception('Cannot determine app bundle location');
+    }
+
+    // 2. Extract new app to temp directory
     final tempRoot = Directory('${Directory.systemTemp.path}/dataset-inspector/updates');
     final extractDir = Directory('${tempRoot.path}/unpacked-${DateTime.now().millisecondsSinceEpoch}');
     await extractDir.create(recursive: true);
-    final result = await Process.run('ditto', ['-x', '-k', file.path, extractDir.path]);
+
+    final result = await Process.run('ditto', ['-x', '-k', zipFile.path, extractDir.path]);
     if (result.exitCode != 0) {
-      return null;
+      throw Exception('Failed to extract update: ${result.stderr}');
     }
-    await for (final entity in extractDir.list(recursive: true, followLinks: false)) {
+
+    // 3. Find the .app bundle in extracted files
+    Directory? newAppBundle;
+    await for (final entity in extractDir.list(followLinks: false)) {
       if (entity is Directory && entity.path.toLowerCase().endsWith('.app')) {
-        return entity;
+        newAppBundle = entity;
+        break;
       }
     }
-    return null;
+
+    if (newAppBundle == null) {
+      throw Exception('No .app bundle found in update package');
+    }
+
+    // 4. Create updater script that will:
+    //    - Wait for current app to exit
+    //    - Replace old app with new app
+    //    - Launch new app
+    //    - Clean up
+    final scriptFile = File('${tempRoot.path}/updater.sh');
+    final script = '''
+#!/bin/bash
+# Wait for the app to exit (check every 0.5 seconds, timeout after 30 seconds)
+PID=\$\$
+APP_PID=$pid
+TIMEOUT=60
+ELAPSED=0
+
+while kill -0 \$APP_PID 2>/dev/null; do
+  sleep 0.5
+  ELAPSED=\$((ELAPSED + 1))
+  if [ \$ELAPSED -ge \$TIMEOUT ]; then
+    echo "Timeout waiting for app to exit"
+    exit 1
+  fi
+done
+
+# Small delay to ensure file handles are released
+sleep 1
+
+# Remove old app and copy new app
+rm -rf "$appBundlePath"
+cp -R "${newAppBundle.path}" "$appBundlePath"
+
+# Fix permissions
+chmod -R 755 "$appBundlePath"
+xattr -cr "$appBundlePath" 2>/dev/null || true
+
+# Launch new app
+open "$appBundlePath"
+
+# Clean up
+rm -rf "${extractDir.path}"
+rm -f "${scriptFile.path}"
+''';
+
+    await scriptFile.writeAsString(script);
+    await Process.run('chmod', ['+x', scriptFile.path]);
+
+    // 5. Start the updater script in background
+    await Process.start(
+      '/bin/bash',
+      [scriptFile.path],
+      mode: ProcessStartMode.detached,
+    );
+
+    // 6. Exit current app
+    exit(0);
   }
 
   bool _isNewerVersion(String current, String latest) {
