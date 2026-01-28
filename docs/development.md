@@ -30,3 +30,4 @@
 - Heavy dataset parsing runs in Dart services; keep UI responsive by avoiding synchronous loops on the main isolate.
 - Zstd/tar decompression uses temp caches under the system temp directory.
 - See `docs/audio.md` for audio preview details.
+- DuckDB bundling and custom httpfs builds are documented in `docs/duckdb.md`.

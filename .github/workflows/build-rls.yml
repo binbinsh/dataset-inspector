@@ -73,9 +73,11 @@ jobs:
           - os: macos-15
             label: macOS 15 (Apple Silicon)
             asset: dataset_inspector-macos-aarch64.zip
+            duckdb_archs: arm64
           - os: macos-15-intel
             label: macOS 15 (Intel)
             asset: dataset_inspector-macos-x86_64.zip
+            duckdb_archs: x86_64
           - os: ubuntu-24.04
             label: Linux
             asset: dataset_inspector-linux-x86_64.tar.gz
@@ -107,13 +109,70 @@ jobs:
             cmake \
             libgstreamer-plugins-base1.0-dev \
             libgstreamer1.0-dev \
+            libcurl4-openssl-dev \
+            libssl-dev \
             ninja-build \
             pkg-config \
             libgtk-3-dev \
             liblzma-dev
 
+      - name: Install OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vcpkg = $env:VCPKG_INSTALLATION_ROOT
+          if (-not $vcpkg) { $vcpkg = "C:\vcpkg" }
+          & "$vcpkg\vcpkg.exe" install openssl:x64-windows-static
+          & "$vcpkg\vcpkg.exe" install curl:x64-windows-static
+          "CMAKE_TOOLCHAIN_FILE=$vcpkg\scripts\buildsystems\vcpkg.cmake" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "VCPKG_TARGET_TRIPLET=x64-windows-static" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "OPENSSL_ROOT_DIR=$vcpkg\installed\x64-windows-static" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "OPENSSL_USE_STATIC_LIBS=TRUE" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Install dependencies
         run: flutter pub get
+
+      - name: Build bundled DuckDB (macOS)
+        if: runner.os == 'macOS'
+        env:
+          DUCKDB_ARCHS: ${{ matrix.duckdb_archs }}
+          DUCKDB_VERSION: v1.4.4
+        run: scripts/build_duckdb_with_httpfs.sh
+
+      - name: Verify DuckDB httpfs (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -a -qi httpfs macos/Frameworks/libduckdb.dylib
+
+      - name: Build bundled DuckDB (Linux)
+        if: runner.os == 'Linux'
+        env:
+          DUCKDB_VERSION: v1.4.4
+        run: scripts/build_duckdb_with_httpfs_linux.sh
+
+      - name: Verify DuckDB httpfs (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          grep -a -qi httpfs build/duckdb-linux/output/libduckdb.so
+
+      - name: Build bundled DuckDB (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          DUCKDB_VERSION: v1.4.4
+        run: scripts/build_duckdb_with_httpfs_windows.ps1
+
+      - name: Verify DuckDB httpfs (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $lib = "build\duckdb-windows\output\duckdb.dll"
+          if (-not (Test-Path $lib)) { throw "DuckDB DLL not found: $lib" }
+          $found = Select-String -Path $lib -Pattern "httpfs" -SimpleMatch -Quiet
+          if (-not $found) { throw "httpfs not found in duckdb.dll" }
 
       - name: Prepare macOS signing keychain
         if: runner.os == 'macOS'
@@ -139,13 +198,45 @@ jobs:
         if: runner.os == 'macOS'
         run: flutter build macos --release
 
+      - name: Replace bundled DuckDB (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_NAME="Dataset Inspector.app"
+          APP_LIB="build/macos/Build/Products/Release/${APP_NAME}/Contents/Frameworks/libduckdb.dylib"
+          cp macos/Frameworks/libduckdb.dylib "$APP_LIB"
+
+      - name: Verify bundled DuckDB in app (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_NAME="Dataset Inspector.app"
+          APP_LIB="build/macos/Build/Products/Release/${APP_NAME}/Contents/Frameworks/libduckdb.dylib"
+          grep -a -qi httpfs "$APP_LIB"
+
       - name: Build (Windows)
         if: runner.os == 'Windows'
         run: flutter build windows --release
 
+      - name: Replace bundled DuckDB (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $src = "build\duckdb-windows\output\duckdb.dll"
+          $dst = "build\windows\x64\runner\Release\duckdb.dll"
+          if (Test-Path $src) { Copy-Item $src $dst -Force }
+
       - name: Build (Linux)
         if: runner.os == 'Linux'
         run: flutter build linux --release
+
+      - name: Replace bundled DuckDB (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          cp build/duckdb-linux/output/libduckdb.so build/linux/x64/release/bundle/lib/libduckdb.so
 
       - name: Sign + notarize (macOS)
         if: runner.os == 'macOS'
