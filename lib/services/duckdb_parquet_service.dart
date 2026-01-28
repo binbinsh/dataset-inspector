@@ -31,12 +31,10 @@ class DuckDbParquetService {
     final executablePath = Platform.resolvedExecutable;
     final appBundlePath = p.dirname(p.dirname(executablePath));
 
-    // Check common locations for the library
+    // Check common locations for the bundled library
     final possiblePaths = [
       p.join(appBundlePath, 'Frameworks', 'libduckdb.dylib'),
       p.join(appBundlePath, 'Resources', 'libduckdb.dylib'),
-      '/opt/homebrew/lib/libduckdb.dylib', // Homebrew Apple Silicon
-      '/usr/local/lib/libduckdb.dylib', // Homebrew Intel
     ];
 
     for (final libPath in possiblePaths) {
@@ -61,9 +59,16 @@ class DuckDbParquetService {
     _db = await duckdb.open(':memory:');
     _conn = await duckdb.connect(_db!);
 
-    // Enable HTTP support for remote Parquet files
-    await _conn!.execute("INSTALL httpfs;");
-    await _conn!.execute("LOAD httpfs;");
+    // Disable extension auto-install/load; httpfs is statically linked.
+    try {
+      await _conn!.execute("SET autoload_known_extensions = false;");
+      await _conn!.execute("SET autoinstall_known_extensions = false;");
+    } catch (e) {
+      AppLogger.warn('Failed to disable extension autoload/autoinstall: $e', tag: 'duckdb');
+    }
+
+    // Enable HTTP support for remote Parquet files (statically linked).
+    await _loadHttpfsExtension();
 
     // Configure for performance
     await _conn!.execute("SET enable_progress_bar = false;");
@@ -71,6 +76,16 @@ class DuckDbParquetService {
     await _conn!.execute("SET http_keep_alive = true;");
 
     AppLogger.info('DuckDB initialized with httpfs extension', tag: 'duckdb');
+  }
+
+  Future<void> _loadHttpfsExtension() async {
+    try {
+      await _conn!.execute("LOAD httpfs;");
+      AppLogger.info('Loaded httpfs extension (statically linked)', tag: 'duckdb');
+    } catch (e) {
+      AppLogger.error('httpfs extension not available in bundled libduckdb: $e', tag: 'duckdb');
+      rethrow;
+    }
   }
 
   /// Set HTTP bearer token for HuggingFace authentication (cached)

@@ -203,9 +203,11 @@ class ViewerState extends ChangeNotifier {
 
   Future<String?> chooseOpenerApp() async {
     try {
-      final result = await FilePicker.pickFiles(type: FileType.any);
-      if (result == null || result.paths.isEmpty) return null;
-      return result.paths.first;
+      final result = await FilePicker.platform.pickFiles(type: FileType.any);
+      if (result == null || result.files.isEmpty) return null;
+      final path = result.files.first.path;
+      if (path == null || path.isEmpty) return null;
+      return path;
     } on PlatformException catch (err) {
       statusMessage = err.message ?? 'Failed to pick an app.';
       notifyListeners();
@@ -330,7 +332,7 @@ class ViewerState extends ChangeNotifier {
   Future<void> chooseIndexSource() async {
     try {
       final initialDirectory = await _resolvePickerInitialDirectory();
-      final result = await FilePicker.getDirectoryPath(
+      final result = await FilePicker.platform.getDirectoryPath(
         initialDirectory: initialDirectory,
       );
       if (result == null || result.trim().isEmpty) return;
@@ -370,9 +372,9 @@ class ViewerState extends ChangeNotifier {
 
   Future<void> chooseChunkFiles() async {
     try {
-      final result = await FilePicker.pickFiles(allowMultiple: true);
+      final result = await FilePicker.platform.pickFiles(allowMultiple: true);
       if (result == null) return;
-      final paths = result.paths.whereType<String>().toList();
+      final paths = result.files.map((file) => file.path).whereType<String>().toList();
       if (paths.isEmpty) return;
       chunkSelection = paths;
       notifyListeners();

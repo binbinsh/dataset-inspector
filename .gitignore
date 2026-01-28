@@ -84,3 +84,8 @@ Thumbs.db
 
 # Privacy
 .env
+
+# Vendor
+vendor/duckdb-httpfs/
+macos/Frameworks/
+macos/Runner/duckdb_extensions/
