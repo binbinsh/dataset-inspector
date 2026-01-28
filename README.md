@@ -9,7 +9,7 @@ Supported platforms: Windows, macOS, and Linux (web planned).
 
 ## Features
 - Auto-detect local LitData indexes/chunks, MosaicML MDS, and WebDataset shards.
-- Preview Hugging Face datasets via the dataset viewer API (optional token).
+- **Enhanced Hugging Face support**: Direct Parquet streaming via DuckDB — preview datasets that huggingface.co cannot display.
 - Preview Zenodo records and browse ZIP/TAR entries with HTTP range requests.
 - Rich previews for JSON/text, images, audio, and video.
 - Open fields with the system default app.

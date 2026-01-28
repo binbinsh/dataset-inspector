@@ -59,7 +59,10 @@ class ViewerState extends ChangeNotifier {
         _huggingface = huggingface ?? HuggingfaceService(),
         _zenodo = zenodo ?? ZenodoService(),
         _preferences = preferences ?? PreferencesService(),
-        _updates = updates ?? UpdateService();
+        _updates = updates ?? UpdateService() {
+    // Warmup DuckDB in background on app start
+    _huggingface.warmup();
+  }
 
   final LitDataService _litdata;
   final MosaicmlService _mosaicml;

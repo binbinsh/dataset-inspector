@@ -8,6 +8,8 @@ import '../models/common.dart';
 import '../models/huggingface.dart';
 import '../utils/audio.dart';
 import 'app_logger.dart';
+import 'duckdb_parquet_service.dart';
+import 'hf_parquet_api.dart';
 import 'open_with_service.dart';
 
 const _datasetsServerBase = 'https://datasets-server.huggingface.co/';
@@ -23,6 +25,23 @@ class HuggingfaceService {
 
   final OpenWithService _openWith;
   final http.Client _client;
+
+  // Lazy-initialized components
+  HfParquetApi? _parquetApi;
+  DuckDbParquetService? _duckDb;
+
+  HfParquetApi get _getParquetApi => _parquetApi ??= HfParquetApi(client: _client);
+  DuckDbParquetService get _getDuckDb => _duckDb ??= DuckDbParquetService();
+
+  /// Pre-initialize DuckDB in background (call on app start)
+  Future<void> warmup() async {
+    try {
+      await _getDuckDb.ensureInitialized();
+      AppLogger.info('HuggingFace service warmed up', tag: 'hf');
+    } catch (e) {
+      AppLogger.warn('Warmup failed: $e', tag: 'hf');
+    }
+  }
 
   Future<HfDatasetPreview> datasetPreview({
     required String input,
@@ -307,6 +326,11 @@ class HuggingfaceService {
     try {
       body = await _getJson(url, token);
     } on _HfException catch (err) {
+      // Fallback to Parquet API for 501 (Not Implemented) errors
+      if (err.is501) {
+        AppLogger.info('Datasets server returned 501, falling back to Parquet API', tag: 'hf');
+        return _getSplitsViaParquet(dataset, token);
+      }
       if (err.isCanonicalCandidate) {
         final canonical = await _resolveCanonicalDatasetId(dataset, token);
         if (canonical != null && canonical != dataset) {
@@ -332,6 +356,15 @@ class HuggingfaceService {
     return (dataset, configs.map((key, value) => MapEntry(key, value.toList())));
   }
 
+  Future<(String, Map<String, List<String>>)> _getSplitsViaParquet(String dataset, String? token) async {
+    final parquetResp = await _getParquetApi.getParquetFiles(dataset: dataset, token: token);
+    final configs = <String, Set<String>>{};
+    for (final file in parquetResp.parquetFiles) {
+      configs.putIfAbsent(file.config, () => <String>{}).add(file.split);
+    }
+    return (dataset, configs.map((key, value) => MapEntry(key, value.toList())));
+  }
+
   Future<_RowsResponse> _getRows(
     String dataset,
     String config,
@@ -340,37 +373,140 @@ class HuggingfaceService {
     int length,
     String? token,
   ) async {
-    final url = Uri.parse(_datasetsServerBase).replace(
-      path: 'rows',
-      queryParameters: {
-        'dataset': dataset,
-        'config': config,
-        'split': split,
-        'offset': offset.toString(),
-        'length': length.toString(),
-      },
+    // Use Parquet streaming directly for fast and reliable data access
+    return _getRowsViaParquet(dataset, config, split, offset, length, token);
+  }
+
+  Future<_RowsResponse> _getRowsViaParquet(
+    String dataset,
+    String config,
+    String split,
+    int offset,
+    int length,
+    String? token,
+  ) async {
+    // 1. Get parquet files for this specific config/split
+    final files = await _getParquetApi.getParquetFilesForSplit(
+      dataset: dataset,
+      config: config,
+      split: split,
+      token: token,
     );
 
-    final body = await _getJson(url, token);
-    final featuresRaw = body['features'] as List<dynamic>? ?? [];
-    final rowsRaw = body['rows'] as List<dynamic>? ?? [];
-    final numRowsTotal = (body['num_rows_total'] as num?)?.toInt() ?? 0;
-    final partial = body['partial'] == true;
+    if (files.isEmpty) {
+      throw FormatException('No Parquet files found for $dataset/$config/$split');
+    }
 
-    final features = featuresRaw.map((feature) {
-      final name = feature['name']?.toString() ?? '';
-      final rawType = feature['type'];
-      final dtype = _featureDtypeLabel(rawType);
-      return HfFeature(name: name, dtype: dtype, rawType: rawType);
-    }).toList();
+    // 2. Get accurate total row count from size API
+    int totalRows;
+    try {
+      totalRows = await _getSplitRowCount(dataset, config, split, token);
+    } catch (e) {
+      AppLogger.warn('Size API failed: $e', tag: 'hf');
+      totalRows = 0;
+    }
 
-    final rows = rowsRaw.map((row) => row['row']).toList();
+    AppLogger.info(
+      'Reading $dataset/$config/$split via DuckDB: offset=$offset, length=$length, files=${files.length}',
+      tag: 'hf',
+    );
+
+    // 3. Find the correct file(s) for the requested offset
+    // Since we don't know exact row counts per file, we estimate and search
+    final avgRowsPerFile = totalRows > 0 && files.isNotEmpty
+        ? (totalRows / files.length).ceil()
+        : 10000; // Default estimate
+
+    // Estimate which file contains the offset
+    var fileIndex = avgRowsPerFile > 0 ? offset ~/ avgRowsPerFile : 0;
+    if (fileIndex >= files.length) {
+      fileIndex = files.length - 1;
+    }
+
+    // Calculate local offset within the file
+    var localOffset = offset - (fileIndex * avgRowsPerFile);
+    if (localOffset < 0) localOffset = 0;
+
+    AppLogger.info(
+      'DuckDB targeting file $fileIndex/${files.length}, localOffset=$localOffset',
+      tag: 'hf',
+    );
+
+    // Try to read from estimated file
+    var result = await _getDuckDb.readParquetRows(
+      url: files[fileIndex].url,
+      offset: localOffset,
+      length: length,
+      token: token,
+      knownTotalRows: totalRows,
+    );
+
+    // If we got 0 rows and localOffset > 0, the file might be smaller than expected
+    // Try reading from the start of this file or move to next file
+    if (result.rows.isEmpty && localOffset > 0 && fileIndex + 1 < files.length) {
+      AppLogger.info('No rows at localOffset=$localOffset, trying next file', tag: 'hf');
+      fileIndex++;
+      result = await _getDuckDb.readParquetRows(
+        url: files[fileIndex].url,
+        offset: 0,
+        length: length,
+        token: token,
+        knownTotalRows: totalRows,
+      );
+    }
+
+    // If we still need more rows and there are more files, continue reading
+    if (result.rows.length < length && fileIndex + 1 < files.length) {
+      final remaining = length - result.rows.length;
+      final nextResult = await _getDuckDb.readParquetRows(
+        url: files[fileIndex + 1].url,
+        offset: 0,
+        length: remaining,
+        token: token,
+        knownTotalRows: totalRows,
+      );
+      // Create a new list to avoid modifying the original
+      final combinedRows = <Map<String, dynamic>>[...result.rows, ...nextResult.rows];
+      result = DuckDbParquetResult(
+        features: result.features,
+        rows: combinedRows,
+        totalRows: result.totalRows,
+      );
+    }
+
+    // Use size API total if available
+    if (totalRows == 0) {
+      totalRows = result.totalRows > 0 ? result.totalRows : result.rows.length * files.length;
+    }
+
+    // Prefetch next page in background for faster navigation
+    if (result.rows.length >= length && fileIndex < files.length) {
+      final nextLocalOffset = localOffset + length;
+      // Check if next page is in the same file or next file
+      if (nextLocalOffset < avgRowsPerFile) {
+        _getDuckDb.prefetchNext(
+          url: files[fileIndex].url,
+          nextOffset: nextLocalOffset,
+          length: length,
+          token: token,
+          knownTotalRows: totalRows,
+        );
+      } else if (fileIndex + 1 < files.length) {
+        _getDuckDb.prefetchNext(
+          url: files[fileIndex + 1].url,
+          nextOffset: 0,
+          length: length,
+          token: token,
+          knownTotalRows: totalRows,
+        );
+      }
+    }
 
     return _RowsResponse(
-      features: features,
-      rows: rows,
-      numRowsTotal: numRowsTotal,
-      partial: partial,
+      features: result.features,
+      rows: result.rows,
+      numRowsTotal: totalRows,
+      partial: false,
     );
   }
 
@@ -403,6 +539,7 @@ class HuggingfaceService {
 
     final serverError = value['error']?.toString().trim();
     if (status < 200 || status >= 300) {
+      final is501 = status == 501;
       if (serverError != null && serverError.isNotEmpty) {
         AppLogger.warn(
           'HTTP $status from $url: ${_truncateForLog(serverError, _logBodyLimit)}',
@@ -411,10 +548,10 @@ class HuggingfaceService {
         if (status >= 400 && status < 500 && status != 429) {
           throw _HfException('HTTP $status from $url: $serverError', isNotFound: _isNotFound(serverError));
         }
-        throw _HfException('HTTP $status from $url: $serverError');
+        throw _HfException('HTTP $status from $url: $serverError', is501: is501);
       }
       AppLogger.warn('HTTP $status from $url', tag: 'hf-http');
-      throw _HfException('HTTP $status from $url');
+      throw _HfException('HTTP $status from $url', is501: is501);
     }
 
     if (serverError != null && serverError.isNotEmpty) {
@@ -524,6 +661,29 @@ class HuggingfaceService {
       return value['_type']?.toString();
     }
     return null;
+  }
+
+  /// Get accurate row count for a split from the /size API
+  Future<int> _getSplitRowCount(String dataset, String config, String split, String? token) async {
+    final url = Uri.parse(_datasetsServerBase).replace(
+      path: 'size',
+      queryParameters: {'dataset': dataset},
+    );
+
+    final body = await _getJson(url, token);
+    final size = body['size'] as Map<String, dynamic>?;
+    if (size == null) throw const FormatException('No size data');
+
+    final splits = size['splits'] as List<dynamic>? ?? [];
+    for (final s in splits) {
+      if (s['config'] == config && s['split'] == split) {
+        return (s['num_rows'] as num?)?.toInt() ?? 0;
+      }
+    }
+
+    // Fallback to dataset total
+    final datasetInfo = size['dataset'] as Map<String, dynamic>?;
+    return (datasetInfo?['num_rows'] as num?)?.toInt() ?? 0;
   }
 
   String _sanitize(String value) {
@@ -667,10 +827,11 @@ class _Asset {
 }
 
 class _HfException implements Exception {
-  _HfException(this.message, {this.isNotFound = false});
+  _HfException(this.message, {this.isNotFound = false, this.is501 = false});
 
   final String message;
   final bool isNotFound;
+  final bool is501;
 
   bool get isCanonicalCandidate =>
       message.toLowerCase().contains('renamed') || message.toLowerCase().contains('current dataset name');

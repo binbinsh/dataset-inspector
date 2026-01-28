@@ -4,6 +4,7 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   audioplayers_windows
+  dart_duckdb
   screen_retriever
   url_launcher_windows
   window_manager
