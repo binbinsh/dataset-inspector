@@ -1,6 +1,6 @@
 name: dataset_inspector
 description: Desktop UI for inspecting local and remote dataset shards.
-version: 2.4.6+20260127
+version: 2.5.0+20260128
 publish_to: "none"
 
 environment:
@@ -27,6 +27,7 @@ dependencies:
   video_player: ^2.9.2
   window_manager: ^0.3.8
   zstd: ^0.0.1-dev.2
+  dart_duckdb: ^1.4.4
 
 dev_dependencies:
   flutter_lints: ^6.0.0

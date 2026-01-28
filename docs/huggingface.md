@@ -4,6 +4,31 @@ Dataset Inspector can preview a subset of rows from Hugging Face datasets withou
 
 In the app, paste a dataset URL into the main input field and click **Load**. When a Hugging Face source is detected, the Hugging Face token button appears.
 
+## Key Features
+
+### Direct Parquet Streaming with DuckDB
+
+Dataset Inspector uses [DuckDB](https://duckdb.org/) to stream Parquet files directly from Hugging Face, providing several advantages over the huggingface.co website preview:
+
+| Feature | Dataset Inspector | huggingface.co |
+|---------|-------------------|----------------|
+| **Unsupported datasets** | ✅ Works via direct Parquet access | ❌ Shows "Not supported" error |
+| **Nested structures** | ✅ Full support (structs, lists, maps) | ⚠️ Limited |
+| **Large datasets** | ✅ Streams only needed rows | ⚠️ May timeout |
+| **Private/gated datasets** | ✅ With token | ✅ With token |
+
+**Example datasets that work in Dataset Inspector but not on huggingface.co:**
+- Datasets requiring custom Python code
+- Datasets with complex nested schemas
+- Datasets where the viewer service returns 501 errors
+
+### How It Works
+
+1. **Parquet API**: Fetches the list of Parquet files for the dataset split
+2. **DuckDB + HTTP Range Requests**: Streams only the required row groups without downloading full files
+3. **Prefetch Cache**: Background prefetching of the next page for faster navigation
+4. **Smart Pagination**: Calculates which Parquet file contains the requested offset
+
 ## Supported inputs
 
 - Dataset page URLs: `https://huggingface.co/datasets/<namespace>/<dataset-name>`
@@ -15,14 +40,37 @@ In the app, paste a dataset URL into the main input field and click **Load**. Wh
 - Optional: add a Hugging Face token for private or gated datasets.
 - Tokens are stored locally via shared_preferences.
 
-## How it works (backend)
+## Technical Details
 
-The Dart backend calls the public Hugging Face dataset viewer service:
+### Backend Architecture
 
-- `GET https://datasets-server.huggingface.co/splits?dataset=<org>/<name>`
-- `GET https://datasets-server.huggingface.co/rows?dataset=<org>/<name>&config=<config>&split=<split>&offset=<offset>&length=<length>`
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  HuggingFace    │────▶│  Parquet API     │────▶│  DuckDB         │
+│  Service        │     │  (file list)     │     │  (streaming)    │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+                                                         │
+                                                         ▼
+                                                 ┌─────────────────┐
+                                                 │  HTTP Range     │
+                                                 │  Requests       │
+                                                 └─────────────────┘
+```
 
-The UI uses the returned `features` to render a table and paginates rows with `offset`. The app clamps `length` to `<= 100` (UI default: 50).
+### API Endpoints Used
+
+- **Splits**: `GET https://datasets-server.huggingface.co/splits?dataset=<org>/<name>`
+- **Size**: `GET https://datasets-server.huggingface.co/size?dataset=<org>/<name>`
+- **Parquet files**: `GET https://datasets-server.huggingface.co/parquet?dataset=<org>/<name>`
+- **Direct Parquet streaming**: DuckDB reads `*.parquet` files via HTTP range requests
+
+### Performance Optimizations
+
+- **DuckDB warmup**: Initializes on app start for faster first load
+- **Token caching**: Avoids re-authenticating on every request
+- **HTTP metadata caching**: Reduces redundant metadata fetches
+- **Prefetch cache**: Pre-loads next page in background
+- **HTTP keep-alive**: Reuses connections for faster sequential requests
 
 ## Opening fields
 
@@ -32,5 +80,5 @@ The UI uses the returned `features` to render a table and paginates rows with `o
 
 ## Known limitations
 
-- Some datasets are unsupported by the dataset viewer service (for example, datasets that require executing arbitrary Python code).
 - Only the dataset id is used from the URL; revisions and extra path segments are ignored.
+- Datasets without Parquet exports cannot be previewed.

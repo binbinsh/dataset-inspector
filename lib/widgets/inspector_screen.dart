@@ -1234,8 +1234,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
                     ),
                   ),
                   IconButton(
-                    onPressed: preview.offset + preview.length < preview.numRowsTotal
-                        ? () => state.setHfOffset(preview.offset + preview.length)
+                    onPressed: preview.offset + preview.rows.length < preview.numRowsTotal
+                        ? () => state.setHfOffset(preview.offset + preview.rows.length)
                         : null,
                     icon: const Icon(Icons.chevron_right),
                   ),
