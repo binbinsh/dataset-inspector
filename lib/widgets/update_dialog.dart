@@ -8,6 +8,13 @@ Future<void> showUpdateDialog(BuildContext context, ViewerState state, UpdateInf
   int? total;
   var isDownloading = false;
   String? errorMessage;
+  String formatError(Object error) {
+    final message = error.toString();
+    if (message.startsWith('Exception: ')) {
+      return message.replaceFirst('Exception: ', '');
+    }
+    return message;
+  }
   return showDialog<void>(
     context: context,
     builder: (dialogContext) {
@@ -64,13 +71,13 @@ Future<void> showUpdateDialog(BuildContext context, ViewerState state, UpdateInf
                           if (dialogContext.mounted) {
                             Navigator.of(dialogContext).pop();
                           }
-                        } catch (_) {
+                        } catch (err) {
                           if (!dialogContext.mounted) return;
                           setState(() {
                             isDownloading = false;
                             downloaded = 0;
                             total = null;
-                            errorMessage = 'Update failed. Please try again.';
+                            errorMessage = formatError(err);
                           });
                         }
                       },
