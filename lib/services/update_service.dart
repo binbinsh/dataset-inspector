@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path/path.dart' as p;
 
 class UpdateInfo {
   const UpdateInfo({
@@ -76,10 +77,10 @@ class UpdateService {
     }
 
     final contentLength = response.contentLength;
-    final tempDir = Directory('${Directory.systemTemp.path}/dataset-inspector/updates');
+    final tempDir = _updateTempRoot();
     await tempDir.create(recursive: true);
     final filename = url.pathSegments.isNotEmpty ? url.pathSegments.last : 'update';
-    final outFile = File('${tempDir.path}/$filename');
+    final outFile = File(p.join(tempDir.path, filename));
     final sink = outFile.openWrite();
     var received = 0;
 
@@ -105,8 +106,8 @@ class UpdateService {
 
   Future<void> _openInstaller(File file) async {
     final path = file.path;
+    final lower = path.toLowerCase();
     if (Platform.isMacOS) {
-      final lower = path.toLowerCase();
       if (lower.endsWith('.zip')) {
         await _installMacUpdate(file);
         return;
@@ -116,8 +117,18 @@ class UpdateService {
       return;
     }
     if (Platform.isWindows) {
+      if (lower.endsWith('.zip')) {
+        await _installWindowsUpdate(file);
+        return;
+      }
       await Process.start('cmd', ['/c', 'start', '', path], runInShell: true);
       return;
+    }
+    if (Platform.isLinux) {
+      if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
+        await _installLinuxUpdate(file);
+        return;
+      }
     }
     await Process.start('xdg-open', [path]);
   }
@@ -126,17 +137,17 @@ class UpdateService {
     // 1. Find current app bundle location
     final currentExecutable = Platform.resolvedExecutable;
     // Executable is at: /path/to/App.app/Contents/MacOS/app_name
-    final appBundlePath = currentExecutable
-        .split('/Contents/MacOS/')
-        .first;
+    final appBundlePath = currentExecutable.split('/Contents/MacOS/').first;
+    final appBundleName = p.basename(appBundlePath);
+    final appPid = pid;
 
     if (!appBundlePath.endsWith('.app')) {
       throw Exception('Cannot determine app bundle location');
     }
 
     // 2. Extract new app to temp directory
-    final tempRoot = Directory('${Directory.systemTemp.path}/dataset-inspector/updates');
-    final extractDir = Directory('${tempRoot.path}/unpacked-${DateTime.now().millisecondsSinceEpoch}');
+    final tempRoot = _updateTempRoot();
+    final extractDir = Directory(p.join(tempRoot.path, 'unpacked-${DateTime.now().millisecondsSinceEpoch}'));
     await extractDir.create(recursive: true);
 
     final result = await Process.run('ditto', ['-x', '-k', zipFile.path, extractDir.path]);
@@ -145,29 +156,19 @@ class UpdateService {
     }
 
     // 3. Find the .app bundle in extracted files
-    Directory? newAppBundle;
-    await for (final entity in extractDir.list(followLinks: false)) {
-      if (entity is Directory && entity.path.toLowerCase().endsWith('.app')) {
-        newAppBundle = entity;
-        break;
-      }
-    }
-
-    if (newAppBundle == null) {
-      throw Exception('No .app bundle found in update package');
-    }
+    final newAppBundle = await _findMacAppBundle(extractDir, appBundleName);
+    await _ensureWritableDirectory(Directory(p.dirname(appBundlePath)));
 
     // 4. Create updater script that will:
     //    - Wait for current app to exit
     //    - Replace old app with new app
     //    - Launch new app
     //    - Clean up
-    final scriptFile = File('${tempRoot.path}/updater.sh');
+    final scriptFile = File(p.join(tempRoot.path, 'updater.sh'));
     final script = '''
 #!/bin/bash
 # Wait for the app to exit (check every 0.5 seconds, timeout after 30 seconds)
-PID=\$\$
-APP_PID=$pid
+APP_PID=$appPid
 TIMEOUT=60
 ELAPSED=0
 
@@ -185,7 +186,7 @@ sleep 1
 
 # Remove old app and copy new app
 rm -rf "$appBundlePath"
-cp -R "${newAppBundle.path}" "$appBundlePath"
+ditto "${newAppBundle.path}" "$appBundlePath"
 
 # Fix permissions
 chmod -R 755 "$appBundlePath"
@@ -196,6 +197,7 @@ open "$appBundlePath"
 
 # Clean up
 rm -rf "${extractDir.path}"
+rm -f "${zipFile.path}"
 rm -f "${scriptFile.path}"
 ''';
 
@@ -211,6 +213,176 @@ rm -f "${scriptFile.path}"
 
     // 6. Exit current app
     exit(0);
+  }
+
+  Future<void> _installWindowsUpdate(File zipFile) async {
+    final appExecutable = File(Platform.resolvedExecutable);
+    final appDir = appExecutable.parent;
+    final exeName = p.basename(appExecutable.path);
+    final appPid = pid;
+
+    await _ensureWritableDirectory(appDir);
+
+    final tempRoot = _updateTempRoot();
+    final extractDir = Directory(p.join(tempRoot.path, 'unpacked-${DateTime.now().millisecondsSinceEpoch}'));
+    await extractDir.create(recursive: true);
+
+    final result = await Process.run(
+      'powershell',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        r'& { Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force }',
+        zipFile.path,
+        extractDir.path,
+      ],
+    );
+    if (result.exitCode != 0) {
+      throw Exception('Failed to extract update: ${result.stderr}');
+    }
+
+    final payloadDir = await _findPayloadDir(extractDir, exeName);
+
+    final scriptFile = File(p.join(tempRoot.path, 'updater.cmd'));
+    final script = '''
+@echo off
+setlocal
+set "APP_PID=$appPid"
+set "APP_DIR=${appDir.path}"
+set "SRC_DIR=${payloadDir.path}"
+set "CLEAN_DIR=${extractDir.path}"
+set "EXE_NAME=$exeName"
+set "ZIP_FILE=${zipFile.path}"
+
+:wait
+tasklist /FI "PID eq %APP_PID%" | findstr /I "%APP_PID%" >nul
+if not errorlevel 1 (
+  timeout /t 1 /nobreak >nul
+  goto wait
+)
+
+robocopy "%SRC_DIR%" "%APP_DIR%" /E /IS /IT /NFL /NDL /NJH /NJS /NC /NS /NP >nul
+start "" "%APP_DIR%\\%EXE_NAME%"
+
+rmdir /s /q "%CLEAN_DIR%"
+del "%ZIP_FILE%"
+del "%~f0"
+''';
+
+    await scriptFile.writeAsString(script);
+
+    await Process.start(
+      'cmd',
+      ['/c', scriptFile.path],
+      mode: ProcessStartMode.detached,
+    );
+
+    exit(0);
+  }
+
+  Future<void> _installLinuxUpdate(File archiveFile) async {
+    final appExecutable = File(Platform.resolvedExecutable);
+    final appDir = appExecutable.parent;
+    final exeName = p.basename(appExecutable.path);
+    final appPid = pid;
+
+    await _ensureWritableDirectory(appDir);
+
+    final tempRoot = _updateTempRoot();
+    final extractDir = Directory(p.join(tempRoot.path, 'unpacked-${DateTime.now().millisecondsSinceEpoch}'));
+    await extractDir.create(recursive: true);
+
+    final result = await Process.run('tar', ['-xzf', archiveFile.path, '-C', extractDir.path]);
+    if (result.exitCode != 0) {
+      throw Exception('Failed to extract update: ${result.stderr}');
+    }
+
+    final payloadDir = await _findPayloadDir(extractDir, exeName);
+
+    final scriptFile = File(p.join(tempRoot.path, 'updater.sh'));
+    final script = '''
+#!/bin/bash
+APP_PID=$appPid
+APP_DIR="${appDir.path}"
+SRC_DIR="${payloadDir.path}"
+CLEAN_DIR="${extractDir.path}"
+EXE_NAME="$exeName"
+ARCHIVE_PATH="${archiveFile.path}"
+
+while kill -0 \$APP_PID 2>/dev/null; do
+  sleep 0.5
+done
+
+cp -a "\$SRC_DIR"/. "\$APP_DIR"/
+chmod -R 755 "\$APP_DIR"
+cd "\$APP_DIR"
+"./\$EXE_NAME" >/dev/null 2>&1 &
+
+rm -rf "\$CLEAN_DIR"
+rm -f "\$ARCHIVE_PATH"
+rm -f "${scriptFile.path}"
+''';
+
+    await scriptFile.writeAsString(script);
+    await Process.run('chmod', ['+x', scriptFile.path]);
+
+    await Process.start(
+      '/bin/bash',
+      [scriptFile.path],
+      mode: ProcessStartMode.detached,
+    );
+
+    exit(0);
+  }
+
+  Future<Directory> _findMacAppBundle(Directory root, String preferredName) async {
+    Directory? fallback;
+    await for (final entity in root.list(recursive: true, followLinks: false)) {
+      if (entity is! Directory) continue;
+      final name = p.basename(entity.path);
+      if (!name.toLowerCase().endsWith('.app')) continue;
+      if (p.split(entity.path).contains('__MACOSX')) continue;
+      if (name == preferredName) return entity;
+      fallback ??= entity;
+    }
+    if (fallback != null) return fallback;
+    throw Exception('No .app bundle found in update package');
+  }
+
+  Future<Directory> _findPayloadDir(Directory root, String executableName) async {
+    final direct = File(p.join(root.path, executableName));
+    if (await direct.exists()) {
+      return root;
+    }
+    await for (final entity in root.list(recursive: true, followLinks: false)) {
+      if (entity is! File) continue;
+      if (p.basename(entity.path) != executableName) continue;
+      return entity.parent;
+    }
+    throw Exception('No executable found in update package');
+  }
+
+  Future<void> _ensureWritableDirectory(Directory directory) async {
+    final probe = File(p.join(
+      directory.path,
+      '.update_write_test_${DateTime.now().millisecondsSinceEpoch}',
+    ));
+    try {
+      await probe.writeAsString('test');
+    } on FileSystemException {
+      throw Exception(
+        'App location is not writable. Move the app to a writable folder and try again.',
+      );
+    } finally {
+      if (await probe.exists()) {
+        await probe.delete();
+      }
+    }
+  }
+
+  Directory _updateTempRoot() {
+    return Directory(p.join(Directory.systemTemp.path, 'dataset-inspector', 'updates'));
   }
 
   bool _isNewerVersion(String current, String latest) {
