@@ -11,6 +11,7 @@ import '../utils/audio.dart';
 import '../utils/preview.dart';
 import '../utils/tar_stream.dart';
 import '../utils/zstd.dart';
+import 'litdata_service.dart';
 import 'mosaicml_service.dart';
 import 'open_with_service.dart';
 
@@ -19,15 +20,33 @@ const _maxListedSamples = 5000;
 const _maxOpenBytes = 256 * 1024 * 1024;
 const _wdsPreviewCacheMaxEntries = 2000;
 
+enum _DatasetDetectConfidence {
+  weak,
+  strong,
+}
+
+class _DatasetDetectResult {
+  const _DatasetDetectResult({
+    required this.response,
+    required this.confidence,
+  });
+
+  final LocalDatasetDetectResponse response;
+  final _DatasetDetectConfidence confidence;
+}
+
 class WebdatasetService {
   WebdatasetService({
     OpenWithService? openWith,
     MosaicmlService? mosaicml,
+    LitDataService? litdata,
   })  : _openWith = openWith ?? OpenWithService(),
-        _mosaicml = mosaicml ?? MosaicmlService();
+        _mosaicml = mosaicml ?? MosaicmlService(),
+        _litdata = litdata ?? LitDataService();
 
   final OpenWithService _openWith;
   final MosaicmlService _mosaicml;
+  final LitDataService _litdata;
   final _WdsScanCache _cache = _WdsScanCache();
 
   Future<WdsDirSummary> loadDir(String dirPath) async {
@@ -69,7 +88,8 @@ class WebdatasetService {
 
     final total = state.done ? state.currentSampleIndex : null;
     final start = pageOffset;
-    final end = (pageOffset + pageLength).clamp(0, state.samples.length).toInt();
+    final end =
+        (pageOffset + pageLength).clamp(0, state.samples.length).toInt();
     final samples = start >= state.samples.length
         ? <WdsSampleInfo>[]
         : state.samples.sublist(start, end);
@@ -96,7 +116,8 @@ class WebdatasetService {
     final cached = state.cachedPreview(normalized);
     if (cached != null) return cached;
 
-    final (data, size) = await _readMemberBytes(shardPath, normalized, _previewBytes);
+    final (data, size) =
+        await _readMemberBytes(shardPath, normalized, _previewBytes);
     final previewText = previewUtf8Text(data);
     final guessedExt = _guessExtFromMember(normalized, data);
     return FieldPreview(
@@ -245,6 +266,11 @@ class WebdatasetService {
   }
 
   Future<LocalDatasetDetectResponse> detectLocalDataset(String path) async {
+    final result = await _detectLocalDatasetDetailed(path);
+    return result.response;
+  }
+
+  Future<_DatasetDetectResult> _detectLocalDatasetDetailed(String path) async {
     final trimmed = path.trim();
     if (trimmed.isEmpty) throw const FormatException('path is empty');
     final file = File(trimmed);
@@ -252,47 +278,127 @@ class WebdatasetService {
     if (await file.exists()) {
       final name = file.uri.pathSegments.last;
       if (_looksLikeWdsShard(name)) {
-        return LocalDatasetDetectResponse(kind: LocalDatasetKind.webdatasetDir, path: file.parent.path);
+        final strong = await _looksLikeWebdatasetShard(file);
+        return _DatasetDetectResult(
+          response: LocalDatasetDetectResponse(
+            kind: LocalDatasetKind.webdatasetDir,
+            path: file.parent.path,
+          ),
+          confidence: strong
+              ? _DatasetDetectConfidence.strong
+              : _DatasetDetectConfidence.weak,
+        );
       }
       if (_looksLikeMdsShard(name)) {
         final indexPath = await _detectMdsIndex(File(file.parent.path));
         if (indexPath != null) {
-          return LocalDatasetDetectResponse(
-            kind: LocalDatasetKind.mdsIndex,
-            path: File(indexPath).parent.path,
+          return _DatasetDetectResult(
+            response: LocalDatasetDetectResponse(
+              kind: LocalDatasetKind.mdsIndex,
+              path: File(indexPath).parent.path,
+            ),
+            confidence: _DatasetDetectConfidence.strong,
           );
         }
-        throw FormatException('no MosaicML MDS index.json found next to ${file.path}');
+        throw FormatException(
+            'no MosaicML MDS index.json found next to ${file.path}');
       }
-      if (name.toLowerCase().contains('index.json')) {
-        final indexPath = await _detectMdsIndex(file);
-        if (indexPath != null) {
-          return LocalDatasetDetectResponse(
-            kind: LocalDatasetKind.mdsIndex,
-            path: File(indexPath).parent.path,
+      if (_looksLikeIndexFileName(name)) {
+        final mdsIndex = await _detectMdsIndex(file);
+        if (mdsIndex != null) {
+          return _DatasetDetectResult(
+            response: LocalDatasetDetectResponse(
+              kind: LocalDatasetKind.mdsIndex,
+              path: File(mdsIndex).parent.path,
+            ),
+            confidence: _DatasetDetectConfidence.strong,
           );
         }
-      }
-      if (_looksLikeLitdataFile(name)) {
-        return LocalDatasetDetectResponse(kind: LocalDatasetKind.litdataIndex, path: file.parent.path);
+        final litdataConfidence = await _detectLitdataIndexConfidence(file);
+        if (litdataConfidence != null) {
+          return _DatasetDetectResult(
+            response: LocalDatasetDetectResponse(
+              kind: LocalDatasetKind.litdataIndex,
+              path: file.parent.path,
+            ),
+            confidence: litdataConfidence,
+          );
+        }
       }
     }
 
     final dir = Directory(trimmed);
     if (await dir.exists()) {
-      final litdataIndex = await _findLitdataIndexInDir(dir);
-      if (litdataIndex != null) {
-        final mdsIndex = await _detectMdsIndex(File(litdataIndex.path));
-        if (mdsIndex != null) {
-          return LocalDatasetDetectResponse(
+      final mdsFromDir = await _detectMdsIndex(File(dir.path));
+      if (mdsFromDir != null) {
+        return _DatasetDetectResult(
+          response: LocalDatasetDetectResponse(
             kind: LocalDatasetKind.mdsIndex,
-            path: File(mdsIndex).parent.path,
+            path: File(mdsFromDir).parent.path,
+          ),
+          confidence: _DatasetDetectConfidence.strong,
+        );
+      }
+
+      final indexFiles = await _listIndexFilesInDir(dir);
+      _DatasetDetectConfidence? litdataConfidence;
+      for (final indexFile in indexFiles) {
+        final mdsFromIndex = await _detectMdsIndex(indexFile);
+        if (mdsFromIndex != null) {
+          return _DatasetDetectResult(
+            response: LocalDatasetDetectResponse(
+              kind: LocalDatasetKind.mdsIndex,
+              path: File(mdsFromIndex).parent.path,
+            ),
+            confidence: _DatasetDetectConfidence.strong,
           );
         }
-        return LocalDatasetDetectResponse(kind: LocalDatasetKind.litdataIndex, path: dir.path);
+
+        final detectedLitdata = await _detectLitdataIndexConfidence(indexFile);
+        if (detectedLitdata == null) continue;
+        if (detectedLitdata == _DatasetDetectConfidence.strong) {
+          return _DatasetDetectResult(
+            response: LocalDatasetDetectResponse(
+              kind: LocalDatasetKind.litdataIndex,
+              path: dir.path,
+            ),
+            confidence: _DatasetDetectConfidence.strong,
+          );
+        }
+        litdataConfidence ??= detectedLitdata;
       }
-      if (await _hasWdsShardsInDir(dir)) {
-        return LocalDatasetDetectResponse(kind: LocalDatasetKind.webdatasetDir, path: dir.path);
+      if (litdataConfidence != null) {
+        return _DatasetDetectResult(
+          response: LocalDatasetDetectResponse(
+            kind: LocalDatasetKind.litdataIndex,
+            path: dir.path,
+          ),
+          confidence: litdataConfidence,
+        );
+      }
+
+      final shards = await _listWdsShardsInDir(dir);
+      if (shards.isNotEmpty) {
+        var strong = false;
+        final inspectCount = shards.length < 3 ? shards.length : 3;
+        for (var i = 0; i < inspectCount; i += 1) {
+          if (await _looksLikeWebdatasetShard(shards[i])) {
+            strong = true;
+            break;
+          }
+        }
+        if (!strong && shards.length >= 2) {
+          strong = _looksLikeWdsShardSequence(shards);
+        }
+        return _DatasetDetectResult(
+          response: LocalDatasetDetectResponse(
+            kind: LocalDatasetKind.webdatasetDir,
+            path: dir.path,
+          ),
+          confidence: strong
+              ? _DatasetDetectConfidence.strong
+              : _DatasetDetectConfidence.weak,
+        );
       }
       throw FormatException(
         'no LitData index.json, MDS index.json, or WebDataset shard found in ${dir.path}',
@@ -302,9 +408,92 @@ class WebdatasetService {
     throw FormatException('path does not exist: $trimmed');
   }
 
+  Stream<LocalDatasetDetectResponse> discoverLocalDatasetsStream(
+    String rootPath, {
+    int maxDepth = 6,
+  }) async* {
+    final trimmed = rootPath.trim();
+    if (trimmed.isEmpty) throw const FormatException('path is empty');
+
+    final rootFile = File(trimmed);
+    final rootDir = Directory(trimmed);
+    if (await rootFile.exists() && !await rootDir.exists()) {
+      final detected = await _detectLocalDatasetDetailed(trimmed);
+      yield LocalDatasetDetectResponse(
+        kind: detected.response.kind,
+        path: _canonicalFsPath(detected.response.path),
+      );
+      return;
+    }
+    if (!await rootDir.exists()) {
+      throw FormatException('path does not exist: $trimmed');
+    }
+
+    final queue = Queue<({Directory dir, int depth})>();
+    queue.add((dir: rootDir, depth: 0));
+
+    final visitedDirs = <String>{};
+    final seenDatasets = <String>{};
+
+    while (queue.isNotEmpty) {
+      final current = queue.removeFirst();
+      final dir = current.dir;
+      final depth = current.depth;
+      var detectedCurrentDirStrong = false;
+
+      final dirPath = _canonicalFsPath(dir.path);
+      if (!visitedDirs.add(dirPath)) continue;
+
+      try {
+        final detected = await _detectLocalDatasetDetailed(dir.path);
+        detectedCurrentDirStrong =
+            detected.confidence == _DatasetDetectConfidence.strong;
+        final detectedPath = _canonicalFsPath(detected.response.path);
+        final key = '${detected.response.kind.name}:$detectedPath';
+        if (seenDatasets.add(key)) {
+          final response = LocalDatasetDetectResponse(
+              kind: detected.response.kind, path: detectedPath);
+          yield response;
+        }
+      } catch (_) {}
+
+      // Strongly detected dataset roots stop recursion; weak matches still recurse.
+      if (detectedCurrentDirStrong) continue;
+      if (depth >= maxDepth) continue;
+
+      await for (final entry in dir.list(followLinks: false)) {
+        if (entry is! Directory) continue;
+        final name = entry.path.split(Platform.pathSeparator).last;
+        if (_shouldSkipScanDirectory(name)) continue;
+        queue.add((dir: entry, depth: depth + 1));
+      }
+    }
+
+    // Keep deterministic traversal for stream consumers by exhausting queue.
+    return;
+  }
+
+  Future<List<LocalDatasetDetectResponse>> discoverLocalDatasets(
+    String rootPath, {
+    int maxDepth = 6,
+  }) async {
+    final discovered = <LocalDatasetDetectResponse>[];
+    await for (final detected
+        in discoverLocalDatasetsStream(rootPath, maxDepth: maxDepth)) {
+      discovered.add(detected);
+    }
+    discovered.sort((a, b) {
+      final kindCompare = a.kind.index.compareTo(b.kind.index);
+      if (kindCompare != 0) return kindCompare;
+      return a.path.compareTo(b.path);
+    });
+    return discovered;
+  }
+
   (Directory, List<WdsShardSummary>) _resolveShardDirAndList(String dirPath) {
     final file = File(dirPath);
-    if (file.existsSync() && file.statSync().type == FileSystemEntityType.file) {
+    if (file.existsSync() &&
+        file.statSync().type == FileSystemEntityType.file) {
       final filename = file.uri.pathSegments.last;
       if (!_looksLikeWdsShard(filename)) {
         throw const FormatException('file is not a supported WebDataset shard');
@@ -391,9 +580,11 @@ class WebdatasetService {
 
   File _decompressZstdToTemp(File path) {
     final stat = path.statSync();
-    final payload = '${path.path}:${stat.size}:${stat.modified.millisecondsSinceEpoch}';
+    final payload =
+        '${path.path}:${stat.size}:${stat.modified.millisecondsSinceEpoch}';
     final key = sha1.convert(utf8.encode(payload)).toString();
-    final outDir = Directory('${Directory.systemTemp.path}/dataset-inspector/wds-cache');
+    final outDir =
+        Directory('${Directory.systemTemp.path}/dataset-inspector/wds-cache');
     outDir.createSync(recursive: true);
     final out = File('${outDir.path}/$key.tar');
     if (out.existsSync()) return out;
@@ -460,7 +651,8 @@ class WebdatasetService {
     final normalized = normalizeTarPath(memberPath);
     final parts = normalized.split('/');
     final base = parts.isNotEmpty ? parts.last : normalized;
-    final dir = parts.length > 1 ? parts.sublist(0, parts.length - 1).join('/') : '';
+    final dir =
+        parts.length > 1 ? parts.sublist(0, parts.length - 1).join('/') : '';
 
     final dot = base.indexOf('.');
     String basePrefix;
@@ -489,28 +681,53 @@ class WebdatasetService {
 
   bool _looksLikeMdsShard(String filename) {
     final name = filename.toLowerCase();
-    return name.endsWith('.mds') || name.endsWith('.mds.zst') || name.endsWith('.mds.zstd');
+    return name.endsWith('.mds') ||
+        name.endsWith('.mds.zst') ||
+        name.endsWith('.mds.zstd');
   }
 
-  bool _looksLikeLitdataFile(String filename) {
+  bool _looksLikeIndexFileName(String filename) {
     final name = filename.toLowerCase();
-    if (name.contains('index.json')) return true;
-    if (name.endsWith('.bin') || name.contains('.bin.')) return true;
-    if (name.endsWith('.zst') && !_looksLikeWdsShard(name)) return true;
-    return false;
+    if (name == 'index.json' ||
+        name == 'index.json.zstd' ||
+        name == 'index.json.zst' ||
+        name == '0.index.json' ||
+        name == '0.index.json.zstd' ||
+        name == '0.index.json.zst') {
+      return true;
+    }
+    return name.endsWith('.index.json') || name.contains('.index.json.');
   }
 
-  Future<bool> _hasWdsShardsInDir(Directory dir) async {
-    await for (final entry in dir.list(followLinks: false)) {
-      if (entry is! File) continue;
-      if (_looksLikeWdsShard(entry.uri.pathSegments.last)) {
-        return true;
+  String _canonicalFsPath(String input) {
+    return File(input).absolute.path;
+  }
+
+  bool _shouldSkipScanDirectory(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return true;
+    if (trimmed.startsWith('.')) return true;
+    const excluded = {
+      'build',
+      '.dart_tool',
+      'node_modules',
+      '.venv',
+      'venv',
+      '__pycache__',
+    };
+    return excluded.contains(trimmed.toLowerCase());
+  }
+
+  Future<List<File>> _listIndexFilesInDir(Directory dir) async {
+    final files = <File>[];
+    final seen = <String>{};
+    void appendIfNew(File file) {
+      final key = _canonicalFsPath(file.path);
+      if (seen.add(key)) {
+        files.add(file);
       }
     }
-    return false;
-  }
 
-  Future<File?> _findLitdataIndexInDir(Directory dir) async {
     final candidates = [
       'index.json',
       'index.json.zstd',
@@ -521,19 +738,133 @@ class WebdatasetService {
     ];
     for (final name in candidates) {
       final file = File('${dir.path}/$name');
-      if (await file.exists()) return file;
-    }
-    File? best;
-    await for (final entry in dir.list(followLinks: false)) {
-      if (entry is! File) continue;
-      final path = entry.path;
-      if (path.endsWith('.index.json') || path.contains('.index.json.')) {
-        if (best == null || path.compareTo(best!.path) < 0) {
-          best = entry;
-        }
+      if (await file.exists()) {
+        appendIfNew(file);
       }
     }
-    return best;
+
+    await for (final entry in dir.list(followLinks: false)) {
+      if (entry is! File) continue;
+      final name = entry.uri.pathSegments.last;
+      if (_looksLikeIndexFileName(name)) {
+        appendIfNew(entry);
+      }
+    }
+    files.sort((a, b) => a.path.compareTo(b.path));
+    return files;
+  }
+
+  Future<_DatasetDetectConfidence?> _detectLitdataIndexConfidence(
+    File indexFile,
+  ) async {
+    try {
+      final summary = await _litdata.loadIndex(indexFile.path);
+      if (summary.chunks.isEmpty) {
+        return _DatasetDetectConfidence.weak;
+      }
+      if (summary.chunks.any((chunk) => chunk.exists)) {
+        return _DatasetDetectConfidence.strong;
+      }
+      if (summary.chunks
+          .any((chunk) => _looksLikeLikelyLitdataChunk(chunk.filename))) {
+        return _DatasetDetectConfidence.strong;
+      }
+      return _DatasetDetectConfidence.weak;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool _looksLikeLikelyLitdataChunk(String filename) {
+    final name = filename.toLowerCase();
+    if (name.contains('index.json')) return false;
+    if (_looksLikeWdsShard(name) || _looksLikeMdsShard(name)) return false;
+    return name.endsWith('.bin') ||
+        name.contains('.bin.') ||
+        name.endsWith('.zst') ||
+        name.endsWith('.zstd');
+  }
+
+  Future<List<File>> _listWdsShardsInDir(Directory dir) async {
+    final shards = <File>[];
+    await for (final entry in dir.list(followLinks: false)) {
+      if (entry is! File) continue;
+      if (_looksLikeWdsShard(entry.uri.pathSegments.last)) {
+        shards.add(entry);
+      }
+    }
+    shards.sort((a, b) => a.path.compareTo(b.path));
+    return shards;
+  }
+
+  bool _looksLikeWdsShardSequence(List<File> shards) {
+    var matched = 0;
+    for (final shard in shards) {
+      final filename = shard.uri.pathSegments.last;
+      final stem = _wdsShardStem(filename).toLowerCase();
+      final isNumeric = RegExp(r'^\d{3,}$').hasMatch(stem);
+      final isLabeled = RegExp(r'^(part|shard|chunk)[-_]?\d+$').hasMatch(stem);
+      if (isNumeric || isLabeled) {
+        matched += 1;
+      }
+      if (matched >= 2) return true;
+    }
+    return false;
+  }
+
+  String _wdsShardStem(String filename) {
+    final lower = filename.toLowerCase();
+    if (lower.endsWith('.tar.zstd')) {
+      return filename.substring(0, filename.length - '.tar.zstd'.length);
+    }
+    if (lower.endsWith('.tar.zst')) {
+      return filename.substring(0, filename.length - '.tar.zst'.length);
+    }
+    if (lower.endsWith('.tar.gz')) {
+      return filename.substring(0, filename.length - '.tar.gz'.length);
+    }
+    if (lower.endsWith('.tgz')) {
+      return filename.substring(0, filename.length - '.tgz'.length);
+    }
+    if (lower.endsWith('.tar')) {
+      return filename.substring(0, filename.length - '.tar'.length);
+    }
+    return filename;
+  }
+
+  Future<bool> _looksLikeWebdatasetShard(File shardPath) async {
+    try {
+      final readerHandle = openTarStreamReader(_openShardStream(shardPath));
+      final tar = createTarStream(readerHandle);
+      final fieldsPerKey = <String, Set<String>>{};
+      final distinctFields = <String>{};
+      var nonDirectoryEntries = 0;
+
+      while (nonDirectoryEntries < 40) {
+        final entry = await tar.nextWithBytes((_) => 0);
+        if (entry == null) break;
+        if (entry.meta.isDir) continue;
+
+        nonDirectoryEntries += 1;
+        final (key, fieldName) = _splitSampleKey(entry.meta.path);
+        if (key.isEmpty) continue;
+        final fields = fieldsPerKey.putIfAbsent(key, () => <String>{});
+        fields.add(fieldName);
+        distinctFields.add(fieldName);
+        if (fields.length >= 2) {
+          return true;
+        }
+
+        if (nonDirectoryEntries >= 12 &&
+            fieldsPerKey.length >= 8 &&
+            distinctFields.length <= 3) {
+          return true;
+        }
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<String?> _detectMdsIndex(File path) async {
@@ -583,11 +914,11 @@ class _TarEntryLocation {
 }
 
 class _ShardScanState {
-  _ShardScanState(this._shardPath)
-      : _tarFile = _resolveTarFileStatic(_shardPath),
-        _tar = createTarStream(openTarStreamReader(_openShardStreamStatic(_shardPath)));
+  _ShardScanState(File shardPath)
+      : _tarFile = _resolveTarFileStatic(shardPath),
+        _tar = createTarStream(
+            openTarStreamReader(_openShardStreamStatic(shardPath)));
 
-  final File _shardPath;
   final File? _tarFile;
   final TarStreamReader _tar;
   bool done = false;
@@ -613,17 +944,23 @@ class _ShardScanState {
 
     final captureEnabled =
         captureStart != null && captureEnd != null && captureEnd > captureStart;
+    final captureStartValue = captureStart ?? 0;
+    final captureEndValue = captureEnd ?? 0;
     var stoppedEarly = false;
     while (!done) {
       final entry = captureEnabled
           ? await _tar.nextWithBytes((meta) {
               if (meta.isDir) return 0;
-              if (currentSampleIndex + 1 < captureStart! || currentSampleIndex >= captureEnd!) {
+              if (currentSampleIndex + 1 < captureStartValue ||
+                  currentSampleIndex >= captureEndValue) {
                 return 0;
               }
               final (key, _) = _splitSampleKeyStatic(meta.path);
               final sampleIndex = _predictSampleIndexForKey(key);
-              if (sampleIndex < captureStart || sampleIndex >= captureEnd) return 0;
+              if (sampleIndex < captureStartValue ||
+                  sampleIndex >= captureEndValue) {
+                return 0;
+              }
               return _previewBytes;
             })
           : await _tar.next();
@@ -688,7 +1025,8 @@ class _ShardScanState {
     return cached;
   }
 
-  _TarEntryLocation? entryLocation(String memberPath) => _entryIndex[memberPath];
+  _TarEntryLocation? entryLocation(String memberPath) =>
+      _entryIndex[memberPath];
 
   void _flushSample() {
     if (_currentKey == null) {
@@ -764,9 +1102,11 @@ class _ShardScanState {
 
   static File _decompressZstdToTempStatic(File path) {
     final stat = path.statSync();
-    final payload = '${path.path}:${stat.size}:${stat.modified.millisecondsSinceEpoch}';
+    final payload =
+        '${path.path}:${stat.size}:${stat.modified.millisecondsSinceEpoch}';
     final key = sha1.convert(utf8.encode(payload)).toString();
-    final outDir = Directory('${Directory.systemTemp.path}/dataset-inspector/wds-cache');
+    final outDir =
+        Directory('${Directory.systemTemp.path}/dataset-inspector/wds-cache');
     outDir.createSync(recursive: true);
     final out = File('${outDir.path}/$key.tar');
     if (out.existsSync()) return out;
@@ -780,7 +1120,8 @@ class _ShardScanState {
     final normalized = normalizeTarPath(memberPath);
     final parts = normalized.split('/');
     final base = parts.isNotEmpty ? parts.last : normalized;
-    final dir = parts.length > 1 ? parts.sublist(0, parts.length - 1).join('/') : '';
+    final dir =
+        parts.length > 1 ? parts.sublist(0, parts.length - 1).join('/') : '';
     final dot = base.indexOf('.');
     String basePrefix;
     String suffix;
@@ -816,7 +1157,10 @@ String? _detectMagicExt(Uint8List data) {
       data[11] == 0x45) {
     return 'wav';
   }
-  if (data.length >= 3 && data[0] == 0x49 && data[1] == 0x44 && data[2] == 0x33) {
+  if (data.length >= 3 &&
+      data[0] == 0x49 &&
+      data[1] == 0x44 &&
+      data[2] == 0x33) {
     return 'mp3';
   }
   if (data.length >= 2 && data[0] == 0xff && (data[1] & 0xe0) == 0xe0) {
@@ -836,7 +1180,10 @@ String? _detectMagicExt(Uint8List data) {
       data[3] == 0x47) {
     return 'png';
   }
-  if (data.length >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff) {
+  if (data.length >= 3 &&
+      data[0] == 0xff &&
+      data[1] == 0xd8 &&
+      data[2] == 0xff) {
     return 'jpg';
   }
   if (data.length >= 6 &&

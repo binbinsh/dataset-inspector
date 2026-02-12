@@ -1,31 +1,39 @@
-import 'package:flutter/foundation.dart';
-
 class AppLogger {
   AppLogger._();
 
   static const bool _forceVerbose =
       bool.fromEnvironment('DATASET_INSPECTOR_VERBOSE', defaultValue: false);
+  static const bool _isProductMode =
+      bool.fromEnvironment('dart.vm.product', defaultValue: false);
+  static bool? _enabledOverride;
 
-  static bool get _enabled => _forceVerbose || kDebugMode;
+  static bool get _enabled =>
+      _enabledOverride ?? (_forceVerbose || !_isProductMode);
+
+  /// Override logger verbosity at runtime for non-UI environments.
+  static void configure({bool? enabled}) {
+    _enabledOverride = enabled;
+  }
 
   static void info(String message, {String tag = 'app'}) {
     if (!_enabled) return;
-    debugPrint('[INFO][$tag] $message');
+    print('[INFO][$tag] $message');
   }
 
   static void warn(String message, {String tag = 'app'}) {
     if (!_enabled) return;
-    debugPrint('[WARN][$tag] $message');
+    print('[WARN][$tag] $message');
   }
 
-  static void error(String message, {String tag = 'app', Object? error, StackTrace? stackTrace}) {
+  static void error(String message,
+      {String tag = 'app', Object? error, StackTrace? stackTrace}) {
     if (!_enabled) return;
-    debugPrint('[ERROR][$tag] $message');
+    print('[ERROR][$tag] $message');
     if (error != null) {
-      debugPrint('error: $error');
+      print('error: $error');
     }
     if (stackTrace != null) {
-      debugPrint(stackTrace.toString());
+      print(stackTrace.toString());
     }
   }
 }
