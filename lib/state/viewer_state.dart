@@ -846,8 +846,9 @@ class ViewerState extends ChangeNotifier {
 
     triggerLoad(resolved.mode,
         payload: resolved.payload, paths: resolved.paths);
-    await _awaitPrimaryLoad(resolved.mode);
 
+    // Register the dataset immediately so it appears in the explorer
+    // while data loads in the background.
     final dataset = _upsertOpenedDataset(resolved);
     if (dataset == null) {
       if (notify) {
@@ -856,6 +857,15 @@ class ViewerState extends ChangeNotifier {
       return false;
     }
     activeDatasetId = dataset.id;
+    notifyListeners();
+
+    await _awaitPrimaryLoad(resolved.mode);
+
+    // If loading failed, the .then() callback never ran so the summary
+    // fields are still null.  Fill them with empty values so the UI
+    // shows "No entries" instead of spinning forever.
+    _ensurePrimaryDataNotNull(resolved.mode);
+
     _syncActiveDatasetSelection();
     if (notify) {
       notifyListeners();
@@ -991,10 +1001,7 @@ class ViewerState extends ChangeNotifier {
     if (resolved.mode == ViewerMode.zenodo) {
       return _zenodoLabel(source);
     }
-    final normalized = _normalizedSourceIdentity(resolved.mode, source);
-    final base = p.basename(normalized);
-    if (base.isNotEmpty) return base;
-    return normalized;
+    return _normalizedSourceIdentity(resolved.mode, source);
   }
 
   String _huggingFaceLabel(String input) {
@@ -1102,6 +1109,7 @@ class ViewerState extends ChangeNotifier {
 
     triggerLoad(dataset.mode, payload: dataset.payload, paths: dataset.paths);
     await _awaitPrimaryLoad(dataset.mode);
+    _ensurePrimaryDataNotNull(dataset.mode);
     _restorePrimarySelectionForDataset(dataset);
     _syncActiveDatasetSelection();
     notifyListeners();
@@ -1582,6 +1590,25 @@ class ViewerState extends ChangeNotifier {
       );
     } catch (_) {
       return _emptyFieldPreview();
+    }
+  }
+
+  void _ensurePrimaryDataNotNull(ViewerMode sourceMode) {
+    switch (sourceMode) {
+      case ViewerMode.litdataIndex:
+      case ViewerMode.litdataChunks:
+      case ViewerMode.mdsIndex:
+        indexSummary ??= _emptyIndexSummary();
+        break;
+      case ViewerMode.webdatasetDir:
+        wdsDirSummary ??= _emptyWdsDirSummary();
+        break;
+      case ViewerMode.zenodo:
+        zenodoRecord ??= _emptyZenodoRecord();
+        break;
+      case ViewerMode.huggingface:
+        hfPreview ??= _emptyHfPreview();
+        break;
     }
   }
 

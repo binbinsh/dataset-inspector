@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import 'services/app_menu_bridge.dart';
@@ -32,9 +33,9 @@ class DatasetInspectorApp extends StatelessWidget {
       onError: const Color(0xFFFFFFFF),
     );
 
-    final baseText = ThemeData.light().textTheme;
-    final textTheme = baseText.apply(
-      fontFamily: 'SpaceGrotesk',
+    final textTheme = GoogleFonts.googleSansTextTheme(
+      ThemeData.light().textTheme,
+    ).apply(
       displayColor: baseScheme.onSurface,
       bodyColor: baseScheme.onSurface,
     );
@@ -42,7 +43,7 @@ class DatasetInspectorApp extends StatelessWidget {
     final theme = ThemeData(
       colorScheme: baseScheme,
       scaffoldBackgroundColor: baseScheme.surfaceContainerLowest,
-      fontFamily: 'SpaceGrotesk',
+      fontFamily: GoogleFonts.googleSans().fontFamily,
       textTheme: textTheme,
       useMaterial3: true,
       dividerColor: baseScheme.outlineVariant,

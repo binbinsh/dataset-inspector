@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -21,6 +23,8 @@ import 'hover_tile.dart';
 import 'skeleton.dart';
 import 'update_dialog.dart';
 import 'video_preview.dart';
+
+const double _kPaneHeaderHeight = 36;
 
 class InspectorScreen extends StatefulWidget {
   const InspectorScreen({super.key});
@@ -57,15 +61,12 @@ class _InspectorScreenState extends State<InspectorScreen> {
               children: [
                 _buildBackdrop(context),
                 Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
                   child: Column(
                     children: [
                       _buildTopBar(context, state),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 4),
                       Expanded(child: _buildPanels(context, state)),
-                      if (state.statusMessage != null &&
-                          state.statusMessage!.isNotEmpty)
-                        _buildStatusBar(state.statusMessage!),
                     ],
                   ),
                 ),
@@ -78,74 +79,148 @@ class _InspectorScreenState extends State<InspectorScreen> {
   }
 
   Widget _buildBackdrop(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            scheme.surfaceContainerLowest,
-            scheme.surfaceContainerHigh,
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
-      child: Stack(
-        children: [
-          Positioned(
-            top: -120,
-            right: -80,
-            child:
-                _GlowBlob(color: scheme.primary.withOpacity(0.18), size: 240),
-          ),
-          Positioned(
-            bottom: -140,
-            left: -60,
-            child:
-                _GlowBlob(color: scheme.secondary.withOpacity(0.18), size: 260),
-          ),
-          Positioned(
-            top: 140,
-            left: 140,
-            child:
-                _GlowBlob(color: scheme.tertiary.withOpacity(0.12), size: 180),
-          ),
-        ],
-      ),
-    );
+    return Container(color: const Color(0xFFF5F5F5));
   }
 
   Widget _buildPanels(BuildContext context, ViewerState state) {
+    final scheme = Theme.of(context).colorScheme;
     return Row(
       children: [
-        Expanded(flex: 3, child: _buildSourcesPane(state)),
-        const SizedBox(width: 16),
-        Expanded(flex: 4, child: _buildItemsPane(state)),
-        const SizedBox(width: 16),
+        SizedBox(width: 340, child: _buildSourcesPane(state)),
+        const SizedBox(width: 8),
         Expanded(
-          flex: 5,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final maxPreviewHeight =
-                  _previewMaxHeightForState(state, constraints.maxHeight);
-              return Column(
-                children: [
-                  Expanded(child: _buildFieldsPane(state)),
-                  const SizedBox(height: 16),
-                  AnimatedSize(
-                    duration: const Duration(milliseconds: 240),
-                    curve: Curves.easeOutCubic,
-                    alignment: Alignment.topCenter,
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(maxHeight: maxPreviewHeight),
-                      child: _buildPreviewPane(state, shrinkWrap: true),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFE0E0E0)),
+            ),
+            child: LayoutBuilder(
+              builder: (context, outerConstraints) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      flex: 1,
+                      child: _buildInlinePane(
+                        title: 'Items',
+                        subtitle: _itemsSubtitle(state),
+                        child: _buildItemsContent(state),
+                      ),
                     ),
-                  ),
-                ],
-              );
-            },
+                    VerticalDivider(width: 1, thickness: 1, color: scheme.outlineVariant),
+                    Expanded(
+                      flex: 1,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final maxPreviewHeight =
+                              _previewMaxHeightForState(state, constraints.maxHeight);
+                          return Column(
+                            children: [
+                              Expanded(
+                                child: _buildInlinePane(
+                                  title: 'Fields',
+                                  subtitle: _fieldsSubtitle(state),
+                                  child: _buildFieldsContent(state),
+                                ),
+                              ),
+                              Divider(height: 1, thickness: 1, color: scheme.outlineVariant),
+                              AnimatedSize(
+                                duration: const Duration(milliseconds: 240),
+                                curve: Curves.easeOutCubic,
+                                alignment: Alignment.topCenter,
+                                child: ConstrainedBox(
+                                  constraints: BoxConstraints(maxHeight: maxPreviewHeight),
+                                  child: _buildInlinePane(
+                                    title: 'Preview',
+                                    subtitle: _previewSubtitle(state),
+                                    subtitleTrailing: _buildPreviewActions(state),
+                                    expand: false,
+                                    flexible: true,
+                                    child: _buildPreviewContent2(state),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
           ),
         ),
+      ],
+    );
+  }
+
+  Widget _buildInlinePane({
+    required String title,
+    required Widget child,
+    String? subtitle,
+    Widget? subtitleTrailing,
+    bool expand = true,
+    bool flexible = false,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return Column(
+      mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: _kPaneHeaderHeight,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                Text(
+                  title,
+                  style: textTheme.labelLarge
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                if (subtitle != null) ...[
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      subtitle,
+                      style: textTheme.labelSmall?.copyWith(
+                        color: scheme.onSurface.withOpacity(0.5),
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ] else
+                  const Spacer(),
+                if (subtitleTrailing != null) subtitleTrailing,
+              ],
+            ),
+          ),
+        ),
+        Divider(height: 1, color: scheme.outlineVariant),
+        if (expand)
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: child,
+            ),
+          )
+        else if (flexible)
+          Flexible(
+            fit: FlexFit.loose,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: child,
+            ),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: child,
+          ),
       ],
     );
   }
@@ -184,76 +259,80 @@ class _InspectorScreenState extends State<InspectorScreen> {
   Widget _buildTopBar(BuildContext context, ViewerState state) {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    final hfTokenActionLabel = (state.hfToken == null || state.hfToken!.isEmpty)
-        ? 'Add token'
-        : 'Edit token';
+    final hasToken = state.hfToken != null && state.hfToken!.isNotEmpty;
 
     final isDesktop = !kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.macOS ||
             defaultTargetPlatform == TargetPlatform.windows ||
             defaultTargetPlatform == TargetPlatform.linux);
+    final isMacOS = !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
 
-    Widget titleContent = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    Widget titleContent = Row(
       children: [
         Text(
           'Dataset Inspector',
-          style: textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+          style: textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600),
         ),
-        const SizedBox(height: 4),
-        Text(
-          'Inspect LitData, MosaicML, WebDataset, Hugging Face, and Zenodo sources.',
-          style: textTheme.bodySmall
-              ?.copyWith(color: scheme.onSurface.withOpacity(0.7)),
-        ),
+        if (state.statusMessage != null && state.statusMessage!.isNotEmpty) ...[
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              state.statusMessage!,
+              style: textTheme.labelSmall?.copyWith(
+                color: scheme.onSurface.withOpacity(0.5),
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ] else
+          const Spacer(),
       ],
     );
 
-    return Column(
-      children: [
-        const SizedBox(height: 10),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: isDesktop
-                  ? GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onPanStart: (_) => windowManager.startDragging(),
-                      onDoubleTap: () async {
-                        if (await windowManager.isMaximized()) {
-                          await windowManager.unmaximize();
-                        } else {
-                          await windowManager.maximize();
-                        }
-                      },
-                      child: titleContent,
-                    )
-                  : titleContent,
+    return SizedBox(
+      height: 28,
+      child: Row(
+        children: [
+          if (isMacOS) const SizedBox(width: 64),
+          Expanded(
+            child: isDesktop
+                ? GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onPanStart: (_) => windowManager.startDragging(),
+                    onDoubleTap: () async {
+                      if (await windowManager.isMaximized()) {
+                        await windowManager.unmaximize();
+                      } else {
+                        await windowManager.maximize();
+                      }
+                    },
+                    child: titleContent,
+                  )
+                : titleContent,
+          ),
+          _buildUpdateButton(state),
+          const SizedBox(width: 4),
+          Tooltip(
+            message: hasToken
+                ? 'HF token configured'
+                : 'Set Hugging Face token',
+            child: IconButton(
+              onPressed: () => _showHfTokenDialog(context, state),
+              icon: Icon(
+                Icons.vpn_key,
+                size: 18,
+                color: hasToken
+                    ? scheme.primary
+                    : scheme.onSurface.withOpacity(0.4),
+              ),
+              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+              padding: EdgeInsets.zero,
+              visualDensity: VisualDensity.compact,
             ),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Text(
-                  'Hugging Face token',
-                  style: textTheme.labelMedium
-                      ?.copyWith(color: scheme.onSurface.withOpacity(0.7)),
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  onPressed: () => _showHfTokenDialog(context, state),
-                  icon: const Icon(Icons.key),
-                  label: Text(hfTokenActionLabel),
-                ),
-              ],
-            ),
-            const SizedBox(width: 12),
-            _buildUpdateButton(state),
-          ],
-        ),
-        const SizedBox(height: 14),
-      ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -281,11 +360,13 @@ class _InspectorScreenState extends State<InspectorScreen> {
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
+          backgroundColor: Colors.white,
           title: const Text('Hugging Face token'),
           content: TextField(
             controller: controller,
             decoration: const InputDecoration(
-                hintText: 'Paste your HF token (optional)'),
+                hintText: 'Paste your HF token (optional)',
+                fillColor: Colors.white),
           ),
           actions: [
             TextButton(
@@ -316,7 +397,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text('Add dataset'),
+          backgroundColor: Colors.white,
+          title: const Text('Open Dataset'),
           content: SizedBox(
             width: 520,
             child: Column(
@@ -326,50 +408,55 @@ class _InspectorScreenState extends State<InspectorScreen> {
                 TextField(
                   controller: controller,
                   autofocus: true,
-                  decoration: const InputDecoration(
-                    hintText: 'Paste dataset path or URL',
-                    prefixIcon: Icon(Icons.link),
+                  decoration: InputDecoration(
+                    hintText: 'Path, URL, or HF dataset name',
+                    fillColor: Colors.white,
+                    prefixIcon: const Icon(Icons.link),
+                    suffixIcon: IconButton(
+                      tooltip: 'Browse folder...',
+                      icon: const Icon(Icons.folder_open, size: 20),
+                      onPressed: () async {
+                        final result = await FilePicker.getDirectoryPath();
+                        if (result == null || result.trim().isEmpty) return;
+                        if (dialogContext.mounted) {
+                          Navigator.of(dialogContext).pop();
+                        }
+                        await state.addSource(result.trim());
+                      },
+                    ),
                   ),
                   onSubmitted: (_) async {
                     final input = controller.text.trim();
                     if (input.isEmpty) return;
-                    await state.addSource(input);
+                    await _smartAddSource(state, input);
                     if (dialogContext.mounted) {
                       Navigator.of(dialogContext).pop();
                     }
                   },
                 ),
                 if (recentSources.isNotEmpty) ...[
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 8),
                   Text(
                     'Recent',
                     style: Theme.of(context).textTheme.labelMedium,
                   ),
                   const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: recentSources
-                        .map(
-                          (source) => ActionChip(
-                            label: SizedBox(
-                              width: 180,
-                              child: Text(
-                                source,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            onPressed: () {
-                              controller.text = source;
-                              controller.selection = TextSelection.collapsed(
-                                offset: source.length,
-                              );
-                            },
-                          ),
-                        )
-                        .toList(),
-                  ),
+                  ...recentSources.map((source) => InkWell(
+                    onTap: () async {
+                      Navigator.of(dialogContext).pop();
+                      await _smartAddSource(state, source);
+                    },
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      child: Text(
+                        source,
+                        style: Theme.of(context).textTheme.bodySmall,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  )),
                 ],
               ],
             ),
@@ -383,13 +470,13 @@ class _InspectorScreenState extends State<InspectorScreen> {
               onPressed: () async {
                 final input = controller.text.trim();
                 if (input.isEmpty) return;
-                await state.addSource(input);
+                await _smartAddSource(state, input);
                 if (dialogContext.mounted) {
                   Navigator.of(dialogContext).pop();
                 }
               },
               icon: const Icon(Icons.add),
-              label: const Text('Add'),
+              label: const Text('Open'),
             ),
           ],
         );
@@ -397,74 +484,90 @@ class _InspectorScreenState extends State<InspectorScreen> {
     );
   }
 
+  Future<void> _smartAddSource(ViewerState state, String input) async {
+    final trimmed = input.trim();
+    if (trimmed.isEmpty) return;
+    await state.addSource(trimmed);
+  }
+
   Widget _buildSourcesPane(ViewerState state) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
     final scanning = state.scanningDatasets;
-    return _PanelCard(
-      title: 'Dataset Explorer',
-      subtitle: _sourcesSubtitle(state),
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE0E0E0)),
+      ),
       child: Column(
         children: [
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              FilledButton.tonalIcon(
-                onPressed: () => _showAddDatasetDialog(context, state),
-                icon: const Icon(Icons.add),
-                label: const Text('Add Dataset'),
-              ),
-              OutlinedButton.icon(
-                onPressed: scanning
-                    ? state.cancelDatasetScan
-                    : () => state.chooseAndScanDatasetFolder(),
-                icon: scanning
-                    ? const Icon(Icons.stop_circle_outlined)
-                    : const Icon(Icons.folder_open),
-                label: Text(scanning ? 'Cancel Scan' : 'Scan Folder'),
-              ),
-              PopupMenuButton<_ExplorerMenuAction>(
-                tooltip: 'Explorer actions',
-                onSelected: (value) => _handleExplorerMenuAction(value, state),
-                itemBuilder: (context) => const [
-                  PopupMenuItem(
-                    value: _ExplorerMenuAction.expandAll,
-                    child: Text('Expand all'),
+          SizedBox(
+            height: _kPaneHeaderHeight,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  Text(
+                    'Explorer',
+                    style: textTheme.labelLarge
+                        ?.copyWith(fontWeight: FontWeight.w700),
                   ),
-                  PopupMenuItem(
-                    value: _ExplorerMenuAction.collapseAll,
-                    child: Text('Collapse all'),
-                  ),
+                  if (scanning) ...[
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 12, height: 12,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: scheme.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Scanning... ${state.scanAddedCount} added',
+                        style: textTheme.labelSmall?.copyWith(
+                          color: scheme.onSurface.withOpacity(0.5),
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: state.cancelDatasetScan,
+                      icon: const Icon(Icons.close, size: 14),
+                      constraints: const BoxConstraints.tightFor(width: 22, height: 22),
+                      padding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ] else
+                    const Spacer(),
                 ],
-                icon: const Icon(Icons.more_horiz),
               ),
-            ],
+            ),
           ),
-          const SizedBox(height: 12),
+          Divider(height: 1, color: scheme.outlineVariant),
           Expanded(child: _buildDatasetTree(state)),
+          Divider(height: 1, color: scheme.outlineVariant),
+          Padding(
+            padding: const EdgeInsets.all(6),
+            child: SizedBox(
+              width: double.infinity,
+              height: 28,
+              child: TextButton.icon(
+                onPressed: () => _showAddDatasetDialog(context, state),
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('Add Dataset'),
+                style: TextButton.styleFrom(
+                  textStyle: const TextStyle(fontSize: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
-  }
-
-  String? _sourcesSubtitle(ViewerState state) {
-    final count = state.openedDatasets.length;
-    if (state.scanningDatasets) {
-      return 'Scanning... found ${state.scanDiscoveredCount}, added ${state.scanAddedCount}';
-    }
-    if (count == 0) return null;
-    final active = state.activeDataset;
-    final activeLabel = active == null ? '' : ' · active: ${active.label}';
-    return '$count dataset${count == 1 ? '' : 's'}$activeLabel';
-  }
-
-  void _handleExplorerMenuAction(
-      _ExplorerMenuAction action, ViewerState state) {
-    switch (action) {
-      case _ExplorerMenuAction.expandAll:
-        state.setAllDatasetsExpanded(true);
-      case _ExplorerMenuAction.collapseAll:
-        state.setAllDatasetsExpanded(false);
-    }
   }
 
   List<_HfConfigSplitOption> _flattenHfConfigOptions(
@@ -490,90 +593,132 @@ class _InspectorScreenState extends State<InspectorScreen> {
 
   Widget _buildDatasetTree(ViewerState state) {
     if (state.openedDatasets.isEmpty) {
-      return const Center(child: Text('No dataset loaded.'));
+      return Center(
+        child: Text(
+          'No datasets',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.4),
+              ),
+        ),
+      );
     }
     final rows = <Widget>[];
     for (final dataset in state.openedDatasets) {
       rows.add(_buildDatasetRootTile(state, dataset));
-      if (!dataset.expanded) {
-        continue;
-      }
-      final children = _buildDatasetChildTiles(state, dataset);
-      if (children.isEmpty) {
-        rows.add(
-          _buildDatasetChildTile(
-            selected: false,
-            onTap: null,
-            indent: 20,
-            icon: Icons.info_outline,
-            title: const Text('No entries'),
-          ),
-        );
-      } else {
-        rows.addAll(children);
+      if (dataset.expanded) {
+        final children = _buildDatasetChildTiles(state, dataset);
+        if (children.isEmpty) {
+          final isLoading = _isDatasetPendingData(dataset);
+          rows.add(
+            _buildDatasetChildTile(
+              selected: false,
+              onTap: null,
+              indent: 20,
+              icon: isLoading ? Icons.hourglass_empty : Icons.info_outline,
+              title: isLoading
+                  ? Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 1.5,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withOpacity(0.4),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Text('Loading...'),
+                      ],
+                    )
+                  : const Text('No entries'),
+            ),
+          );
+        } else {
+          rows.addAll(children);
+        }
       }
     }
-    return ListView.separated(
+    return ListView.builder(
       itemCount: rows.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 6),
       itemBuilder: (context, index) => rows[index],
     );
   }
 
+  /// Returns true if the dataset's primary data hasn't been loaded yet.
+  /// When data loads (or fails), the fallback sets a non-null empty object,
+  /// so null means "still waiting for the response".
+  bool _isDatasetPendingData(LoadedDatasetSource dataset) {
+    switch (dataset.mode) {
+      case ViewerMode.huggingface:
+        return dataset.hfPreview == null && dataset.hfConfigOptions == null;
+      case ViewerMode.webdatasetDir:
+        return dataset.wdsDirSummary == null;
+      case ViewerMode.zenodo:
+        return dataset.zenodoRecord == null;
+      case ViewerMode.litdataIndex:
+      case ViewerMode.litdataChunks:
+      case ViewerMode.mdsIndex:
+        return dataset.indexSummary == null;
+    }
+  }
+
   Widget _buildDatasetRootTile(ViewerState state, LoadedDatasetSource dataset) {
+    final scheme = Theme.of(context).colorScheme;
     final selected = state.isDatasetActive(dataset.id);
-    final typeLabel = _datasetTypeLabel(dataset.mode);
     final leadingIcon = _datasetModeIcon(dataset.mode);
-    return HoverTile(
-      selected: selected,
-      onTap: () => unawaited(state.activateDataset(dataset.id)),
-      child: Row(
-        children: [
-          Icon(
-            dataset.expanded ? Icons.expand_more : Icons.chevron_right,
-            size: 18,
-          ),
-          const SizedBox(width: 6),
-          Icon(leadingIcon, size: 18),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
+    final bg = selected
+        ? scheme.secondary.withOpacity(0.12)
+        : Colors.transparent;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () {
+          state.toggleDatasetExpanded(dataset.id);
+          unawaited(state.activateDataset(dataset.id));
+        },
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          width: double.infinity,
+          color: bg,
+          padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Icon(
+                dataset.expanded ? Icons.expand_more : Icons.chevron_right,
+                size: 14,
+                color: scheme.onSurface.withOpacity(0.5),
+              ),
+              const SizedBox(width: 2),
+              Icon(leadingIcon, size: 14, color: scheme.primary),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
                   dataset.label,
-                  maxLines: 1,
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyMedium,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: scheme.primary,
+                      ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  '$typeLabel · ${dataset.sourceInput}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
+              ),
+              IconButton(
+                tooltip: 'Remove',
+                icon: Icon(Icons.close, size: 12,
+                    color: scheme.onSurface.withOpacity(0.4)),
+                onPressed: () => unawaited(state.removeDataset(dataset.id)),
+                constraints: const BoxConstraints.tightFor(width: 20, height: 20),
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
           ),
-          IconButton(
-            tooltip: 'Collapse/Expand',
-            icon: Icon(dataset.expanded ? Icons.unfold_less : Icons.unfold_more,
-                size: 16),
-            onPressed: () => state.toggleDatasetExpanded(dataset.id),
-            constraints: const BoxConstraints.tightFor(width: 30, height: 30),
-            padding: EdgeInsets.zero,
-            visualDensity: VisualDensity.compact,
-          ),
-          IconButton(
-            tooltip: 'Remove dataset',
-            icon: const Icon(Icons.close, size: 16),
-            onPressed: () => unawaited(state.removeDataset(dataset.id)),
-            constraints: const BoxConstraints.tightFor(width: 30, height: 30),
-            padding: EdgeInsets.zero,
-            visualDensity: VisualDensity.compact,
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -592,8 +737,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
               onTap: () => unawaited(
                   state.activateDatasetShard(dataset.id, shard.filename)),
               indent: 20,
-              icon: Icons.folder_zip_outlined,
-              title: Text(shard.filename, overflow: TextOverflow.ellipsis),
+              icon: Icons.archive_outlined,
+              title: Text(shard.filename),
               subtitle: _formatBytes(shard.bytes),
             ),
           )
@@ -626,9 +771,12 @@ class _InspectorScreenState extends State<InspectorScreen> {
                 ),
               ),
               indent: 20,
-              icon: Icons.tune,
-              title: Text(option.config, overflow: TextOverflow.ellipsis),
-              subtitle: option.split.isEmpty ? 'default split' : option.split,
+              icon: Icons.settings_outlined,
+              title: Text(
+                option.split.isEmpty
+                    ? option.config
+                    : '${option.config} / ${option.split}',
+              ),
             ),
           )
           .toList();
@@ -644,8 +792,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
               onTap: () => unawaited(
                   state.activateDatasetZenodoFile(dataset.id, file.key)),
               indent: 20,
-              icon: Icons.archive_outlined,
-              title: Text(file.key, overflow: TextOverflow.ellipsis),
+              icon: Icons.description_outlined,
+              title: Text(file.key),
               subtitle: _formatBytes(file.size),
             ),
           )
@@ -662,9 +810,9 @@ class _InspectorScreenState extends State<InspectorScreen> {
                 state.activateDatasetChunk(dataset.id, chunk.filename)),
             indent: 20,
             icon: dataset.mode == ViewerMode.mdsIndex
-                ? Icons.grid_view
-                : Icons.data_object_outlined,
-            title: Text(chunk.filename, overflow: TextOverflow.ellipsis),
+                ? Icons.view_module_outlined
+                : Icons.segment_outlined,
+            title: Text(chunk.filename),
             subtitle:
                 '${chunk.chunkSize} items · ${_formatBytes(chunk.chunkBytes)}',
           ),
@@ -682,34 +830,23 @@ class _InspectorScreenState extends State<InspectorScreen> {
   }) {
     return Padding(
       padding: EdgeInsets.only(left: indent.toDouble()),
-      child: HoverTile(
+      child: _ExplorerTile(
         selected: selected,
         onTap: onTap ?? () {},
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon, size: 16),
-            const SizedBox(width: 8),
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Icon(icon, size: 13),
+            ),
+            const SizedBox(width: 6),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  DefaultTextStyle(
-                    style: Theme.of(context).textTheme.bodyMedium ??
-                        const TextStyle(),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    child: title,
-                  ),
-                  if (subtitle != null) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      subtitle,
-                      style: Theme.of(context).textTheme.bodySmall,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ],
+              child: DefaultTextStyle(
+                style: Theme.of(context).textTheme.bodySmall ??
+                    const TextStyle(),
+                softWrap: true,
+                child: title,
               ),
             ),
           ],
@@ -718,36 +855,20 @@ class _InspectorScreenState extends State<InspectorScreen> {
     );
   }
 
-  String _datasetTypeLabel(ViewerMode mode) {
-    switch (mode) {
-      case ViewerMode.litdataIndex:
-        return 'LitData';
-      case ViewerMode.litdataChunks:
-        return 'LitData chunks';
-      case ViewerMode.mdsIndex:
-        return 'MosaicML';
-      case ViewerMode.webdatasetDir:
-        return 'WebDataset';
-      case ViewerMode.huggingface:
-        return 'Hugging Face';
-      case ViewerMode.zenodo:
-        return 'Zenodo';
-    }
-  }
 
   IconData _datasetModeIcon(ViewerMode mode) {
     switch (mode) {
       case ViewerMode.litdataIndex:
       case ViewerMode.litdataChunks:
-        return Icons.data_object;
+        return Icons.bolt_outlined;
       case ViewerMode.mdsIndex:
-        return Icons.grid_4x4;
+        return Icons.view_module_outlined;
       case ViewerMode.webdatasetDir:
-        return Icons.folder_zip;
+        return Icons.inventory_2_outlined;
       case ViewerMode.huggingface:
-        return Icons.hub_outlined;
+        return Icons.emoji_emotions_outlined;
       case ViewerMode.zenodo:
-        return Icons.public;
+        return Icons.school_outlined;
     }
   }
 
@@ -824,58 +945,74 @@ class _InspectorScreenState extends State<InspectorScreen> {
     return null;
   }
 
-  Widget _buildItemsPane(ViewerState state) {
-    return _PanelCard(
-      title: 'Items',
-      subtitle: _itemsSubtitle(state),
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 250),
-        child: Builder(
-          key: ValueKey(state.mode),
-          builder: (context) {
-            if (state.mode == ViewerMode.huggingface) {
-              return _buildHfRowsPane(state);
-            }
-            if (state.mode == ViewerMode.zenodo) {
-              return _buildZenodoEntriesPane(state);
-            }
-            if (state.mode == ViewerMode.webdatasetDir) {
-              return _buildWdsSamplesPane(state);
-            }
-            if (state.mode == ViewerMode.mdsIndex) {
-              return _buildMdsItemsPane(state);
-            }
-            return _buildLitdataItemsPane(state);
-          },
-        ),
+  Widget _buildItemsContent(ViewerState state) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 250),
+      child: Builder(
+        key: ValueKey(state.mode),
+        builder: (context) {
+          if (state.mode == ViewerMode.huggingface) {
+            return _buildHfRowsPane(state);
+          }
+          if (state.mode == ViewerMode.zenodo) {
+            return _buildZenodoEntriesPane(state);
+          }
+          if (state.mode == ViewerMode.webdatasetDir) {
+            return _buildWdsSamplesPane(state);
+          }
+          if (state.mode == ViewerMode.mdsIndex) {
+            return _buildMdsItemsPane(state);
+          }
+          return _buildLitdataItemsPane(state);
+        },
       ),
     );
   }
 
-  Widget _buildFieldsPane(ViewerState state) {
-    return _PanelCard(
-      title: 'Fields',
-      subtitle: _fieldsSubtitle(state),
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 250),
-        child: Builder(
-          key: ValueKey('${state.mode}-fields'),
-          builder: (context) {
-            if (state.mode == ViewerMode.huggingface) {
-              return _buildHfFieldsPaneFromState(state);
-            }
-            if (state.mode == ViewerMode.webdatasetDir) {
-              return _buildWdsFieldsPaneFromState(state);
-            }
-            if (state.mode == ViewerMode.mdsIndex) {
-              return _buildMdsFieldsPane(state);
-            }
-            if (state.mode == ViewerMode.zenodo) {
-              return const Center(child: Text('No fields for this source.'));
-            }
-            return _buildLitdataFieldsPane(state);
-          },
-        ),
+  Widget _buildFieldsContent(ViewerState state) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 250),
+      child: Builder(
+        key: ValueKey('${state.mode}-fields'),
+        builder: (context) {
+          if (state.mode == ViewerMode.huggingface) {
+            return _buildHfFieldsPaneFromState(state);
+          }
+          if (state.mode == ViewerMode.webdatasetDir) {
+            return _buildWdsFieldsPaneFromState(state);
+          }
+          if (state.mode == ViewerMode.mdsIndex) {
+            return _buildMdsFieldsPane(state);
+          }
+          if (state.mode == ViewerMode.zenodo) {
+            return const Center(child: Text('No fields for this source.'));
+          }
+          return _buildLitdataFieldsPane(state);
+        },
+      ),
+    );
+  }
+
+  Widget _buildPreviewContent2(ViewerState state) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 250),
+      child: Builder(
+        key: ValueKey(state.mode),
+        builder: (context) {
+          if (state.mode == ViewerMode.huggingface) {
+            return _buildHfPreview(state);
+          }
+          if (state.mode == ViewerMode.zenodo) {
+            return _buildZenodoPreview(state);
+          }
+          if (state.mode == ViewerMode.webdatasetDir) {
+            return _buildWdsPreview(state);
+          }
+          if (state.mode == ViewerMode.mdsIndex) {
+            return _buildMdsPreview(state);
+          }
+          return _buildLitdataPreview(state);
+        },
       ),
     );
   }
@@ -990,15 +1127,16 @@ class _InspectorScreenState extends State<InspectorScreen> {
           selected: state.selectedItemIndex == item.itemIndex,
           onTap: () =>
               state.selectItem(item.itemIndex, fieldCount: item.fields.length),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Row(
             children: [
-              Text('Item ${item.itemIndex}',
-                  style: Theme.of(context).textTheme.bodyMedium),
-              const SizedBox(height: 4),
-              Text(
-                  '${item.fields.length} fields · ${_formatBytes(item.totalBytes)}',
-                  style: Theme.of(context).textTheme.bodySmall),
+              Expanded(
+                child: Text('Item ${item.itemIndex}',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                    overflow: TextOverflow.ellipsis),
+              ),
+              const SizedBox(width: 8),
+              _buildInlineMetaText(context,
+                  '${item.fields.length} fields · ${_formatBytes(item.totalBytes)}'),
             ],
           ),
         );
@@ -1085,15 +1223,16 @@ class _InspectorScreenState extends State<InspectorScreen> {
                     selected: state.wdsSelectedSampleKey == sample.key,
                     onTap: () => state.selectWdsSample(sample.key,
                         fields: sample.fields),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    child: Row(
                       children: [
-                        Text(sample.key,
-                            style: Theme.of(context).textTheme.bodyMedium),
-                        const SizedBox(height: 4),
-                        Text(
-                            '${sample.fields.length} fields · ${_formatBytes(sample.totalBytes)}',
-                            style: Theme.of(context).textTheme.bodySmall),
+                        Expanded(
+                          child: Text(sample.key,
+                              style: Theme.of(context).textTheme.bodyMedium,
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                        const SizedBox(width: 8),
+                        _buildInlineMetaText(context,
+                            '${sample.fields.length} fields · ${_formatBytes(sample.totalBytes)}'),
                       ],
                     ),
                   );
@@ -1201,8 +1340,15 @@ class _InspectorScreenState extends State<InspectorScreen> {
                   return HoverTile(
                     selected: state.hfSelectedRowIndex == rowIndex,
                     onTap: () => state.selectHfRow(rowIndex),
-                    child: Text('Row $rowIndex',
-                        style: Theme.of(context).textTheme.bodyMedium),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text('Row $rowIndex',
+                              style: Theme.of(context).textTheme.bodyMedium,
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                      ],
+                    ),
                   );
                 },
               ),
@@ -1471,36 +1617,6 @@ class _InspectorScreenState extends State<InspectorScreen> {
     );
   }
 
-  Widget _buildPreviewPane(ViewerState state, {bool shrinkWrap = false}) {
-    return _PanelCard(
-      title: 'Preview',
-      subtitle: _previewSubtitle(state),
-      subtitleTrailing: _buildPreviewActions(state),
-      expandBody: !shrinkWrap,
-      bodyFlexible: shrinkWrap,
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 250),
-        child: Builder(
-          key: ValueKey(state.mode),
-          builder: (context) {
-            if (state.mode == ViewerMode.huggingface) {
-              return _buildHfPreview(state);
-            }
-            if (state.mode == ViewerMode.zenodo) {
-              return _buildZenodoPreview(state);
-            }
-            if (state.mode == ViewerMode.webdatasetDir) {
-              return _buildWdsPreview(state);
-            }
-            if (state.mode == ViewerMode.mdsIndex) {
-              return _buildMdsPreview(state);
-            }
-            return _buildLitdataPreview(state);
-          },
-        ),
-      ),
-    );
-  }
 
   Widget _buildLitdataPreview(ViewerState state) {
     final future = state.fieldPreviewFuture;
@@ -2115,22 +2231,6 @@ class _InspectorScreenState extends State<InspectorScreen> {
     return retry(picked);
   }
 
-  Widget _buildStatusBar(String message) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(top: 12),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: scheme.outlineVariant),
-        ),
-        child: Text(message, style: Theme.of(context).textTheme.bodySmall),
-      ),
-    );
-  }
 
   String _normalizeExtLabel(String? ext) {
     if (ext == null) return 'unknown';
@@ -2308,112 +2408,6 @@ class _InspectorScreenState extends State<InspectorScreen> {
   }
 }
 
-class _PanelCard extends StatelessWidget {
-  const _PanelCard({
-    required this.title,
-    required this.child,
-    this.subtitle,
-    this.trailing,
-    this.subtitleTrailing,
-    this.expandBody = true,
-    this.bodyFlexible = false,
-  });
-
-  final String title;
-  final String? subtitle;
-  final Widget? trailing;
-  final Widget? subtitleTrailing;
-  final Widget child;
-  final bool expandBody;
-  final bool bodyFlexible;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    return Container(
-      decoration: BoxDecoration(
-        color: scheme.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: scheme.outlineVariant),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 16,
-            offset: const Offset(0, 10),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: expandBody ? MainAxisSize.max : MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        title,
-                        style: textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                    if (trailing != null) trailing!,
-                  ],
-                ),
-                if (subtitle != null || subtitleTrailing != null) ...[
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: subtitle == null
-                            ? const SizedBox.shrink()
-                            : Text(
-                                subtitle!,
-                                style: textTheme.bodySmall?.copyWith(
-                                  color: scheme.onSurface.withOpacity(0.6),
-                                ),
-                              ),
-                      ),
-                      if (subtitleTrailing != null) subtitleTrailing!,
-                    ],
-                  ),
-                ],
-              ],
-            ),
-          ),
-          Divider(height: 1, color: scheme.outlineVariant),
-          if (expandBody)
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: child,
-              ),
-            )
-          else if (bodyFlexible)
-            Flexible(
-              fit: FlexFit.loose,
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: child,
-              ),
-            )
-          else
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: child,
-            ),
-        ],
-      ),
-    );
-  }
-}
-
 class _LoadingList extends StatelessWidget {
   const _LoadingList();
 
@@ -2432,30 +2426,6 @@ class _LoadingList extends StatelessWidget {
   }
 }
 
-class _GlowBlob extends StatelessWidget {
-  const _GlowBlob({required this.color, required this.size});
-
-  final Color color;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: RadialGradient(
-          colors: [
-            color,
-            color.withOpacity(0.0),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _CodeBlock extends StatelessWidget {
   const _CodeBlock({required this.text});
 
@@ -2468,16 +2438,16 @@ class _CodeBlock extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: scheme.outlineVariant),
+        color: const Color(0xFFF7F7F7),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE0E0E0)),
       ),
       child: SelectableText(
         text,
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              fontFamily: 'JetBrainsMono',
-              height: 1.4,
-            ),
+        style: GoogleFonts.googleSansCode(
+          textStyle: Theme.of(context).textTheme.bodySmall,
+          height: 1.4,
+        ),
       ),
     );
   }
@@ -2586,9 +2556,56 @@ class _PreviewSectionState extends State<_PreviewSection> {
   }
 }
 
-enum _ExplorerMenuAction {
-  expandAll,
-  collapseAll,
+class _ExplorerTile extends StatefulWidget {
+  const _ExplorerTile({
+    required this.child,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final Widget child;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  State<_ExplorerTile> createState() => _ExplorerTileState();
+}
+
+class _ExplorerTileState extends State<_ExplorerTile> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final bg = widget.selected
+        ? scheme.primary.withOpacity(0.12)
+        : _hovered
+            ? scheme.onSurface.withOpacity(0.06)
+            : Colors.transparent;
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: bg,
+            border: widget.selected
+                ? Border(left: BorderSide(width: 2, color: scheme.primary))
+                : null,
+          ),
+          padding: EdgeInsets.fromLTRB(
+            widget.selected ? 6 : 8, 4, 8, 4,
+          ),
+          child: widget.child,
+        ),
+      ),
+    );
+  }
 }
 
 class _HfConfigSplitOption {

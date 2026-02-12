@@ -14,7 +14,7 @@ dependencies:
   crypto: ^3.0.3
   file_picker: ^10.3.8
   ffi: ^2.1.0
-  google_fonts: ^7.0.2
+  google_fonts: ^8.0.1
   http: ^1.2.2
   mime: ^2.0.0
   open_filex: ^4.4.0
@@ -40,16 +40,6 @@ flutter:
     - assets/icon.png
     - images/
   fonts:
-    - family: SpaceGrotesk
-      fonts:
-        - asset: assets/fonts/space_grotesk/SpaceGrotesk-Regular.ttf
-          weight: 400
-        - asset: assets/fonts/space_grotesk/SpaceGrotesk-Medium.ttf
-          weight: 500
-        - asset: assets/fonts/space_grotesk/SpaceGrotesk-SemiBold.ttf
-          weight: 600
-        - asset: assets/fonts/space_grotesk/SpaceGrotesk-Bold.ttf
-          weight: 700
     - family: JetBrainsMono
       fonts:
         - asset: assets/fonts/jetbrains_mono/JetBrainsMono-Regular.ttf

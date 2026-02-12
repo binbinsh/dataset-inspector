@@ -22,30 +22,26 @@ class _HoverTileState extends State<HoverTile> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final baseColor = widget.selected
-        ? scheme.primaryContainer
+    final bg = widget.selected
+        ? scheme.primary.withOpacity(0.12)
         : _hovered
-            ? scheme.surfaceContainerHighest
-            : scheme.surfaceContainerLow;
-    final borderColor =
-        widget.selected ? scheme.primary : _hovered ? scheme.outline : scheme.outlineVariant;
+            ? const Color(0xFFF5F5F5)
+            : Colors.transparent;
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        curve: Curves.easeOut,
-        decoration: BoxDecoration(
-          color: baseColor,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: borderColor),
-        ),
-        child: InkWell(
-          onTap: widget.onTap,
-          borderRadius: BorderRadius.circular(12),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(6),
+          ),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             child: widget.child,
           ),
         ),
