@@ -785,13 +785,6 @@ class ParquetColumnDecoder {
             ? defLevels.where((l) => l == maxDefLevel).length
             : numValues;
 
-        // Debug: log definition levels info
-        if (maxDefLevel > 0 && nonNullCount == 0 && numValues > 0) {
-          // All values are null according to def levels - this might be a parsing issue
-          // Try treating all values as non-null as fallback
-          print('[parquet-debug] WARNING: All def levels indicate null (maxDefLevel=$maxDefLevel, numValues=$numValues, unique levels=${defLevels.toSet()})');
-        }
-
         // Read values
         final valueData = pageData.sublist(pageOffset);
         List<dynamic> values;

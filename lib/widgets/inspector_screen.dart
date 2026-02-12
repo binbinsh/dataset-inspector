@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -29,177 +30,27 @@ class InspectorScreen extends StatefulWidget {
 }
 
 class _InspectorScreenState extends State<InspectorScreen> {
-  late final TextEditingController _inputController;
-  late final FocusNode _inputFocus;
   late final TextEditingController _hfOffsetController;
   late final FocusNode _hfOffsetFocus;
-  final LayerLink _sourceFieldLink = LayerLink();
-  final GlobalKey _sourceFieldKey = GlobalKey();
-  OverlayEntry? _sourceHistoryOverlay;
-  int _recentSourceIndex = 0;
 
   @override
   void initState() {
     super.initState();
-    _inputController = TextEditingController();
-    _inputFocus = FocusNode();
     _hfOffsetController = TextEditingController();
     _hfOffsetFocus = FocusNode();
   }
 
   @override
   void dispose() {
-    _hideRecentSourcesOverlay();
-    _inputController.dispose();
-    _inputFocus.dispose();
     _hfOffsetController.dispose();
     _hfOffsetFocus.dispose();
     super.dispose();
-  }
-
-  void _showRecentSourcesOverlay(BuildContext context, ViewerState state) {
-    if (_sourceHistoryOverlay != null) {
-      _sourceHistoryOverlay!.markNeedsBuild();
-      return;
-    }
-    if (state.recentSources.isEmpty) return;
-    final overlay = Overlay.of(context);
-    if (overlay == null) return;
-    _recentSourceIndex = 0;
-    _sourceHistoryOverlay = OverlayEntry(
-      builder: (overlayContext) {
-        final renderBox = _sourceFieldKey.currentContext?.findRenderObject() as RenderBox?;
-        final size = renderBox?.size;
-        final width = size?.width ?? 320.0;
-        final height = size?.height ?? 0.0;
-        final scheme = Theme.of(overlayContext).colorScheme;
-        final sources = _recentSourcesForState(state);
-        if (sources.isEmpty) return const SizedBox.shrink();
-        final maxVisible = 5;
-        final visibleCount = sources.length < maxVisible ? sources.length : maxVisible;
-        final itemHeight = 36.0;
-        final separatorHeight = 1.0;
-        final paddingHeight = 12.0;
-        final maxHeight =
-            visibleCount * itemHeight + (visibleCount - 1) * separatorHeight + paddingHeight;
-        final selectedIndex = _recentSourceIndex < sources.length ? _recentSourceIndex : 0;
-        return Stack(
-          children: [
-            Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: _hideRecentSourcesOverlay,
-                child: const SizedBox.expand(),
-              ),
-            ),
-            CompositedTransformFollower(
-              link: _sourceFieldLink,
-              showWhenUnlinked: false,
-              offset: Offset(0, height + 8),
-              child: Material(
-                type: MaterialType.transparency,
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    minWidth: width,
-                    maxWidth: width,
-                    maxHeight: maxHeight,
-                  ),
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: scheme.surface.withOpacity(0.8),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: scheme.outlineVariant.withOpacity(0.6)),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.08),
-                          blurRadius: 16,
-                          offset: const Offset(0, 8),
-                        ),
-                      ],
-                    ),
-                    child: ListView.separated(
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      itemCount: sources.length,
-                      separatorBuilder: (_, __) =>
-                          Divider(height: separatorHeight, color: scheme.outlineVariant),
-                      itemBuilder: (context, index) {
-                        final source = sources[index];
-                        final selected = index == selectedIndex;
-                        return InkWell(
-                          onTap: () => _applyRecentSource(source, state),
-                          child: Container(
-                            height: itemHeight,
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            alignment: Alignment.centerLeft,
-                            color: selected ? scheme.primary.withOpacity(0.12) : Colors.transparent,
-                            child: Text(
-                              source,
-                              style: Theme.of(context).textTheme.bodyMedium,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-    overlay.insert(_sourceHistoryOverlay!);
-  }
-
-  void _hideRecentSourcesOverlay() {
-    _sourceHistoryOverlay?.remove();
-    _sourceHistoryOverlay = null;
-  }
-
-  List<String> _recentSourcesForState(ViewerState state) {
-    return state.recentSources.take(10).toList();
-  }
-
-  void _moveRecentSelection(int delta, ViewerState state) {
-    final sources = _recentSourcesForState(state);
-    if (sources.isEmpty) return;
-    var next = _recentSourceIndex + delta;
-    if (next < 0) next = sources.length - 1;
-    if (next >= sources.length) next = 0;
-    _recentSourceIndex = next;
-    _sourceHistoryOverlay?.markNeedsBuild();
-  }
-
-  void _acceptRecentSelection(ViewerState state) {
-    if (_sourceHistoryOverlay == null) return;
-    final sources = _recentSourcesForState(state);
-    if (sources.isEmpty) {
-      _hideRecentSourcesOverlay();
-      return;
-    }
-    final index = _recentSourceIndex < sources.length ? _recentSourceIndex : 0;
-    _applyRecentSource(sources[index], state);
-  }
-
-  void _applyRecentSource(String source, ViewerState state) {
-    _inputController.value = TextEditingValue(
-      text: source,
-      selection: TextSelection.collapsed(offset: source.length),
-    );
-    state.setSourceInput(source);
-    _hideRecentSourcesOverlay();
-    _inputFocus.requestFocus();
   }
 
   @override
   Widget build(BuildContext context) {
     return Consumer<ViewerState>(
       builder: (context, state, _) {
-        if (!_inputFocus.hasFocus && _inputController.text != state.sourceInput) {
-          _inputController.text = state.sourceInput;
-        }
-
         return Scaffold(
           body: SafeArea(
             child: Stack(
@@ -212,7 +63,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
                       _buildTopBar(context, state),
                       const SizedBox(height: 16),
                       Expanded(child: _buildPanels(context, state)),
-                      if (state.statusMessage != null && state.statusMessage!.isNotEmpty)
+                      if (state.statusMessage != null &&
+                          state.statusMessage!.isNotEmpty)
                         _buildStatusBar(state.statusMessage!),
                     ],
                   ),
@@ -243,17 +95,20 @@ class _InspectorScreenState extends State<InspectorScreen> {
           Positioned(
             top: -120,
             right: -80,
-            child: _GlowBlob(color: scheme.primary.withOpacity(0.18), size: 240),
+            child:
+                _GlowBlob(color: scheme.primary.withOpacity(0.18), size: 240),
           ),
           Positioned(
             bottom: -140,
             left: -60,
-            child: _GlowBlob(color: scheme.secondary.withOpacity(0.18), size: 260),
+            child:
+                _GlowBlob(color: scheme.secondary.withOpacity(0.18), size: 260),
           ),
           Positioned(
             top: 140,
             left: 140,
-            child: _GlowBlob(color: scheme.tertiary.withOpacity(0.12), size: 180),
+            child:
+                _GlowBlob(color: scheme.tertiary.withOpacity(0.12), size: 180),
           ),
         ],
       ),
@@ -271,7 +126,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
           flex: 5,
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final maxPreviewHeight = _previewMaxHeightForState(state, constraints.maxHeight);
+              final maxPreviewHeight =
+                  _previewMaxHeightForState(state, constraints.maxHeight);
               return Column(
                 children: [
                   Expanded(child: _buildFieldsPane(state)),
@@ -307,7 +163,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
       final entry = state.zenodoSelectedEntryName;
       if (entry != null && _isVideoPath(entry)) return true;
       final fileKey = state.zenodoSelectedFileKey;
-      if (entry == null && fileKey != null && _isVideoPath(fileKey)) return true;
+      if (entry == null && fileKey != null && _isVideoPath(fileKey))
+        return true;
     }
     if (state.mode == ViewerMode.webdatasetDir) {
       final path = state.wdsSelectedMemberPath;
@@ -327,15 +184,14 @@ class _InspectorScreenState extends State<InspectorScreen> {
   Widget _buildTopBar(BuildContext context, ViewerState state) {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    final loadLabel = state.detectedSourceLabel;
-    final showHfToken = state.isHuggingFaceDetected;
-    final hfTokenActionLabel = (state.hfToken == null || state.hfToken!.isEmpty) ? 'Add token' : 'Edit token';
+    final hfTokenActionLabel = (state.hfToken == null || state.hfToken!.isEmpty)
+        ? 'Add token'
+        : 'Edit token';
 
     final isDesktop = !kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.macOS ||
             defaultTargetPlatform == TargetPlatform.windows ||
             defaultTargetPlatform == TargetPlatform.linux);
-    final isMacOS = defaultTargetPlatform == TargetPlatform.macOS;
 
     Widget titleContent = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -347,140 +203,56 @@ class _InspectorScreenState extends State<InspectorScreen> {
         const SizedBox(height: 4),
         Text(
           'Inspect LitData, MosaicML, WebDataset, Hugging Face, and Zenodo sources.',
-          style: textTheme.bodySmall?.copyWith(color: scheme.onSurface.withOpacity(0.7)),
+          style: textTheme.bodySmall
+              ?.copyWith(color: scheme.onSurface.withOpacity(0.7)),
         ),
-      ],
-    );
-
-    Widget titleRow = Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: isDesktop
-              ? GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onPanStart: (_) => windowManager.startDragging(),
-                  onDoubleTap: () async {
-                    if (await windowManager.isMaximized()) {
-                      await windowManager.unmaximize();
-                    } else {
-                      await windowManager.maximize();
-                    }
-                  },
-                  child: titleContent,
-                )
-              : titleContent,
-        ),
-        if (showHfToken) ...[
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Text(
-                'Hugging Face token',
-                style: textTheme.labelMedium?.copyWith(color: scheme.onSurface.withOpacity(0.7)),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(
-                onPressed: () => _showHfTokenDialog(context, state),
-                icon: const Icon(Icons.key),
-                label: Text(hfTokenActionLabel),
-              ),
-          ],
-        ),
-        const SizedBox(width: 12),
-      ],
-        _buildUpdateButton(state),
       ],
     );
 
     return Column(
       children: [
         const SizedBox(height: 10),
-        titleRow,
-        const SizedBox(height: 14),
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: scheme.surface,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: scheme.outlineVariant),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.04),
-                blurRadius: 18,
-                offset: const Offset(0, 8),
-              ),
-            ],
-          ),
-          child: Column(
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: CompositedTransformTarget(
-                      link: _sourceFieldLink,
-                      child: Focus(
-                        canRequestFocus: false,
-                        onKeyEvent: (node, event) {
-                          if (_sourceHistoryOverlay == null) return KeyEventResult.ignored;
-                          if (event is! KeyDownEvent) return KeyEventResult.ignored;
-                          if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-                            _moveRecentSelection(1, state);
-                            return KeyEventResult.handled;
-                          }
-                          if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-                            _moveRecentSelection(-1, state);
-                            return KeyEventResult.handled;
-                          }
-                          if (event.logicalKey == LogicalKeyboardKey.enter) {
-                            _acceptRecentSelection(state);
-                            return KeyEventResult.handled;
-                          }
-                          if (event.logicalKey == LogicalKeyboardKey.tab) {
-                            _hideRecentSourcesOverlay();
-                            return KeyEventResult.handled;
-                          }
-                          if (event.logicalKey == LogicalKeyboardKey.escape) {
-                            _hideRecentSourcesOverlay();
-                            return KeyEventResult.handled;
-                          }
-                          return KeyEventResult.ignored;
-                        },
-                        child: TextField(
-                          key: _sourceFieldKey,
-                          controller: _inputController,
-                          focusNode: _inputFocus,
-                          decoration: InputDecoration(
-                            labelText: 'Dataset source',
-                            hintText: 'Paste a dataset path or URL',
-                            prefixIcon: const Icon(Icons.link),
-                            suffixIcon: Tooltip(
-                              message: 'Browse for folder',
-                              child: IconButton(
-                                onPressed: () => state.chooseIndexSource(),
-                                icon: const Icon(Icons.folder_open),
-                              ),
-                            ),
-                          ),
-                          onTap: () => _showRecentSourcesOverlay(context, state),
-                          onChanged: state.setSourceInput,
-                          onSubmitted: (_) => _acceptRecentSelection(state),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  FilledButton.icon(
-                    onPressed: () => state.loadFromSource(),
-                    icon: const Icon(Icons.play_arrow),
-                    label: Text('Load ($loadLabel)'),
-                  ),
-                ],
-              ),
-            ],
-          ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: isDesktop
+                  ? GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onPanStart: (_) => windowManager.startDragging(),
+                      onDoubleTap: () async {
+                        if (await windowManager.isMaximized()) {
+                          await windowManager.unmaximize();
+                        } else {
+                          await windowManager.maximize();
+                        }
+                      },
+                      child: titleContent,
+                    )
+                  : titleContent,
+            ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Text(
+                  'Hugging Face token',
+                  style: textTheme.labelMedium
+                      ?.copyWith(color: scheme.onSurface.withOpacity(0.7)),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: () => _showHfTokenDialog(context, state),
+                  icon: const Icon(Icons.key),
+                  label: Text(hfTokenActionLabel),
+                ),
+              ],
+            ),
+            const SizedBox(width: 12),
+            _buildUpdateButton(state),
+          ],
         ),
+        const SizedBox(height: 14),
       ],
     );
   }
@@ -502,7 +274,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
     );
   }
 
-  Future<void> _showHfTokenDialog(BuildContext context, ViewerState state) async {
+  Future<void> _showHfTokenDialog(
+      BuildContext context, ViewerState state) async {
     final controller = TextEditingController(text: state.hfToken ?? '');
     await showDialog<void>(
       context: context,
@@ -511,7 +284,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
           title: const Text('Hugging Face token'),
           content: TextField(
             controller: controller,
-            decoration: const InputDecoration(hintText: 'Paste your HF token (optional)'),
+            decoration: const InputDecoration(
+                hintText: 'Paste your HF token (optional)'),
           ),
           actions: [
             TextButton(
@@ -534,56 +308,454 @@ class _InspectorScreenState extends State<InspectorScreen> {
     );
   }
 
+  Future<void> _showAddDatasetDialog(
+      BuildContext context, ViewerState state) async {
+    final controller = TextEditingController();
+    final recentSources = state.recentSources.take(8).toList();
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Add dataset'),
+          content: SizedBox(
+            width: 520,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    hintText: 'Paste dataset path or URL',
+                    prefixIcon: Icon(Icons.link),
+                  ),
+                  onSubmitted: (_) async {
+                    final input = controller.text.trim();
+                    if (input.isEmpty) return;
+                    await state.addSource(input);
+                    if (dialogContext.mounted) {
+                      Navigator.of(dialogContext).pop();
+                    }
+                  },
+                ),
+                if (recentSources.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  Text(
+                    'Recent',
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: recentSources
+                        .map(
+                          (source) => ActionChip(
+                            label: SizedBox(
+                              width: 180,
+                              child: Text(
+                                source,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            onPressed: () {
+                              controller.text = source;
+                              controller.selection = TextSelection.collapsed(
+                                offset: source.length,
+                              );
+                            },
+                          ),
+                        )
+                        .toList(),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              onPressed: () async {
+                final input = controller.text.trim();
+                if (input.isEmpty) return;
+                await state.addSource(input);
+                if (dialogContext.mounted) {
+                  Navigator.of(dialogContext).pop();
+                }
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('Add'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Widget _buildSourcesPane(ViewerState state) {
+    final scanning = state.scanningDatasets;
     return _PanelCard(
-      title: 'Sources',
+      title: 'Dataset Explorer',
       subtitle: _sourcesSubtitle(state),
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 250),
-        child: Builder(
-          key: ValueKey(state.mode),
-          builder: (context) {
-            if (state.mode == ViewerMode.huggingface) {
-              return _buildHfConfigPane(state);
-            }
-            if (state.mode == ViewerMode.zenodo) {
-              return _buildZenodoFilesPane(state);
-            }
-            if (state.mode == ViewerMode.webdatasetDir) {
-              return _buildWdsShardsPane(state);
-            }
-            return _buildChunksPane(state);
-          },
-        ),
+      child: Column(
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.tonalIcon(
+                onPressed: () => _showAddDatasetDialog(context, state),
+                icon: const Icon(Icons.add),
+                label: const Text('Add Dataset'),
+              ),
+              OutlinedButton.icon(
+                onPressed: scanning
+                    ? state.cancelDatasetScan
+                    : () => state.chooseAndScanDatasetFolder(),
+                icon: scanning
+                    ? const Icon(Icons.stop_circle_outlined)
+                    : const Icon(Icons.folder_open),
+                label: Text(scanning ? 'Cancel Scan' : 'Scan Folder'),
+              ),
+              PopupMenuButton<_ExplorerMenuAction>(
+                tooltip: 'Explorer actions',
+                onSelected: (value) => _handleExplorerMenuAction(value, state),
+                itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: _ExplorerMenuAction.expandAll,
+                    child: Text('Expand all'),
+                  ),
+                  PopupMenuItem(
+                    value: _ExplorerMenuAction.collapseAll,
+                    child: Text('Collapse all'),
+                  ),
+                ],
+                icon: const Icon(Icons.more_horiz),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Expanded(child: _buildDatasetTree(state)),
+        ],
       ),
     );
   }
 
   String? _sourcesSubtitle(ViewerState state) {
-    if (state.mode == ViewerMode.huggingface && state.hfConfigOptions != null) {
-      final configs = state.hfConfigOptions!;
-      final numSubsets = configs.length;
-      final numParts = configs.fold<int>(0, (sum, c) => sum + c.splits.length);
-      return '$numSubsets subsets, $numParts parts';
+    final count = state.openedDatasets.length;
+    if (state.scanningDatasets) {
+      return 'Scanning... found ${state.scanDiscoveredCount}, added ${state.scanAddedCount}';
     }
-    if (state.mode == ViewerMode.zenodo && state.zenodoRecord != null) {
-      final record = state.zenodoRecord!;
-      return 'Record ${record.recordId} · ${record.files.length} files';
+    if (count == 0) return null;
+    final active = state.activeDataset;
+    final activeLabel = active == null ? '' : ' · active: ${active.label}';
+    return '$count dataset${count == 1 ? '' : 's'}$activeLabel';
+  }
+
+  void _handleExplorerMenuAction(
+      _ExplorerMenuAction action, ViewerState state) {
+    switch (action) {
+      case _ExplorerMenuAction.expandAll:
+        state.setAllDatasetsExpanded(true);
+      case _ExplorerMenuAction.collapseAll:
+        state.setAllDatasetsExpanded(false);
     }
-    if (state.mode == ViewerMode.webdatasetDir && state.wdsDirSummary != null) {
-      return '${state.wdsDirSummary!.shards.length} shards';
+  }
+
+  List<_HfConfigSplitOption> _flattenHfConfigOptions(
+    List<HfConfigSummary> configs,
+    HfDatasetPreview? preview,
+  ) {
+    final options = <_HfConfigSplitOption>[];
+    for (final config in configs) {
+      if (config.splits.isEmpty) {
+        options.add(_HfConfigSplitOption(config: config.config, split: ''));
+        continue;
+      }
+      for (final split in config.splits) {
+        options.add(_HfConfigSplitOption(config: config.config, split: split));
+      }
     }
-    if (state.indexSummary != null) {
-      final count = state.indexSummary!.chunks.length;
-      return '$count ${count == 1 ? 'chunk' : 'chunks'}';
+    if (options.isEmpty && preview != null) {
+      options.add(
+          _HfConfigSplitOption(config: preview.config, split: preview.split));
     }
-    return null;
+    return options;
+  }
+
+  Widget _buildDatasetTree(ViewerState state) {
+    if (state.openedDatasets.isEmpty) {
+      return const Center(child: Text('No dataset loaded.'));
+    }
+    final rows = <Widget>[];
+    for (final dataset in state.openedDatasets) {
+      rows.add(_buildDatasetRootTile(state, dataset));
+      if (!dataset.expanded) {
+        continue;
+      }
+      final children = _buildDatasetChildTiles(state, dataset);
+      if (children.isEmpty) {
+        rows.add(
+          _buildDatasetChildTile(
+            selected: false,
+            onTap: null,
+            indent: 20,
+            icon: Icons.info_outline,
+            title: const Text('No entries'),
+          ),
+        );
+      } else {
+        rows.addAll(children);
+      }
+    }
+    return ListView.separated(
+      itemCount: rows.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 6),
+      itemBuilder: (context, index) => rows[index],
+    );
+  }
+
+  Widget _buildDatasetRootTile(ViewerState state, LoadedDatasetSource dataset) {
+    final selected = state.isDatasetActive(dataset.id);
+    final typeLabel = _datasetTypeLabel(dataset.mode);
+    final leadingIcon = _datasetModeIcon(dataset.mode);
+    return HoverTile(
+      selected: selected,
+      onTap: () => unawaited(state.activateDataset(dataset.id)),
+      child: Row(
+        children: [
+          Icon(
+            dataset.expanded ? Icons.expand_more : Icons.chevron_right,
+            size: 18,
+          ),
+          const SizedBox(width: 6),
+          Icon(leadingIcon, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  dataset.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '$typeLabel · ${dataset.sourceInput}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Collapse/Expand',
+            icon: Icon(dataset.expanded ? Icons.unfold_less : Icons.unfold_more,
+                size: 16),
+            onPressed: () => state.toggleDatasetExpanded(dataset.id),
+            constraints: const BoxConstraints.tightFor(width: 30, height: 30),
+            padding: EdgeInsets.zero,
+            visualDensity: VisualDensity.compact,
+          ),
+          IconButton(
+            tooltip: 'Remove dataset',
+            icon: const Icon(Icons.close, size: 16),
+            onPressed: () => unawaited(state.removeDataset(dataset.id)),
+            constraints: const BoxConstraints.tightFor(width: 30, height: 30),
+            padding: EdgeInsets.zero,
+            visualDensity: VisualDensity.compact,
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildDatasetChildTiles(
+      ViewerState state, LoadedDatasetSource dataset) {
+    final selectedDataset = state.isDatasetActive(dataset.id);
+
+    if (dataset.mode == ViewerMode.webdatasetDir) {
+      final shards = dataset.wdsDirSummary?.shards ?? const <WdsShardSummary>[];
+      return shards
+          .map(
+            (shard) => _buildDatasetChildTile(
+              selected:
+                  selectedDataset && state.selectedShardName == shard.filename,
+              onTap: () => unawaited(
+                  state.activateDatasetShard(dataset.id, shard.filename)),
+              indent: 20,
+              icon: Icons.folder_zip_outlined,
+              title: Text(shard.filename, overflow: TextOverflow.ellipsis),
+              subtitle: _formatBytes(shard.bytes),
+            ),
+          )
+          .toList();
+    }
+
+    if (dataset.mode == ViewerMode.huggingface) {
+      final preview = dataset.hfPreview;
+      final configs = dataset.hfConfigOptions ??
+          preview?.configs ??
+          const <HfConfigSummary>[];
+      final options = _flattenHfConfigOptions(configs, preview);
+      final selectedConfig = selectedDataset
+          ? state.hfConfigOverride
+          : (dataset.selectedHfConfig ?? preview?.config);
+      final selectedSplit = selectedDataset
+          ? state.hfSplitOverride
+          : (dataset.selectedHfSplit ?? preview?.split);
+      return options
+          .map(
+            (option) => _buildDatasetChildTile(
+              selected: selectedDataset &&
+                  option.config == selectedConfig &&
+                  option.split == selectedSplit,
+              onTap: () => unawaited(
+                state.activateDatasetHfConfig(
+                  dataset.id,
+                  config: option.config,
+                  split: option.split,
+                ),
+              ),
+              indent: 20,
+              icon: Icons.tune,
+              title: Text(option.config, overflow: TextOverflow.ellipsis),
+              subtitle: option.split.isEmpty ? 'default split' : option.split,
+            ),
+          )
+          .toList();
+    }
+
+    if (dataset.mode == ViewerMode.zenodo) {
+      final files = dataset.zenodoRecord?.files ?? const <ZenodoFileSummary>[];
+      return files
+          .map(
+            (file) => _buildDatasetChildTile(
+              selected:
+                  selectedDataset && state.zenodoSelectedFileKey == file.key,
+              onTap: () => unawaited(
+                  state.activateDatasetZenodoFile(dataset.id, file.key)),
+              indent: 20,
+              icon: Icons.archive_outlined,
+              title: Text(file.key, overflow: TextOverflow.ellipsis),
+              subtitle: _formatBytes(file.size),
+            ),
+          )
+          .toList();
+    }
+
+    final chunks = dataset.indexSummary?.chunks ?? const <ChunkSummary>[];
+    return chunks
+        .map(
+          (chunk) => _buildDatasetChildTile(
+            selected:
+                selectedDataset && state.selectedChunkName == chunk.filename,
+            onTap: () => unawaited(
+                state.activateDatasetChunk(dataset.id, chunk.filename)),
+            indent: 20,
+            icon: dataset.mode == ViewerMode.mdsIndex
+                ? Icons.grid_view
+                : Icons.data_object_outlined,
+            title: Text(chunk.filename, overflow: TextOverflow.ellipsis),
+            subtitle:
+                '${chunk.chunkSize} items · ${_formatBytes(chunk.chunkBytes)}',
+          ),
+        )
+        .toList();
+  }
+
+  Widget _buildDatasetChildTile({
+    required bool selected,
+    required VoidCallback? onTap,
+    required int indent,
+    required IconData icon,
+    required Widget title,
+    String? subtitle,
+  }) {
+    return Padding(
+      padding: EdgeInsets.only(left: indent.toDouble()),
+      child: HoverTile(
+        selected: selected,
+        onTap: onTap ?? () {},
+        child: Row(
+          children: [
+            Icon(icon, size: 16),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  DefaultTextStyle(
+                    style: Theme.of(context).textTheme.bodyMedium ??
+                        const TextStyle(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    child: title,
+                  ),
+                  if (subtitle != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: Theme.of(context).textTheme.bodySmall,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _datasetTypeLabel(ViewerMode mode) {
+    switch (mode) {
+      case ViewerMode.litdataIndex:
+        return 'LitData';
+      case ViewerMode.litdataChunks:
+        return 'LitData chunks';
+      case ViewerMode.mdsIndex:
+        return 'MosaicML';
+      case ViewerMode.webdatasetDir:
+        return 'WebDataset';
+      case ViewerMode.huggingface:
+        return 'Hugging Face';
+      case ViewerMode.zenodo:
+        return 'Zenodo';
+    }
+  }
+
+  IconData _datasetModeIcon(ViewerMode mode) {
+    switch (mode) {
+      case ViewerMode.litdataIndex:
+      case ViewerMode.litdataChunks:
+        return Icons.data_object;
+      case ViewerMode.mdsIndex:
+        return Icons.grid_4x4;
+      case ViewerMode.webdatasetDir:
+        return Icons.folder_zip;
+      case ViewerMode.huggingface:
+        return Icons.hub_outlined;
+      case ViewerMode.zenodo:
+        return Icons.public;
+    }
   }
 
   String? _itemsSubtitle(ViewerState state) {
     if (state.mode == ViewerMode.huggingface && state.hfPreview != null) {
       final preview = state.hfPreview!;
-      final totalLabel = preview.numRowsTotal > 0 ? preview.numRowsTotal.toString() : '-';
+      final totalLabel =
+          preview.numRowsTotal > 0 ? preview.numRowsTotal.toString() : '-';
       return 'Total: $totalLabel';
     }
     if (state.mode == ViewerMode.webdatasetDir && state.wdsSamples != null) {
@@ -591,7 +763,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
       final pageLabel = pageSize > 0 ? state.wdsOffset ~/ pageSize + 1 : 1;
       return 'Page $pageLabel';
     }
-    if (state.mode == ViewerMode.zenodo && state.zenodoSelectedFileKey != null) {
+    if (state.mode == ViewerMode.zenodo &&
+        state.zenodoSelectedFileKey != null) {
       return 'File ${state.zenodoSelectedFileKey}';
     }
     if ((state.mode == ViewerMode.litdataIndex ||
@@ -618,10 +791,12 @@ class _InspectorScreenState extends State<InspectorScreen> {
         state.hfSelectedFieldName != null) {
       return 'Row ${state.hfSelectedRowIndex} · ${state.hfSelectedFieldName}';
     }
-    if (state.mode == ViewerMode.webdatasetDir && state.wdsSelectedMemberName != null) {
+    if (state.mode == ViewerMode.webdatasetDir &&
+        state.wdsSelectedMemberName != null) {
       return state.wdsSelectedMemberName;
     }
-    if (state.mode == ViewerMode.zenodo && state.zenodoSelectedEntryName != null) {
+    if (state.mode == ViewerMode.zenodo &&
+        state.zenodoSelectedEntryName != null) {
       return state.zenodoSelectedEntryName;
     }
     if (state.selectedFieldIndex != null) {
@@ -634,211 +809,19 @@ class _InspectorScreenState extends State<InspectorScreen> {
     if (state.mode == ViewerMode.huggingface && state.hfPreview != null) {
       return '${state.hfPreview!.features.length} fields';
     }
-    if (state.mode == ViewerMode.webdatasetDir && state.wdsSelectedSampleKey != null) {
+    if (state.mode == ViewerMode.webdatasetDir &&
+        state.wdsSelectedSampleKey != null) {
       return 'Sample ${state.wdsSelectedSampleKey}';
     }
     if (state.mode == ViewerMode.mdsIndex && state.selectedItemIndex != null) {
       return 'Sample ${state.selectedItemIndex}';
     }
-    if ((state.mode == ViewerMode.litdataIndex || state.mode == ViewerMode.litdataChunks) &&
+    if ((state.mode == ViewerMode.litdataIndex ||
+            state.mode == ViewerMode.litdataChunks) &&
         state.selectedItemIndex != null) {
       return 'Item ${state.selectedItemIndex}';
     }
     return null;
-  }
-
-  Widget _buildChunksPane(ViewerState state) {
-    final future = state.indexFuture;
-    if (future == null) {
-      return const Center(child: Text('No dataset loaded.'));
-    }
-    return FutureBuilder<IndexSummary>(
-      future: future,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const _LoadingList();
-        }
-        if (!snapshot.hasData) {
-          return const Center(child: Text('No chunks found.'));
-        }
-        final chunks = snapshot.data!.chunks;
-        return ListView.separated(
-          itemCount: chunks.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 6),
-          itemBuilder: (context, index) {
-            final chunk = chunks[index];
-            return HoverTile(
-              selected: state.selectedChunkName == chunk.filename,
-              onTap: () => state.selectChunk(chunk.filename),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(chunk.filename, style: Theme.of(context).textTheme.bodyMedium),
-                  const SizedBox(height: 4),
-                  Text('${chunk.chunkSize} items · ${_formatBytes(chunk.chunkBytes)}',
-                      style: Theme.of(context).textTheme.bodySmall),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildWdsShardsPane(ViewerState state) {
-    final future = state.wdsDirFuture;
-    if (future == null) return const Center(child: Text('No dataset loaded.'));
-    return FutureBuilder<WdsDirSummary>(
-      future: future,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const _LoadingList();
-        }
-        if (!snapshot.hasData) return const Center(child: Text('No shards found.'));
-        final shards = snapshot.data!.shards;
-        return ListView.separated(
-          itemCount: shards.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 6),
-          itemBuilder: (context, index) {
-            final shard = shards[index];
-            return HoverTile(
-              selected: state.selectedShardName == shard.filename,
-              onTap: () => state.selectWdsShard(shard.filename),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(shard.filename, style: Theme.of(context).textTheme.bodyMedium),
-                  const SizedBox(height: 4),
-                  Text(_formatBytes(shard.bytes), style: Theme.of(context).textTheme.bodySmall),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildHfConfigPane(ViewerState state) {
-    final preview = state.hfPreview;
-    final cachedConfigs = state.hfConfigOptions ?? preview?.configs ?? const <HfConfigSummary>[];
-    final cachedOptions = _flattenHfConfigOptions(cachedConfigs, preview);
-    if (cachedOptions.isNotEmpty) {
-      return _buildHfConfigOptionsList(state, cachedOptions, preview);
-    }
-
-    final future = state.hfPreviewFuture;
-    if (future == null) return const Center(child: Text('No dataset loaded.'));
-    return FutureBuilder<HfDatasetPreview>(
-      future: future,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const _LoadingList();
-        }
-        if (!snapshot.hasData) return const Center(child: Text('No configs found.'));
-        final data = snapshot.data!;
-        final options = _flattenHfConfigOptions(data.configs, data);
-        if (options.isEmpty) {
-          return const Center(child: Text('No configs found.'));
-        }
-        return _buildHfConfigOptionsList(state, options, data);
-      },
-    );
-  }
-
-  List<_HfConfigSplitOption> _flattenHfConfigOptions(
-    List<HfConfigSummary> configs,
-    HfDatasetPreview? preview,
-  ) {
-    final options = <_HfConfigSplitOption>[];
-    for (final config in configs) {
-      if (config.splits.isEmpty) {
-        options.add(_HfConfigSplitOption(config: config.config, split: ''));
-        continue;
-      }
-      for (final split in config.splits) {
-        options.add(_HfConfigSplitOption(config: config.config, split: split));
-      }
-    }
-    if (options.isEmpty && preview != null) {
-      options.add(_HfConfigSplitOption(config: preview.config, split: preview.split));
-    }
-    return options;
-  }
-
-  Widget _buildHfConfigOptionsList(
-    ViewerState state,
-    List<_HfConfigSplitOption> options,
-    HfDatasetPreview? preview,
-  ) {
-    final desiredConfig = state.hfConfigOverride ?? preview?.config ?? options.first.config;
-    final desiredSplit = state.hfSplitOverride ?? preview?.split ?? options.first.split;
-    final selected = options.firstWhere(
-      (option) => option.config == desiredConfig && option.split == desiredSplit,
-      orElse: () => options.first,
-    );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: ListView.separated(
-            itemCount: options.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 6),
-            itemBuilder: (context, index) {
-              final option = options[index];
-              final splitLabel = option.split.isEmpty ? 'default' : option.split;
-              return HoverTile(
-                selected: option.config == selected.config && option.split == selected.split,
-                onTap: () => state.setHfConfigSplit(option.config, option.split),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(option.config, style: Theme.of(context).textTheme.bodyMedium),
-                    const SizedBox(height: 4),
-                    Text(splitLabel, style: Theme.of(context).textTheme.bodySmall),
-                  ],
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildZenodoFilesPane(ViewerState state) {
-    final future = state.zenodoRecordFuture;
-    if (future == null) return const Center(child: Text('No record loaded.'));
-    return FutureBuilder<ZenodoRecordSummary>(
-      future: future,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const _LoadingList();
-        }
-        if (!snapshot.hasData) return const Center(child: Text('No files found.'));
-        final record = snapshot.data!;
-        return ListView.separated(
-          itemCount: record.files.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 6),
-          itemBuilder: (context, index) {
-            final file = record.files[index];
-            return HoverTile(
-              selected: state.zenodoSelectedFileKey == file.key,
-              onTap: () => state.selectZenodoFile(file.key),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(file.key, style: Theme.of(context).textTheme.bodyMedium),
-                  const SizedBox(height: 4),
-                  Text(_formatBytes(file.size), style: Theme.of(context).textTheme.bodySmall),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
   }
 
   Widget _buildItemsPane(ViewerState state) {
@@ -906,7 +889,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _LoadingList();
         }
-        if (!snapshot.hasData) return const Center(child: Text('No fields found.'));
+        if (!snapshot.hasData)
+          return const Center(child: Text('No fields found.'));
         return _buildFieldList(state, snapshot.data!);
       },
     );
@@ -921,7 +905,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _LoadingList();
         }
-        if (!snapshot.hasData) return const Center(child: Text('No fields found.'));
+        if (!snapshot.hasData)
+          return const Center(child: Text('No fields found.'));
         return _buildFieldList(state, snapshot.data!);
       },
     );
@@ -936,7 +921,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _LoadingList();
         }
-        if (!snapshot.hasData) return const Center(child: Text('No fields found.'));
+        if (!snapshot.hasData)
+          return const Center(child: Text('No fields found.'));
         return _buildWdsFieldsPane(state, snapshot.data!.samples);
       },
     );
@@ -953,7 +939,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _LoadingList();
         }
-        if (!snapshot.hasData) return const Center(child: Text('No fields found.'));
+        if (!snapshot.hasData)
+          return const Center(child: Text('No fields found.'));
         return _buildHfFieldsPane(state, snapshot.data!);
       },
     );
@@ -968,7 +955,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _LoadingList();
         }
-        if (!snapshot.hasData) return const Center(child: Text('No items found.'));
+        if (!snapshot.hasData)
+          return const Center(child: Text('No items found.'));
         final items = snapshot.data!;
         return _buildItemList(state, items);
       },
@@ -984,7 +972,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _LoadingList();
         }
-        if (!snapshot.hasData) return const Center(child: Text('No samples found.'));
+        if (!snapshot.hasData)
+          return const Center(child: Text('No samples found.'));
         final items = snapshot.data!;
         return _buildItemList(state, items);
       },
@@ -999,13 +988,16 @@ class _InspectorScreenState extends State<InspectorScreen> {
         final item = items[index];
         return HoverTile(
           selected: state.selectedItemIndex == item.itemIndex,
-                onTap: () => state.selectItem(item.itemIndex, fieldCount: item.fields.length),
+          onTap: () =>
+              state.selectItem(item.itemIndex, fieldCount: item.fields.length),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Item ${item.itemIndex}', style: Theme.of(context).textTheme.bodyMedium),
+              Text('Item ${item.itemIndex}',
+                  style: Theme.of(context).textTheme.bodyMedium),
               const SizedBox(height: 4),
-              Text('${item.fields.length} fields · ${_formatBytes(item.totalBytes)}',
+              Text(
+                  '${item.fields.length} fields · ${_formatBytes(item.totalBytes)}',
                   style: Theme.of(context).textTheme.bodySmall),
             ],
           ),
@@ -1015,20 +1007,25 @@ class _InspectorScreenState extends State<InspectorScreen> {
   }
 
   Widget _buildFieldList(ViewerState state, List<ItemMeta> items) {
-    final selected = items.where((item) => item.itemIndex == state.selectedItemIndex).toList();
+    final selected = items
+        .where((item) => item.itemIndex == state.selectedItemIndex)
+        .toList();
     if (selected.isEmpty) {
       return const Center(child: Text('Select an item to view fields.'));
     }
     final fields = selected.first.fields;
     final formatByIndex = _formatByFieldIndex(state);
-    final previewMap =
-        state.mode == ViewerMode.mdsIndex ? state.mdsFieldPreviewByIndex : state.litdataFieldPreviewByIndex;
+    final previewMap = state.mode == ViewerMode.mdsIndex
+        ? state.mdsFieldPreviewByIndex
+        : state.litdataFieldPreviewByIndex;
     return ListView.separated(
       itemCount: fields.length,
       separatorBuilder: (_, __) => const SizedBox(height: 6),
       itemBuilder: (context, index) {
         final field = fields[index];
-        final format = field.fieldIndex < formatByIndex.length ? formatByIndex[field.fieldIndex] : null;
+        final format = field.fieldIndex < formatByIndex.length
+            ? formatByIndex[field.fieldIndex]
+            : null;
         final preview = previewMap[field.fieldIndex];
         final meta = preview == null
             ? _fieldMetaFromFormat(format, field.size)
@@ -1064,7 +1061,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _LoadingList();
         }
-        if (!snapshot.hasData) return const Center(child: Text('No samples found.'));
+        if (!snapshot.hasData)
+          return const Center(child: Text('No samples found.'));
         final response = snapshot.data!;
         final samples = response.samples;
         final total = response.numSamplesTotal;
@@ -1085,13 +1083,16 @@ class _InspectorScreenState extends State<InspectorScreen> {
                   final sample = samples[index];
                   return HoverTile(
                     selected: state.wdsSelectedSampleKey == sample.key,
-                    onTap: () => state.selectWdsSample(sample.key, fields: sample.fields),
+                    onTap: () => state.selectWdsSample(sample.key,
+                        fields: sample.fields),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(sample.key, style: Theme.of(context).textTheme.bodyMedium),
+                        Text(sample.key,
+                            style: Theme.of(context).textTheme.bodyMedium),
                         const SizedBox(height: 4),
-                        Text('${sample.fields.length} fields · ${_formatBytes(sample.totalBytes)}',
+                        Text(
+                            '${sample.fields.length} fields · ${_formatBytes(sample.totalBytes)}',
                             style: Theme.of(context).textTheme.bodySmall),
                       ],
                     ),
@@ -1105,16 +1106,22 @@ class _InspectorScreenState extends State<InspectorScreen> {
               child: Row(
                 children: [
                   IconButton(
-                    onPressed: canGoPrev ? () => state.setWdsOffset(prevOffset < 0 ? 0 : prevOffset) : null,
+                    onPressed: canGoPrev
+                        ? () =>
+                            state.setWdsOffset(prevOffset < 0 ? 0 : prevOffset)
+                        : null,
                     icon: const Icon(Icons.chevron_left),
                   ),
                   Expanded(
                     child: Center(
-                      child: Text('Samples ${response.offset + 1}–${response.offset + samples.length}'),
+                      child: Text(
+                          'Samples ${response.offset + 1}–${response.offset + samples.length}'),
                     ),
                   ),
                   IconButton(
-                    onPressed: canGoNext ? () => state.setWdsOffset(response.offset + pageSize) : null,
+                    onPressed: canGoNext
+                        ? () => state.setWdsOffset(response.offset + pageSize)
+                        : null,
                     icon: const Icon(Icons.chevron_right),
                   ),
                 ],
@@ -1127,7 +1134,9 @@ class _InspectorScreenState extends State<InspectorScreen> {
   }
 
   Widget _buildWdsFieldsPane(ViewerState state, List<WdsSampleInfo> samples) {
-    final selected = samples.where((sample) => sample.key == state.wdsSelectedSampleKey).toList();
+    final selected = samples
+        .where((sample) => sample.key == state.wdsSelectedSampleKey)
+        .toList();
     if (selected.isEmpty) return const Center(child: Text('Select a sample.'));
     final fields = selected.first.fields;
     return ListView.separated(
@@ -1139,7 +1148,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
         final rightWidget = _buildInlineMetaText(context, meta);
         return HoverTile(
           selected: state.wdsSelectedMemberPath == field.memberPath,
-          onTap: () => state.selectWdsMember(field.memberPath, memberName: field.name),
+          onTap: () =>
+              state.selectWdsMember(field.memberPath, memberName: field.name),
           child: Row(
             children: [
               Expanded(
@@ -1167,14 +1177,17 @@ class _InspectorScreenState extends State<InspectorScreen> {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _LoadingList();
         }
-        if (!snapshot.hasData) return const Center(child: Text('No rows available.'));
+        if (!snapshot.hasData)
+          return const Center(child: Text('No rows available.'));
         final preview = snapshot.data!;
-        final totalLabel = preview.numRowsTotal > 0 ? preview.numRowsTotal.toString() : '-';
+        final totalLabel =
+            preview.numRowsTotal > 0 ? preview.numRowsTotal.toString() : '-';
         if (!_hfOffsetFocus.hasFocus) {
           final nextText = (preview.offset + 1).toString();
           if (_hfOffsetController.text != nextText) {
             _hfOffsetController.text = nextText;
-            _hfOffsetController.selection = TextSelection.collapsed(offset: nextText.length);
+            _hfOffsetController.selection =
+                TextSelection.collapsed(offset: nextText.length);
           }
         }
         return Column(
@@ -1188,7 +1201,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
                   return HoverTile(
                     selected: state.hfSelectedRowIndex == rowIndex,
                     onTap: () => state.selectHfRow(rowIndex),
-                    child: Text('Row $rowIndex', style: Theme.of(context).textTheme.bodyMedium),
+                    child: Text('Row $rowIndex',
+                        style: Theme.of(context).textTheme.bodyMedium),
                   );
                 },
               ),
@@ -1201,8 +1215,10 @@ class _InspectorScreenState extends State<InspectorScreen> {
                   IconButton(
                     onPressed: preview.offset > 0
                         ? () => state.setHfOffset(
-                            (preview.offset - preview.length).clamp(0, preview.numRowsTotal).toInt(),
-                          )
+                              (preview.offset - preview.length)
+                                  .clamp(0, preview.numRowsTotal)
+                                  .toInt(),
+                            )
                         : null,
                     icon: const Icon(Icons.chevron_left),
                   ),
@@ -1218,13 +1234,18 @@ class _InspectorScreenState extends State<InspectorScreen> {
                               focusNode: _hfOffsetFocus,
                               textAlign: TextAlign.center,
                               keyboardType: TextInputType.number,
-                              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly
+                              ],
                               decoration: const InputDecoration(
                                 isDense: true,
-                                contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                                contentPadding: EdgeInsets.symmetric(
+                                    vertical: 6, horizontal: 8),
                               ),
-                              onSubmitted: (_) => _applyHfOffsetInput(state, preview),
-                              onEditingComplete: () => _applyHfOffsetInput(state, preview),
+                              onSubmitted: (_) =>
+                                  _applyHfOffsetInput(state, preview),
+                              onEditingComplete: () =>
+                                  _applyHfOffsetInput(state, preview),
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -1234,8 +1255,10 @@ class _InspectorScreenState extends State<InspectorScreen> {
                     ),
                   ),
                   IconButton(
-                    onPressed: preview.offset + preview.rows.length < preview.numRowsTotal
-                        ? () => state.setHfOffset(preview.offset + preview.rows.length)
+                    onPressed: preview.offset + preview.rows.length <
+                            preview.numRowsTotal
+                        ? () => state
+                            .setHfOffset(preview.offset + preview.rows.length)
                         : null,
                     icon: const Icon(Icons.chevron_right),
                   ),
@@ -1323,7 +1346,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
 
   Widget _buildZenodoEntriesPane(ViewerState state) {
     final recordFuture = state.zenodoRecordFuture;
-    if (recordFuture == null) return const Center(child: Text('No record loaded.'));
+    if (recordFuture == null)
+      return const Center(child: Text('No record loaded.'));
     return FutureBuilder<ZenodoRecordSummary>(
       future: recordFuture,
       builder: (context, snapshot) {
@@ -1363,7 +1387,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
               onTap: () => state.selectZenodoEntry(entry.name),
               child: Row(
                 children: [
-                  Expanded(child: Text(entry.name, overflow: TextOverflow.ellipsis)),
+                  Expanded(
+                      child: Text(entry.name, overflow: TextOverflow.ellipsis)),
                   Text(_formatBytes(entry.uncompressedSize),
                       style: Theme.of(context).textTheme.bodySmall),
                 ],
@@ -1408,7 +1433,9 @@ class _InspectorScreenState extends State<InspectorScreen> {
                     onTap: () => state.selectZenodoEntry(entry.name),
                     child: Row(
                       children: [
-                        Expanded(child: Text(entry.name, overflow: TextOverflow.ellipsis)),
+                        Expanded(
+                            child: Text(entry.name,
+                                overflow: TextOverflow.ellipsis)),
                         Text(_formatBytes(entry.size),
                             style: Theme.of(context).textTheme.bodySmall),
                       ],
@@ -1421,14 +1448,19 @@ class _InspectorScreenState extends State<InspectorScreen> {
             Row(
               children: [
                 IconButton(
-                  onPressed:
-                      canGoPrev ? () => state.setZenodoEntriesOffset(prevOffset < 0 ? 0 : prevOffset) : null,
+                  onPressed: canGoPrev
+                      ? () => state.setZenodoEntriesOffset(
+                          prevOffset < 0 ? 0 : prevOffset)
+                      : null,
                   icon: const Icon(Icons.chevron_left),
                 ),
                 Text('Page $pageLabel'),
                 const Spacer(),
                 IconButton(
-                  onPressed: canGoNext ? () => state.setZenodoEntriesOffset(response.offset + pageSize) : null,
+                  onPressed: canGoNext
+                      ? () => state
+                          .setZenodoEntriesOffset(response.offset + pageSize)
+                      : null,
                   icon: const Icon(Icons.chevron_right),
                 ),
               ],
@@ -1556,7 +1588,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const _LoadingPreview();
           }
-          if (!snapshot.hasData) return const Center(child: Text('No preview.'));
+          if (!snapshot.hasData)
+            return const Center(child: Text('No preview.'));
           final preview = snapshot.data!;
           return _buildZenodoInlinePreview(state, preview);
         },
@@ -1569,7 +1602,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const _LoadingPreview();
           }
-          if (!snapshot.hasData) return const Center(child: Text('No preview.'));
+          if (!snapshot.hasData)
+            return const Center(child: Text('No preview.'));
           final preview = snapshot.data!;
           return _buildPreviewContent(state, preview);
         },
@@ -1606,7 +1640,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
     );
   }
 
-  Widget _buildInlineMediaPreview(InlineMediaResponse media, FieldPreview preview) {
+  Widget _buildInlineMediaPreview(
+      InlineMediaResponse media, FieldPreview preview) {
     final ext = media.ext.toLowerCase();
     Widget content;
     if (_isImageExt(ext)) {
@@ -1622,9 +1657,11 @@ class _InspectorScreenState extends State<InspectorScreen> {
           final bytes = base64Decode(media.base64);
           if (ext == 'sph') {
             final wavBytes = await decodeSphereToWavWithFallback(bytes);
-            return PreparedMediaResponse(bytes: wavBytes, size: wavBytes.length, ext: 'wav');
+            return PreparedMediaResponse(
+                bytes: wavBytes, size: wavBytes.length, ext: 'wav');
           }
-          return PreparedMediaResponse(bytes: bytes, size: media.size, ext: ext);
+          return PreparedMediaResponse(
+              bytes: bytes, size: media.size, ext: ext);
         },
       );
     } else if (_isVideoExt(ext)) {
@@ -1642,7 +1679,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
     );
   }
 
-  Widget _buildPreviewContent(ViewerState state, FieldPreview preview, {bool isWds = false}) {
+  Widget _buildPreviewContent(ViewerState state, FieldPreview preview,
+      {bool isWds = false}) {
     final ext = preview.guessedExt?.toLowerCase() ?? '';
     final showAudio = _isAudioExt(ext);
     final showImage = _isImageExt(ext);
@@ -1658,7 +1696,9 @@ class _InspectorScreenState extends State<InspectorScreen> {
   Widget? _buildPreviewActions(ViewerState state) {
     if (state.mode == ViewerMode.huggingface) {
       final preview = state.hfPreview;
-      if (preview == null || state.hfSelectedRowIndex == null || state.hfSelectedFieldName == null) {
+      if (preview == null ||
+          state.hfSelectedRowIndex == null ||
+          state.hfSelectedFieldName == null) {
         return null;
       }
       final rowOffset = state.hfSelectedRowIndex! - preview.offset;
@@ -1674,7 +1714,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
     }
 
     if (state.mode == ViewerMode.zenodo) {
-      final previewFuture = state.zenodoEntryPreviewFuture ?? state.zenodoFilePreviewFuture;
+      final previewFuture =
+          state.zenodoEntryPreviewFuture ?? state.zenodoFilePreviewFuture;
       if (previewFuture == null) return null;
       final inlineFuture = state.zenodoInlineMediaFuture;
       return FutureBuilder<FieldPreview>(
@@ -1686,7 +1727,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
             return FutureBuilder<InlineMediaResponse>(
               future: inlineFuture,
               builder: (context, inlineSnapshot) {
-                final copyValue = inlineSnapshot.data?.base64 ?? preview.previewText;
+                final copyValue =
+                    inlineSnapshot.data?.base64 ?? preview.previewText;
                 return _buildActionsRow(
                   copyValue: copyValue,
                   onOpen: () => _openSelectedField(state, preview),
@@ -1724,7 +1766,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
     );
   }
 
-  Widget _buildActionsRow({String? copyValue, Future<void> Function()? onOpen}) {
+  Widget _buildActionsRow(
+      {String? copyValue, Future<void> Function()? onOpen}) {
     final actions = <Widget>[];
     if (copyValue != null) {
       actions.add(CopyButton(value: copyValue));
@@ -1751,14 +1794,16 @@ class _InspectorScreenState extends State<InspectorScreen> {
     );
   }
 
-  Widget _buildAudioPreview(ViewerState state, FieldPreview preview, {required bool isWds}) {
+  Widget _buildAudioPreview(ViewerState state, FieldPreview preview,
+      {required bool isWds}) {
     return AudioPreview(
       label: 'Audio preview',
       loader: () => _prepareAudioPreview(state, preview, isWds: isWds),
     );
   }
 
-  Widget _buildImagePreview(ViewerState state, FieldPreview preview, {required bool isWds}) {
+  Widget _buildImagePreview(ViewerState state, FieldPreview preview,
+      {required bool isWds}) {
     return FutureBuilder<PreparedFileResponse>(
       future: _prepareImagePreview(state, preview, isWds: isWds),
       builder: (context, snapshot) {
@@ -1776,7 +1821,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
     );
   }
 
-  Future<PreparedMediaResponse> _prepareAudioPreview(ViewerState state, FieldPreview preview,
+  Future<PreparedMediaResponse> _prepareAudioPreview(
+      ViewerState state, FieldPreview preview,
       {required bool isWds}) async {
     if (!_isAudioExt(preview.guessedExt ?? '')) {
       throw Exception('Not audio');
@@ -1818,15 +1864,18 @@ class _InspectorScreenState extends State<InspectorScreen> {
     throw Exception('No audio preview');
   }
 
-  Future<PreparedMediaResponse> _normalizeAudioPreview(PreparedMediaResponse media) async {
+  Future<PreparedMediaResponse> _normalizeAudioPreview(
+      PreparedMediaResponse media) async {
     final ext = media.ext.trim().toLowerCase();
     final cleaned = ext.startsWith('.') ? ext.substring(1) : ext;
     if (cleaned != 'sph') return media;
     final wavBytes = await decodeSphereToWavWithFallback(media.bytes);
-    return PreparedMediaResponse(bytes: wavBytes, size: wavBytes.length, ext: 'wav');
+    return PreparedMediaResponse(
+        bytes: wavBytes, size: wavBytes.length, ext: 'wav');
   }
 
-  Future<PreparedFileResponse> _prepareImagePreview(ViewerState state, FieldPreview preview,
+  Future<PreparedFileResponse> _prepareImagePreview(
+      ViewerState state, FieldPreview preview,
       {required bool isWds}) async {
     if (!_isImageExt(preview.guessedExt ?? '')) {
       throw Exception('Not image');
@@ -1913,7 +1962,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
   String _fieldMetaFromPreview(FieldPreview preview, int? size) {
     final ext = _normalizeExtLabel(preview.guessedExt);
     final type = _typeFromExt(ext);
-    return _formatFieldMetaInline(ext: ext, type: type, size: size ?? preview.size);
+    return _formatFieldMetaInline(
+        ext: ext, type: type, size: size ?? preview.size);
   }
 
   String _fieldMetaFromPath(String path, int? size) {
@@ -1929,20 +1979,25 @@ class _InspectorScreenState extends State<InspectorScreen> {
     return _CodeBlock(text: text);
   }
 
-  Future<void> _openSelectedField(ViewerState state, FieldPreview preview) async {
+  Future<void> _openSelectedField(
+      ViewerState state, FieldPreview preview) async {
     try {
       final ext = preview.guessedExt ?? '';
-      final preferredOpener = ext.isNotEmpty ? await state.preferredOpenerForExt(ext) : null;
+      final preferredOpener =
+          ext.isNotEmpty ? await state.preferredOpenerForExt(ext) : null;
       if (state.mode == ViewerMode.mdsIndex && state.indexSummary != null) {
-        var response = await state.mosaicmlOpenField(openerAppPath: preferredOpener);
+        var response =
+            await state.mosaicmlOpenField(openerAppPath: preferredOpener);
         response = await _handleOpenerFallback(state, response, ext, (appPath) {
           return state.mosaicmlOpenField(openerAppPath: appPath);
         });
         state.setStatusMessage(response.message);
         return;
       }
-      if (state.mode == ViewerMode.webdatasetDir && state.wdsDirSummary != null) {
-        var response = await state.webdatasetOpenMember(openerAppPath: preferredOpener);
+      if (state.mode == ViewerMode.webdatasetDir &&
+          state.wdsDirSummary != null) {
+        var response =
+            await state.webdatasetOpenMember(openerAppPath: preferredOpener);
         response = await _handleOpenerFallback(state, response, ext, (appPath) {
           return state.webdatasetOpenMember(openerAppPath: appPath);
         });
@@ -1950,7 +2005,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
         return;
       }
       if (state.indexSummary != null) {
-        var response = await state.litdataOpenField(openerAppPath: preferredOpener);
+        var response =
+            await state.litdataOpenField(openerAppPath: preferredOpener);
         response = await _handleOpenerFallback(state, response, ext, (appPath) {
           return state.litdataOpenField(openerAppPath: appPath);
         });
@@ -1979,7 +2035,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
                   entryName: entryName,
                   openerAppPath: preferredOpener,
                 );
-          response = await _handleOpenerFallback(state, response, ext, (appPath) {
+          response =
+              await _handleOpenerFallback(state, response, ext, (appPath) {
             return lower.endsWith('.zip')
                 ? state.zenodoZipOpenEntry(
                     contentUrl: file.contentUrl,
@@ -2017,8 +2074,10 @@ class _InspectorScreenState extends State<InspectorScreen> {
     }
   }
 
-  Future<void> _openHfSelectedField(ViewerState state, HfDatasetPreview preview) async {
-    if (state.hfSelectedRowIndex == null || state.hfSelectedFieldName == null) return;
+  Future<void> _openHfSelectedField(
+      ViewerState state, HfDatasetPreview preview) async {
+    if (state.hfSelectedRowIndex == null || state.hfSelectedFieldName == null)
+      return;
     try {
       var open = await state.huggingfaceOpenField(
         input: state.sourceInput,
@@ -2181,8 +2240,13 @@ class _InspectorScreenState extends State<InspectorScreen> {
     if (_isImageExt(cleaned)) return 'image';
     if (_isAudioExt(cleaned)) return 'audio';
     if (_isVideoExt(cleaned)) return 'video';
-    if (cleaned == 'txt' || cleaned == 'json' || cleaned == 'csv' || cleaned == 'tsv' ||
-        cleaned == 'md' || cleaned == 'yaml' || cleaned == 'yml') {
+    if (cleaned == 'txt' ||
+        cleaned == 'json' ||
+        cleaned == 'csv' ||
+        cleaned == 'tsv' ||
+        cleaned == 'md' ||
+        cleaned == 'yaml' ||
+        cleaned == 'yml') {
       return 'text';
     }
     return 'binary';
@@ -2295,7 +2359,8 @@ class _PanelCard extends StatelessWidget {
                     Expanded(
                       child: Text(
                         title,
-                        style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                        style: textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w700),
                       ),
                     ),
                     if (trailing != null) trailing!,
@@ -2330,20 +2395,19 @@ class _PanelCard extends StatelessWidget {
                 child: child,
               ),
             )
-          else
-            if (bodyFlexible)
-              Flexible(
-                fit: FlexFit.loose,
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: child,
-                ),
-              )
-            else
-              Padding(
+          else if (bodyFlexible)
+            Flexible(
+              fit: FlexFit.loose,
+              child: Padding(
                 padding: const EdgeInsets.all(12),
                 child: child,
               ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: child,
+            ),
         ],
       ),
     );
@@ -2475,7 +2539,8 @@ class _PreviewSectionState extends State<_PreviewSection> {
     if (!widget.scrollable) {
       return LayoutBuilder(
         builder: (context, constraints) {
-          final bounded = constraints.maxHeight.isFinite && constraints.maxHeight > 0;
+          final bounded =
+              constraints.maxHeight.isFinite && constraints.maxHeight > 0;
           final headerWidgets = [
             if (header != null) header,
             if (header != null) const SizedBox(height: 12),
@@ -2519,6 +2584,11 @@ class _PreviewSectionState extends State<_PreviewSection> {
       ),
     );
   }
+}
+
+enum _ExplorerMenuAction {
+  expandAll,
+  collapseAll,
 }
 
 class _HfConfigSplitOption {

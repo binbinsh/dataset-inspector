@@ -44,6 +44,64 @@ const _hfPageSize = 50;
 const _zenodoTarPageSize = 50;
 const _recentSourceLimit = 10;
 
+class LoadedDatasetSource {
+  LoadedDatasetSource({
+    required this.id,
+    required this.identity,
+    required this.sourceInput,
+    required this.mode,
+    required this.label,
+    this.payload,
+    this.paths,
+    this.expanded = true,
+    this.indexSummary,
+    this.wdsDirSummary,
+    this.hfPreview,
+    this.hfConfigOptions,
+    this.zenodoRecord,
+    this.selectedChunkName,
+    this.selectedShardName,
+    this.selectedHfConfig,
+    this.selectedHfSplit,
+    this.selectedZenodoFileKey,
+  });
+
+  final String id;
+  final String identity;
+  final String sourceInput;
+  final ViewerMode mode;
+  final String label;
+  final String? payload;
+  final List<String>? paths;
+  bool expanded;
+
+  IndexSummary? indexSummary;
+  WdsDirSummary? wdsDirSummary;
+  HfDatasetPreview? hfPreview;
+  List<HfConfigSummary>? hfConfigOptions;
+  ZenodoRecordSummary? zenodoRecord;
+
+  String? selectedChunkName;
+  String? selectedShardName;
+  String? selectedHfConfig;
+  String? selectedHfSplit;
+  String? selectedZenodoFileKey;
+}
+
+class _ResolvedLoadRequest {
+  const _ResolvedLoadRequest({
+    required this.mode,
+    required this.sourceInput,
+    this.payload,
+    this.paths,
+  });
+
+  final ViewerMode mode;
+  final String sourceInput;
+  final String? payload;
+  final List<String>? paths;
+}
+
 class ViewerState extends ChangeNotifier {
   ViewerState({
     LitDataService? litdata,
@@ -77,6 +135,13 @@ class ViewerState extends ChangeNotifier {
   Timer? _detectTimer;
   int _detectRequestId = 0;
   List<String> chunkSelection = [];
+  List<LoadedDatasetSource> openedDatasets = [];
+  String? activeDatasetId;
+  bool scanningDatasets = false;
+  int scanDiscoveredCount = 0;
+  int scanAddedCount = 0;
+  int _scanJobId = 0;
+  bool _scanCancelRequested = false;
   ViewerMode? mode;
   int requestId = 0;
 
@@ -168,7 +233,19 @@ class ViewerState extends ChangeNotifier {
     super.dispose();
   }
 
-  bool get isHuggingFaceDetected => detectedSource == DetectedSourceKind.huggingface;
+  bool get isHuggingFaceDetected =>
+      detectedSource == DetectedSourceKind.huggingface;
+
+  bool isDatasetActive(String datasetId) => activeDatasetId == datasetId;
+
+  LoadedDatasetSource? get activeDataset {
+    final activeId = activeDatasetId;
+    if (activeId == null) return null;
+    for (final dataset in openedDatasets) {
+      if (dataset.id == activeId) return dataset;
+    }
+    return null;
+  }
 
   String get detectedSourceLabel {
     switch (detectedSource) {
@@ -193,7 +270,8 @@ class ViewerState extends ChangeNotifier {
     }
   }
 
-  Future<File> downloadUpdate(UpdateInfo update, {void Function(int, int?)? onProgress}) async {
+  Future<File> downloadUpdate(UpdateInfo update,
+      {void Function(int, int?)? onProgress}) async {
     return _updates.download(update, onProgress: onProgress);
   }
 
@@ -203,7 +281,7 @@ class ViewerState extends ChangeNotifier {
 
   Future<String?> chooseOpenerApp() async {
     try {
-      final result = await FilePicker.platform.pickFiles(type: FileType.any);
+      final result = await FilePicker.pickFiles(type: FileType.any);
       if (result == null || result.files.isEmpty) return null;
       final path = result.files.first.path;
       if (path == null || path.isEmpty) return null;
@@ -297,11 +375,14 @@ class ViewerState extends ChangeNotifier {
     } catch (error) {
       if (!_isDetectRequestActive(requestId, input)) return;
       final message = error.toString().toLowerCase();
-      if (message.contains('path does not exist') || message.contains('missing directory')) {
+      if (message.contains('path does not exist') ||
+          message.contains('missing directory')) {
         _setDetectedSource(DetectedSourceKind.unknown);
         return;
       }
-      final chunkPaths = await _litdata.listChunkFiles(input).catchError((_) => <String>[]);
+      final chunkPaths = await _litdata
+          .listChunkFiles(_normalizeDatasetDir(input))
+          .catchError((_) => <String>[]);
       if (!_isDetectRequestActive(requestId, input)) return;
       if (chunkPaths.isNotEmpty) {
         _setDetectedSource(DetectedSourceKind.litdataChunks);
@@ -323,7 +404,6 @@ class ViewerState extends ChangeNotifier {
     }
   }
 
-
   void setChunkSelection(List<String> paths) {
     chunkSelection = paths;
     notifyListeners();
@@ -332,7 +412,7 @@ class ViewerState extends ChangeNotifier {
   Future<void> chooseIndexSource() async {
     try {
       final initialDirectory = await _resolvePickerInitialDirectory();
-      final result = await FilePicker.platform.getDirectoryPath(
+      final result = await FilePicker.getDirectoryPath(
         initialDirectory: initialDirectory,
       );
       if (result == null || result.trim().isEmpty) return;
@@ -343,10 +423,25 @@ class ViewerState extends ChangeNotifier {
     }
   }
 
+  Future<void> chooseAndScanDatasetFolder() async {
+    try {
+      final initialDirectory = await _resolvePickerInitialDirectory();
+      final result = await FilePicker.getDirectoryPath(
+        initialDirectory: initialDirectory,
+      );
+      if (result == null || result.trim().isEmpty) return;
+      await scanAndAddDatasetsFromFolder(result.trim());
+    } on PlatformException catch (err) {
+      statusMessage = err.message ?? 'Failed to open directory picker.';
+      notifyListeners();
+    }
+  }
+
   Future<String?> _resolvePickerInitialDirectory() async {
     final trimmed = sourceInput.trim();
     if (trimmed.isEmpty) return null;
-    if (_looksLikeHfInput(trimmed) || _looksLikeZenodoInput(trimmed)) return null;
+    if (_looksLikeHfInput(trimmed) || _looksLikeZenodoInput(trimmed))
+      return null;
     final expanded = _expandHomePath(trimmed);
     if (!p.isAbsolute(expanded)) return null;
     final type = await FileSystemEntity.type(expanded, followLinks: true);
@@ -361,7 +456,8 @@ class ViewerState extends ChangeNotifier {
 
   String _expandHomePath(String input) {
     if (!input.startsWith('~')) return input;
-    final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
+    final home =
+        Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
     if (home == null || home.isEmpty) return input;
     if (input == '~') return home;
     if (input.startsWith('~/') || input.startsWith(r'~\')) {
@@ -372,9 +468,10 @@ class ViewerState extends ChangeNotifier {
 
   Future<void> chooseChunkFiles() async {
     try {
-      final result = await FilePicker.platform.pickFiles(allowMultiple: true);
+      final result = await FilePicker.pickFiles(allowMultiple: true);
       if (result == null) return;
-      final paths = result.files.map((file) => file.path).whereType<String>().toList();
+      final paths =
+          result.files.map((file) => file.path).whereType<String>().toList();
       if (paths.isEmpty) return;
       chunkSelection = paths;
       notifyListeners();
@@ -384,7 +481,8 @@ class ViewerState extends ChangeNotifier {
     }
   }
 
-  void triggerLoad(ViewerMode nextMode, {String? payload, List<String>? paths}) {
+  void triggerLoad(ViewerMode nextMode,
+      {String? payload, List<String>? paths}) {
     requestId = DateTime.now().millisecondsSinceEpoch;
     mode = nextMode;
     selectedChunkName = null;
@@ -414,15 +512,19 @@ class ViewerState extends ChangeNotifier {
 
     if (nextMode == ViewerMode.litdataIndex) {
       final indexPath = _normalizeDatasetDir(
-        payload?.trim().isNotEmpty == true ? payload!.trim() : sourceInput.trim(),
+        payload?.trim().isNotEmpty == true
+            ? payload!.trim()
+            : sourceInput.trim(),
       );
       if (indexPath.isEmpty) return;
       indexFuture = _captureFutureError(
         _litdata.loadIndex(indexPath).then((value) {
           indexSummary = value;
           _preferences.saveLastIndex(value.rootDir);
-          selectedChunkName = value.chunks.isNotEmpty ? value.chunks.first.filename : null;
+          selectedChunkName =
+              value.chunks.isNotEmpty ? value.chunks.first.filename : null;
           _loadLitdataItems();
+          _syncActiveDatasetSelection();
           notifyListeners();
           return value;
         }),
@@ -435,15 +537,19 @@ class ViewerState extends ChangeNotifier {
 
     if (nextMode == ViewerMode.mdsIndex) {
       final indexPath = _normalizeDatasetDir(
-        payload?.trim().isNotEmpty == true ? payload!.trim() : sourceInput.trim(),
+        payload?.trim().isNotEmpty == true
+            ? payload!.trim()
+            : sourceInput.trim(),
       );
       if (indexPath.isEmpty) return;
       indexFuture = _captureFutureError(
         _mosaicml.loadIndex(indexPath).then((value) {
           indexSummary = value;
           _preferences.saveLastIndex(value.rootDir);
-          selectedChunkName = value.chunks.isNotEmpty ? value.chunks.first.filename : null;
+          selectedChunkName =
+              value.chunks.isNotEmpty ? value.chunks.first.filename : null;
           _loadMdsItems();
+          _syncActiveDatasetSelection();
           notifyListeners();
           return value;
         }),
@@ -460,8 +566,10 @@ class ViewerState extends ChangeNotifier {
       indexFuture = _captureFutureError(
         _litdata.loadChunkList(selected).then((value) {
           indexSummary = value;
-          selectedChunkName = value.chunks.isNotEmpty ? value.chunks.first.filename : null;
+          selectedChunkName =
+              value.chunks.isNotEmpty ? value.chunks.first.filename : null;
           _loadLitdataItems();
+          _syncActiveDatasetSelection();
           notifyListeners();
           return value;
         }),
@@ -474,14 +582,18 @@ class ViewerState extends ChangeNotifier {
 
     if (nextMode == ViewerMode.webdatasetDir) {
       final dirPath = _normalizeDatasetDir(
-        payload?.trim().isNotEmpty == true ? payload!.trim() : sourceInput.trim(),
+        payload?.trim().isNotEmpty == true
+            ? payload!.trim()
+            : sourceInput.trim(),
       );
       if (dirPath.isEmpty) return;
       wdsDirFuture = _captureFutureError(
         _webdataset.loadDir(dirPath).then((value) {
           wdsDirSummary = value;
-          selectedShardName = value.shards.isNotEmpty ? value.shards.first.filename : null;
+          selectedShardName =
+              value.shards.isNotEmpty ? value.shards.first.filename : null;
           _loadWdsSamples();
+          _syncActiveDatasetSelection();
           notifyListeners();
           return value;
         }),
@@ -493,13 +605,17 @@ class ViewerState extends ChangeNotifier {
     }
 
     if (nextMode == ViewerMode.zenodo) {
-      final input = payload?.trim().isNotEmpty == true ? payload!.trim() : sourceInput.trim();
+      final input = payload?.trim().isNotEmpty == true
+          ? payload!.trim()
+          : sourceInput.trim();
       if (input.isEmpty) return;
       zenodoRecordFuture = _captureFutureError(
         _zenodo.recordSummary(input).then((value) {
           zenodoRecord = value;
-          zenodoSelectedFileKey = value.files.isNotEmpty ? value.files.first.key : null;
+          zenodoSelectedFileKey =
+              value.files.isNotEmpty ? value.files.first.key : null;
           _loadZenodoEntries();
+          _syncActiveDatasetSelection();
           notifyListeners();
           return value;
         }),
@@ -510,28 +626,33 @@ class ViewerState extends ChangeNotifier {
       return;
     }
 
-    final input = payload?.trim().isNotEmpty == true ? payload!.trim() : sourceInput.trim();
+    final input = payload?.trim().isNotEmpty == true
+        ? payload!.trim()
+        : sourceInput.trim();
     if (input.isEmpty) return;
     AppLogger.info('Load Hugging Face dataset "$input"', tag: 'state');
     hfPreviewFuture = _captureFutureError(
       _huggingface
           .datasetPreview(
-            input: input,
-            config: hfConfigOverride,
-            split: hfSplitOverride,
-            offset: hfOffset,
-            length: _hfPageSize,
-            token: hfToken,
-          )
+        input: input,
+        config: hfConfigOverride,
+        split: hfSplitOverride,
+        offset: hfOffset,
+        length: _hfPageSize,
+        token: hfToken,
+      )
           .then((value) {
         hfPreview = value;
         if (value.configs.isNotEmpty) {
           hfConfigOptions = value.configs;
         } else if (hfConfigOptions == null) {
-          hfConfigOptions = [HfConfigSummary(config: value.config, splits: [value.split])];
+          hfConfigOptions = [
+            HfConfigSummary(config: value.config, splits: [value.split])
+          ];
         }
         hfConfigOverride = value.config;
         hfSplitOverride = value.split;
+        _syncActiveDatasetSelection();
         notifyListeners();
         return value;
       }),
@@ -556,36 +677,368 @@ class ViewerState extends ChangeNotifier {
   Future<void> loadFromSource() async {
     final input = sourceInput.trim();
     if (input.isEmpty) return;
-    await _recordRecentSource(input);
-    if (_looksLikeHfInput(input)) {
-      triggerLoad(ViewerMode.huggingface, payload: input);
-      return;
-    }
-    if (_looksLikeZenodoInput(input)) {
-      triggerLoad(ViewerMode.zenodo, payload: input);
-      return;
-    }
+    await addSource(input);
+  }
+
+  Future<bool> addSource(
+    String input, {
+    bool recordRecent = true,
+  }) async {
+    final trimmed = input.trim();
+    if (trimmed.isEmpty) return false;
+    final resolved = await _resolveLoadRequest(trimmed);
+    return _addResolvedSource(resolved, recordRecent: recordRecent);
+  }
+
+  Future<void> scanAndAddDatasetsFromFolder(String rootPath) async {
+    final trimmed = rootPath.trim();
+    if (trimmed.isEmpty) return;
+    final hadActiveDataset = activeDatasetId != null;
+    String? firstAddedDatasetId;
+    final scanJobId = ++_scanJobId;
+    scanningDatasets = true;
+    _scanCancelRequested = false;
+    scanDiscoveredCount = 0;
+    scanAddedCount = 0;
+    statusMessage = 'Scanning datasets in $trimmed...';
+    notifyListeners();
+
     try {
-      final detected = await _webdataset.detectLocalDataset(input);
-      switch (detected.kind) {
-        case LocalDatasetKind.litdataIndex:
-          triggerLoad(ViewerMode.litdataIndex, payload: detected.path);
-        case LocalDatasetKind.mdsIndex:
-          triggerLoad(ViewerMode.mdsIndex, payload: detected.path);
-        case LocalDatasetKind.webdatasetDir:
-          triggerLoad(ViewerMode.webdatasetDir, payload: detected.path);
+      var canceled = false;
+      await for (final dataset
+          in _webdataset.discoverLocalDatasetsStream(trimmed)) {
+        if (_scanCancelRequested || scanJobId != _scanJobId) {
+          canceled = true;
+          break;
+        }
+        scanDiscoveredCount += 1;
+        final resolved = _resolvedLoadRequestFromDetected(dataset);
+        final wasAdded = _registerResolvedSource(
+          resolved,
+          expanded: false,
+          setActiveIfEmpty: false,
+          notify: false,
+        );
+        if (wasAdded) {
+          scanAddedCount += 1;
+          firstAddedDatasetId ??=
+              _datasetByIdentity(_datasetIdentity(resolved))?.id;
+        }
+        statusMessage =
+            'Scanning $trimmed... found $scanDiscoveredCount, added $scanAddedCount';
+        notifyListeners();
       }
-    } catch (_) {
-      final chunkPaths = await _litdata.listChunkFiles(input).catchError((_) => <String>[]);
-      if (chunkPaths.isNotEmpty) {
-        triggerLoad(ViewerMode.litdataChunks, paths: chunkPaths);
+
+      if (_scanCancelRequested || scanJobId != _scanJobId) {
+        canceled = true;
+      }
+
+      if (scanDiscoveredCount == 0) {
+        statusMessage = canceled
+            ? 'Scan canceled.'
+            : 'No supported datasets found in $trimmed';
         return;
       }
-      triggerLoad(ViewerMode.litdataIndex, payload: input);
+
+      if (!hadActiveDataset && firstAddedDatasetId != null) {
+        await activateDataset(firstAddedDatasetId);
+      }
+
+      if (canceled) {
+        statusMessage =
+            'Scan canceled: found $scanDiscoveredCount, added $scanAddedCount';
+      } else {
+        statusMessage = scanAddedCount > 0
+            ? 'Scan complete: found $scanDiscoveredCount, added $scanAddedCount'
+            : 'All discovered datasets were already open';
+      }
+    } catch (error) {
+      statusMessage = error.toString();
+    } finally {
+      scanningDatasets = false;
+      _scanCancelRequested = false;
+      notifyListeners();
     }
   }
 
-  Future<void> _recordRecentSource(String input) async {
+  Future<_ResolvedLoadRequest> _resolveLoadRequest(String input) async {
+    if (_looksLikeHfInput(input)) {
+      return _ResolvedLoadRequest(
+        mode: ViewerMode.huggingface,
+        sourceInput: input,
+        payload: input,
+      );
+    }
+    if (_looksLikeZenodoInput(input)) {
+      return _ResolvedLoadRequest(
+        mode: ViewerMode.zenodo,
+        sourceInput: input,
+        payload: input,
+      );
+    }
+    try {
+      final detected = await _webdataset.detectLocalDataset(input);
+      return _resolvedLoadRequestFromDetected(detected);
+    } catch (_) {
+      final chunkPaths = await _litdata
+          .listChunkFiles(_normalizeDatasetDir(input))
+          .catchError((_) => <String>[]);
+      if (chunkPaths.isNotEmpty) {
+        return _ResolvedLoadRequest(
+          mode: ViewerMode.litdataChunks,
+          sourceInput: input,
+          payload: input,
+          paths: chunkPaths,
+        );
+      }
+      return _ResolvedLoadRequest(
+        mode: ViewerMode.litdataIndex,
+        sourceInput: input,
+        payload: input,
+      );
+    }
+  }
+
+  _ResolvedLoadRequest _resolvedLoadRequestFromDetected(
+      LocalDatasetDetectResponse detected) {
+    switch (detected.kind) {
+      case LocalDatasetKind.litdataIndex:
+        return _ResolvedLoadRequest(
+          mode: ViewerMode.litdataIndex,
+          sourceInput: detected.path,
+          payload: detected.path,
+        );
+      case LocalDatasetKind.mdsIndex:
+        return _ResolvedLoadRequest(
+          mode: ViewerMode.mdsIndex,
+          sourceInput: detected.path,
+          payload: detected.path,
+        );
+      case LocalDatasetKind.webdatasetDir:
+        return _ResolvedLoadRequest(
+          mode: ViewerMode.webdatasetDir,
+          sourceInput: detected.path,
+          payload: detected.path,
+        );
+    }
+  }
+
+  Future<bool> _addResolvedSource(
+    _ResolvedLoadRequest resolved, {
+    required bool recordRecent,
+    bool notify = true,
+  }) async {
+    final source = resolved.sourceInput.trim();
+    if (source.isEmpty) return false;
+    if (recordRecent) {
+      await _recordRecentSource(source, notify: false);
+    }
+
+    sourceInput = source;
+    _scheduleSourceDetection(source);
+
+    final identity = _datasetIdentity(resolved);
+    final existing = _datasetByIdentity(identity);
+    if (existing != null) {
+      await activateDataset(existing.id);
+      return false;
+    }
+
+    triggerLoad(resolved.mode,
+        payload: resolved.payload, paths: resolved.paths);
+    await _awaitPrimaryLoad(resolved.mode);
+
+    final dataset = _upsertOpenedDataset(resolved);
+    if (dataset == null) {
+      if (notify) {
+        notifyListeners();
+      }
+      return false;
+    }
+    activeDatasetId = dataset.id;
+    _syncActiveDatasetSelection();
+    if (notify) {
+      notifyListeners();
+    }
+    return true;
+  }
+
+  Future<void> _awaitPrimaryLoad(ViewerMode sourceMode) async {
+    if (sourceMode == ViewerMode.litdataIndex ||
+        sourceMode == ViewerMode.litdataChunks ||
+        sourceMode == ViewerMode.mdsIndex) {
+      final future = indexFuture;
+      if (future != null) await future;
+      return;
+    }
+    if (sourceMode == ViewerMode.webdatasetDir) {
+      final future = wdsDirFuture;
+      if (future != null) await future;
+      return;
+    }
+    if (sourceMode == ViewerMode.zenodo) {
+      final future = zenodoRecordFuture;
+      if (future != null) await future;
+      return;
+    }
+    final future = hfPreviewFuture;
+    if (future != null) await future;
+  }
+
+  LoadedDatasetSource? _upsertOpenedDataset(
+    _ResolvedLoadRequest resolved,
+  ) {
+    final currentMode = mode;
+    if (currentMode == null) return null;
+    final identity = _datasetIdentity(resolved);
+    LoadedDatasetSource? existing;
+    for (final dataset in openedDatasets) {
+      if (dataset.identity == identity) {
+        existing = dataset;
+        break;
+      }
+    }
+    final dataset = existing ??
+        LoadedDatasetSource(
+          id: _nextDatasetId(),
+          identity: identity,
+          sourceInput: resolved.sourceInput,
+          mode: currentMode,
+          label: _datasetLabel(resolved),
+          payload: resolved.payload,
+          paths: resolved.paths == null
+              ? null
+              : List<String>.from(resolved.paths!),
+        );
+    if (existing == null) {
+      openedDatasets = [...openedDatasets, dataset];
+    }
+    _syncDatasetFromCurrentState(dataset);
+    return dataset;
+  }
+
+  bool _registerResolvedSource(
+    _ResolvedLoadRequest resolved, {
+    bool expanded = true,
+    bool setActiveIfEmpty = true,
+    bool notify = true,
+  }) {
+    final identity = _datasetIdentity(resolved);
+    if (_datasetByIdentity(identity) != null) {
+      return false;
+    }
+
+    final dataset = LoadedDatasetSource(
+      id: _nextDatasetId(),
+      identity: identity,
+      sourceInput: resolved.sourceInput,
+      mode: resolved.mode,
+      label: _datasetLabel(resolved),
+      payload: resolved.payload,
+      paths: resolved.paths == null ? null : List<String>.from(resolved.paths!),
+      expanded: expanded,
+    );
+    openedDatasets = [...openedDatasets, dataset];
+    if (setActiveIfEmpty && activeDatasetId == null) {
+      activeDatasetId = dataset.id;
+    }
+    if (notify) {
+      notifyListeners();
+    }
+    return true;
+  }
+
+  String _datasetIdentity(_ResolvedLoadRequest resolved) {
+    if (resolved.mode == ViewerMode.litdataChunks) {
+      final sorted = [...?resolved.paths]..sort();
+      return '${resolved.mode.name}:${sorted.join('|')}';
+    }
+    final payload = resolved.payload?.trim();
+    final source =
+        payload != null && payload.isNotEmpty ? payload : resolved.sourceInput;
+    return '${resolved.mode.name}:${_normalizedSourceIdentity(resolved.mode, source)}';
+  }
+
+  String _normalizedSourceIdentity(ViewerMode sourceMode, String source) {
+    final trimmed = source.trim();
+    if (trimmed.isEmpty) return '';
+    if (sourceMode == ViewerMode.huggingface ||
+        sourceMode == ViewerMode.zenodo) {
+      return trimmed;
+    }
+    final expanded = _expandHomePath(trimmed);
+    if (p.isAbsolute(expanded)) {
+      return p.normalize(expanded);
+    }
+    return p.normalize(p.absolute(expanded));
+  }
+
+  LoadedDatasetSource? _datasetByIdentity(String identity) {
+    for (final dataset in openedDatasets) {
+      if (dataset.identity == identity) return dataset;
+    }
+    return null;
+  }
+
+  String _datasetLabel(_ResolvedLoadRequest resolved) {
+    final payload = resolved.payload?.trim();
+    final source = payload != null && payload.isNotEmpty
+        ? payload
+        : resolved.sourceInput.trim();
+    if (resolved.mode == ViewerMode.huggingface) {
+      return _huggingFaceLabel(source);
+    }
+    if (resolved.mode == ViewerMode.zenodo) {
+      return _zenodoLabel(source);
+    }
+    final normalized = _normalizedSourceIdentity(resolved.mode, source);
+    final base = p.basename(normalized);
+    if (base.isNotEmpty) return base;
+    return normalized;
+  }
+
+  String _huggingFaceLabel(String input) {
+    if (input.startsWith('hf://datasets/')) {
+      final raw = input.substring('hf://datasets/'.length);
+      final parts = raw.split('/').where((part) => part.isNotEmpty).toList();
+      if (parts.length >= 2) {
+        return '${parts[0]}/${parts[1]}';
+      }
+      return raw;
+    }
+    final uri = Uri.tryParse(input);
+    if (uri != null) {
+      final segments =
+          uri.pathSegments.where((segment) => segment.isNotEmpty).toList();
+      for (var index = 0; index < segments.length; index += 1) {
+        if (segments[index] != 'datasets') continue;
+        if (segments.length > index + 2) {
+          return '${segments[index + 1]}/${segments[index + 2]}';
+        }
+      }
+    }
+    return input;
+  }
+
+  String _zenodoLabel(String input) {
+    final uri = Uri.tryParse(input);
+    if (uri == null) return 'Zenodo';
+    final segments =
+        uri.pathSegments.where((segment) => segment.isNotEmpty).toList();
+    for (var index = 0; index < segments.length; index += 1) {
+      if ((segments[index] == 'record' || segments[index] == 'records') &&
+          segments.length > index + 1) {
+        return 'Zenodo ${segments[index + 1]}';
+      }
+    }
+    return 'Zenodo';
+  }
+
+  String _nextDatasetId() {
+    return DateTime.now().microsecondsSinceEpoch.toString();
+  }
+
+  Future<void> _recordRecentSource(String input, {bool notify = true}) async {
     final trimmed = input.trim();
     if (trimmed.isEmpty) return;
     final updated = <String>[
@@ -597,7 +1050,219 @@ class ViewerState extends ChangeNotifier {
     }
     recentSources = updated;
     await _preferences.saveRecentSources(updated);
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  LoadedDatasetSource? _datasetById(String datasetId) {
+    for (final dataset in openedDatasets) {
+      if (dataset.id == datasetId) return dataset;
+    }
+    return null;
+  }
+
+  void cancelDatasetScan() {
+    if (!scanningDatasets) return;
+    _scanCancelRequested = true;
+    statusMessage =
+        'Stopping scan... found $scanDiscoveredCount, added $scanAddedCount';
     notifyListeners();
+  }
+
+  void setAllDatasetsExpanded(bool expanded) {
+    if (openedDatasets.isEmpty) return;
+    var changed = false;
+    for (final dataset in openedDatasets) {
+      if (dataset.expanded == expanded) continue;
+      dataset.expanded = expanded;
+      changed = true;
+    }
+    if (changed) {
+      notifyListeners();
+    }
+  }
+
+  void toggleDatasetExpanded(String datasetId) {
+    final dataset = _datasetById(datasetId);
+    if (dataset == null) return;
+    dataset.expanded = !dataset.expanded;
+    notifyListeners();
+  }
+
+  Future<void> activateDataset(String datasetId) async {
+    final dataset = _datasetById(datasetId);
+    if (dataset == null) return;
+    if (activeDatasetId == dataset.id && mode == dataset.mode) return;
+
+    activeDatasetId = dataset.id;
+    sourceInput = dataset.sourceInput;
+    _scheduleSourceDetection(sourceInput);
+    notifyListeners();
+
+    triggerLoad(dataset.mode, payload: dataset.payload, paths: dataset.paths);
+    await _awaitPrimaryLoad(dataset.mode);
+    _restorePrimarySelectionForDataset(dataset);
+    _syncActiveDatasetSelection();
+    notifyListeners();
+  }
+
+  Future<void> removeDataset(String datasetId) async {
+    final removingActive = activeDatasetId == datasetId;
+    openedDatasets =
+        openedDatasets.where((dataset) => dataset.id != datasetId).toList();
+    if (!removingActive) {
+      notifyListeners();
+      return;
+    }
+    if (openedDatasets.isEmpty) {
+      activeDatasetId = null;
+      _clearLoadedViewState();
+      notifyListeners();
+      return;
+    }
+    final fallback = openedDatasets.last;
+    await activateDataset(fallback.id);
+  }
+
+  Future<void> activateDatasetChunk(
+      String datasetId, String chunkFilename) async {
+    await activateDataset(datasetId);
+    selectChunk(chunkFilename);
+  }
+
+  Future<void> activateDatasetShard(
+      String datasetId, String shardFilename) async {
+    await activateDataset(datasetId);
+    selectWdsShard(shardFilename);
+  }
+
+  Future<void> activateDatasetHfConfig(
+    String datasetId, {
+    required String config,
+    required String split,
+  }) async {
+    await activateDataset(datasetId);
+    setHfConfigSplit(config, split);
+  }
+
+  Future<void> activateDatasetZenodoFile(
+      String datasetId, String fileKey) async {
+    await activateDataset(datasetId);
+    selectZenodoFile(fileKey);
+  }
+
+  void _clearLoadedViewState() {
+    mode = null;
+    requestId = DateTime.now().millisecondsSinceEpoch;
+    selectedChunkName = null;
+    selectedItemIndex = null;
+    selectedFieldIndex = null;
+    selectedShardName = null;
+    wdsSelectedSampleKey = null;
+    wdsSelectedMemberPath = null;
+    wdsSelectedMemberName = null;
+    hfConfigOverride = null;
+    hfSplitOverride = null;
+    hfOffset = 0;
+    hfSelectedRowIndex = null;
+    hfSelectedFieldName = null;
+    hfConfigOptions = null;
+    zenodoSelectedFileKey = null;
+    zenodoSelectedEntryName = null;
+    zenodoEntriesOffset = 0;
+    wdsOffset = 0;
+    statusMessage = null;
+
+    indexFuture = null;
+    indexSummary = null;
+    litdataItemsFuture = null;
+    mdsItemsFuture = null;
+    fieldPreviewFuture = null;
+    mdsFieldPreviewFuture = null;
+    audioPreviewFuture = null;
+
+    wdsDirFuture = null;
+    wdsDirSummary = null;
+    wdsSamplesFuture = null;
+    wdsSamples = null;
+    wdsPreviewFuture = null;
+    wdsAudioPreviewFuture = null;
+
+    hfPreviewFuture = null;
+    hfPreview = null;
+
+    zenodoRecordFuture = null;
+    zenodoRecord = null;
+    zenodoFilePreviewFuture = null;
+    zenodoZipEntriesFuture = null;
+    zenodoZipEntries = null;
+    zenodoTarEntriesFuture = null;
+    zenodoTarEntries = null;
+    zenodoEntryPreviewFuture = null;
+    zenodoInlineMediaFuture = null;
+
+    _clearFieldPreviewCache();
+  }
+
+  void _syncDatasetFromCurrentState(LoadedDatasetSource dataset) {
+    dataset.selectedChunkName = selectedChunkName;
+    dataset.selectedShardName = selectedShardName;
+    dataset.selectedHfConfig = hfConfigOverride;
+    dataset.selectedHfSplit = hfSplitOverride;
+    dataset.selectedZenodoFileKey = zenodoSelectedFileKey;
+
+    if (mode == ViewerMode.huggingface) {
+      dataset.hfPreview = hfPreview;
+      dataset.hfConfigOptions = hfConfigOptions;
+      return;
+    }
+    if (mode == ViewerMode.zenodo) {
+      dataset.zenodoRecord = zenodoRecord;
+      return;
+    }
+    if (mode == ViewerMode.webdatasetDir) {
+      dataset.wdsDirSummary = wdsDirSummary;
+      return;
+    }
+    dataset.indexSummary = indexSummary;
+  }
+
+  void _syncActiveDatasetSelection() {
+    final dataset = activeDataset;
+    if (dataset == null) return;
+    _syncDatasetFromCurrentState(dataset);
+  }
+
+  void _restorePrimarySelectionForDataset(LoadedDatasetSource dataset) {
+    if (dataset.mode == ViewerMode.huggingface) {
+      final config = dataset.selectedHfConfig;
+      final split = dataset.selectedHfSplit;
+      if (config != null && split != null) {
+        final same = hfConfigOverride == config && hfSplitOverride == split;
+        hfConfigOverride = config;
+        hfSplitOverride = split;
+        if (!same) {
+          _refreshHfPreview();
+        }
+      }
+      return;
+    }
+    if (dataset.mode == ViewerMode.zenodo) {
+      if (dataset.selectedZenodoFileKey != null) {
+        selectZenodoFile(dataset.selectedZenodoFileKey);
+      }
+      return;
+    }
+    if (dataset.mode == ViewerMode.webdatasetDir) {
+      if (dataset.selectedShardName != null) {
+        selectWdsShard(dataset.selectedShardName);
+      }
+      return;
+    }
+    if (dataset.selectedChunkName != null) {
+      selectChunk(dataset.selectedChunkName);
+    }
   }
 
   void selectChunk(String? filename) {
@@ -609,6 +1274,7 @@ class ViewerState extends ChangeNotifier {
     _clearFieldPreviewCache();
     _loadLitdataItems();
     _loadMdsItems();
+    _syncActiveDatasetSelection();
     notifyListeners();
   }
 
@@ -694,6 +1360,7 @@ class ViewerState extends ChangeNotifier {
     wdsSelectedMemberName = null;
     wdsOffset = 0;
     _loadWdsSamples();
+    _syncActiveDatasetSelection();
     notifyListeners();
   }
 
@@ -746,7 +1413,9 @@ class ViewerState extends ChangeNotifier {
   void selectWdsMember(String? memberPath, {String? memberName}) {
     wdsSelectedMemberPath = memberPath;
     wdsSelectedMemberName = memberName ?? wdsSelectedMemberName;
-    if (memberPath == null || selectedShardName == null || wdsDirSummary == null) {
+    if (memberPath == null ||
+        selectedShardName == null ||
+        wdsDirSummary == null) {
       wdsPreviewFuture = null;
       notifyListeners();
       return;
@@ -767,6 +1436,7 @@ class ViewerState extends ChangeNotifier {
     hfConfigOverride = config;
     hfSplitOverride = split;
     hfOffset = 0;
+    _syncActiveDatasetSelection();
     _refreshHfPreview();
   }
 
@@ -790,6 +1460,7 @@ class ViewerState extends ChangeNotifier {
     zenodoSelectedEntryName = null;
     zenodoEntriesOffset = 0;
     _loadZenodoEntries();
+    _syncActiveDatasetSelection();
     notifyListeners();
   }
 
@@ -803,6 +1474,7 @@ class ViewerState extends ChangeNotifier {
     zenodoEntriesOffset = offset < 0 ? 0 : offset;
     zenodoSelectedEntryName = null;
     _loadZenodoEntries();
+    _syncActiveDatasetSelection();
     notifyListeners();
   }
 
@@ -982,7 +1654,8 @@ class ViewerState extends ChangeNotifier {
     );
   }
 
-  List<ZenodoZipEntrySummary> _emptyZenodoZipEntries() => const <ZenodoZipEntrySummary>[];
+  List<ZenodoZipEntrySummary> _emptyZenodoZipEntries() =>
+      const <ZenodoZipEntrySummary>[];
 
   ZenodoTarEntryListResponse _emptyZenodoTarEntries() {
     return const ZenodoTarEntryListResponse(
@@ -1092,22 +1765,25 @@ class ViewerState extends ChangeNotifier {
     hfPreviewFuture = _captureFutureError(
       _huggingface
           .datasetPreview(
-            input: input,
-            config: hfConfigOverride,
-            split: hfSplitOverride,
-            offset: hfOffset,
-            length: _hfPageSize,
-            token: hfToken,
-          )
+        input: input,
+        config: hfConfigOverride,
+        split: hfSplitOverride,
+        offset: hfOffset,
+        length: _hfPageSize,
+        token: hfToken,
+      )
           .then((value) {
         hfPreview = value;
         if (value.configs.isNotEmpty) {
           hfConfigOptions = value.configs;
         } else if (hfConfigOptions == null) {
-          hfConfigOptions = [HfConfigSummary(config: value.config, splits: [value.split])];
+          hfConfigOptions = [
+            HfConfigSummary(config: value.config, splits: [value.split])
+          ];
         }
         hfConfigOverride = value.config;
         hfSplitOverride = value.split;
+        _syncActiveDatasetSelection();
         notifyListeners();
         return value;
       }),
@@ -1127,14 +1803,16 @@ class ViewerState extends ChangeNotifier {
     final name = file.key.toLowerCase();
     if (name.endsWith('.zip')) {
       zenodoZipEntriesFuture = _captureFutureError(
-        _zenodo.zipListEntries(
+        _zenodo
+            .zipListEntries(
           contentUrl: file.contentUrl,
           filename: file.key,
-        ).then((value) {
-        zenodoZipEntries = value;
-        notifyListeners();
-        return value;
-      }),
+        )
+            .then((value) {
+          zenodoZipEntries = value;
+          notifyListeners();
+          return value;
+        }),
         context: 'Zenodo ZIP entries failed',
         fallback: _emptyZenodoZipEntries,
       );
@@ -1145,16 +1823,18 @@ class ViewerState extends ChangeNotifier {
         name.endsWith('.tar.zst') ||
         name.endsWith('.tar.zstd')) {
       zenodoTarEntriesFuture = _captureFutureError(
-        _zenodo.tarListEntriesPaged(
+        _zenodo
+            .tarListEntriesPaged(
           contentUrl: file.contentUrl,
           filename: file.key,
           offset: zenodoEntriesOffset,
           length: _zenodoTarPageSize,
-        ).then((value) {
-        zenodoTarEntries = value;
-        notifyListeners();
-        return value;
-      }),
+        )
+            .then((value) {
+          zenodoTarEntries = value;
+          notifyListeners();
+          return value;
+        }),
         context: 'Zenodo TAR entries failed',
         fallback: _emptyZenodoTarEntries,
       );
@@ -1343,7 +2023,9 @@ class ViewerState extends ChangeNotifier {
   }
 
   Future<OpenLeafResponse> webdatasetOpenMember({String? openerAppPath}) async {
-    if (wdsDirSummary == null || selectedShardName == null || wdsSelectedMemberPath == null) {
+    if (wdsDirSummary == null ||
+        selectedShardName == null ||
+        wdsSelectedMemberPath == null) {
       throw const FormatException('No member selected.');
     }
     return _webdataset.openMember(
@@ -1401,7 +2083,8 @@ class ViewerState extends ChangeNotifier {
         token: hfToken,
       );
     } catch (error, stack) {
-      AppLogger.error('Hugging Face open field failed', tag: 'state', error: error, stackTrace: stack);
+      AppLogger.error('Hugging Face open field failed',
+          tag: 'state', error: error, stackTrace: stack);
       rethrow;
     }
   }
@@ -1495,7 +2178,8 @@ class ViewerState extends ChangeNotifier {
         value.startsWith('http://huggingface.co/datasets/')) {
       return true;
     }
-    if (value.startsWith('https://hf.co/datasets/') || value.startsWith('http://hf.co/datasets/')) {
+    if (value.startsWith('https://hf.co/datasets/') ||
+        value.startsWith('http://hf.co/datasets/')) {
       return true;
     }
     return false;

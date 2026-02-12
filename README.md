@@ -57,5 +57,6 @@ Supported platforms: Windows, macOS, and Linux (web planned).
 - WebDataset: [docs/webdataset.md](docs/webdataset.md)
 - Hugging Face: [docs/huggingface.md](docs/huggingface.md)
 - Zenodo: [docs/zenodo.md](docs/zenodo.md)
+- PI data agent + Lhotse storage: [docs/pi-data-agent-design.md](docs/pi-data-agent-design.md)
 - Audio preview: [docs/audio.md](docs/audio.md)
 - Development: [docs/development.md](docs/development.md)
