@@ -66,6 +66,9 @@ unlinked_spec.ds
 # Coverage
 coverage/
 
+# AI agent local artifacts
+/.dataset-inspector/
+
 # Symbols
 app.*.symbols
 
@@ -86,6 +89,7 @@ Thumbs.db
 .env
 
 # Vendor
-vendor/duckdb-httpfs/
+vendors/
+third_party/duckdb-httpfs/
 macos/Frameworks/
 macos/Runner/duckdb_extensions/

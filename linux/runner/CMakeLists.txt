@@ -12,7 +12,7 @@ add_executable(${BINARY_NAME}
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
 )
 
-set(SPH2PIPE_DIR "${CMAKE_SOURCE_DIR}/../vendor/sph2pipe")
+set(SPH2PIPE_DIR "${CMAKE_SOURCE_DIR}/../third_party/sph2pipe")
 set(SPH2PIPE_SOURCES
   "${SPH2PIPE_DIR}/shorten_x.c"
   "${SPH2PIPE_DIR}/sph2pipe_shorten_decode.c"

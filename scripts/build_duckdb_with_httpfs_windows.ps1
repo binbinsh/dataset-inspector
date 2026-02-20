@@ -45,7 +45,7 @@ Pop-Location
 $httpfsRef = $env:DUCKDB_HTTPFS_REF
 $httpfsSrc = $env:HTTPFS_SRC
 if (-not $httpfsSrc) {
-    $httpfsSrc = Join-Path $projectDir "vendor\duckdb-httpfs"
+    $httpfsSrc = Join-Path $projectDir "third_party\duckdb-httpfs"
 }
 $httpfsDir = Join-Path $duckdbDir "extension\httpfs"
 if (Test-Path $httpfsSrc) {

@@ -14,19 +14,13 @@
 - Run desktop app: `flutter run -d macos|windows|linux`
 - Build desktop app: `flutter build macos|windows|linux`
 - Run all tests: `flutter test`
-- Describe PI gateway tools: `flutter pub run bin/dataset_pi_gateway.dart --describe-tools`
-- Run PI gateway manually with JSON stdin: `cat request.json | flutter pub run bin/dataset_pi_gateway.dart`
 
 ## Layout
 - `lib/main.dart`: app entry point
 - `lib/app.dart`: app theme + root wiring
 - `lib/state/viewer_state.dart`: GUI state + orchestration (UI-facing path)
-- `lib/services/dataset_kernel.dart`: unified dataset capability kernel for PI tools
-- `lib/services/lhotse_service.dart`: Lhotse manifest read/write support (`recordings/supervisions/cuts`)
-- `lib/services/dataset_workspace_store.dart`: mutable workspace persistence and Lhotse-backed snapshots
-- `lib/services/agent/dataset_pi_gateway.dart`: PI-native tool gateway (`ds.*`)
-- `lib/services/agent/dataset_pi_tools.dart`: PI tool name constants
-- `bin/dataset_pi_gateway.dart`: stdio JSON gateway entrypoint for PI extensions
+- `lib/services/dataset_kernel.dart`: unified dataset capability kernel
+- `lib/services/dataset_workspace_store.dart`: mutable workspace persistence and snapshot/applications helpers
 - `lib/services/*`: dataset parsers + remote clients
 - `lib/services/huggingface_service.dart`: Hugging Face dataset viewer client
 - `lib/services/zenodo_service.dart`: Zenodo record + entry preview
@@ -40,5 +34,4 @@
 - Zstd/tar decompression uses temp caches under the system temp directory.
 - See `docs/audio.md` for audio preview details.
 - DuckDB bundling and custom httpfs builds are documented in `docs/duckdb.md`.
-- PI subagent defaults and extension wiring are under `.pi/`.
-- GUI and PI gateway are intentionally isolated. Keep GUI-specific behavior in `viewer_state.dart`; use `ds.*` tools for agent workflows.
+- Parquet and DuckDB behavior for large datasets is documented in `docs/duckdb.md`.

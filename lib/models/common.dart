@@ -62,6 +62,22 @@ class ItemMeta {
   final List<FieldMeta> fields;
 }
 
+class ItemPage {
+  const ItemPage({
+    required this.offset,
+    required this.length,
+    required this.items,
+    required this.partial,
+    this.numItemsTotal,
+  });
+
+  final int offset;
+  final int length;
+  final List<ItemMeta> items;
+  final bool partial;
+  final int? numItemsTotal;
+}
+
 class FieldPreview {
   const FieldPreview({
     required this.previewText,
@@ -132,4 +148,30 @@ class InlineMediaResponse {
   final String mime;
   final int size;
   final String ext;
+}
+
+class LocalDirectoryItem {
+  const LocalDirectoryItem({
+    required this.name,
+    required this.path,
+    required this.isDirectory,
+    this.size,
+    this.modifiedAt,
+  });
+
+  final String name;
+  final String path;
+  final bool isDirectory;
+  final int? size;
+  final DateTime? modifiedAt;
+}
+
+class LocalDirectoryField {
+  const LocalDirectoryField({
+    required this.name,
+    required this.value,
+  });
+
+  final String name;
+  final String value;
 }

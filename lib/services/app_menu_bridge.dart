@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -11,27 +13,28 @@ class AppMenuBridge {
   static final navigatorKey = GlobalKey<NavigatorState>();
   static final messengerKey = GlobalKey<ScaffoldMessengerState>();
 
-  static BuildContext? get _context => navigatorKey.currentState?.context;
-
-  static void _showSnack(String message) {
-    messengerKey.currentState?.showSnackBar(SnackBar(content: Text(message)));
-  }
-
   static Future<void> handleCheckForUpdates() async {
-    final context = _context;
-    if (context == null) return;
-    final state = context.read<ViewerState>();
+    final navigator = navigatorKey.currentState;
+    if (navigator == null) return;
+    final messenger = messengerKey.currentState;
     UpdateInfo? update;
     try {
-      update = await state.checkForUpdateNow();
+      update = await navigator.context.read<ViewerState>().checkForUpdateNow();
     } catch (err) {
-      _showSnack('Update check failed: $err');
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Update check failed: $err')),
+      );
       return;
     }
     if (update == null) {
-      _showSnack('You are up to date.');
+      messenger?.showSnackBar(
+        const SnackBar(content: Text('You are up to date.')),
+      );
       return;
     }
-    await showUpdateDialog(context, state, update);
+    final freshNavigator = navigatorKey.currentState;
+    if (freshNavigator == null) return;
+    final state = freshNavigator.context.read<ViewerState>();
+    unawaited(showUpdateDialog(freshNavigator.context, state, update));
   }
 }

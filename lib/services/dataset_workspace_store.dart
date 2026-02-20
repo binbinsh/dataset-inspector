@@ -2,9 +2,10 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:dataset_inspector/services/app_logger.dart';
 import 'package:path/path.dart' as p;
 
-import 'lhotse_service.dart';
+import 'duckdb_parquet_service.dart';
 
 /// Persistent mutable workspace layer on top of immutable dataset sources.
 ///
@@ -16,18 +17,17 @@ import 'lhotse_service.dart';
 class DatasetWorkspaceStore {
   DatasetWorkspaceStore({
     String? rootDirectoryPath,
-    LhotseService? lhotse,
-  })  : _rootDirectoryPath = rootDirectoryPath ??
-            p.join(
-              Directory.current.path,
-              '.dataset-inspector',
-              'workspaces',
-            ),
-        _lhotse = lhotse ?? LhotseService();
+  }) : _rootDirectoryPath =
+            rootDirectoryPath ?? _resolveDefaultRootDirectoryPath();
 
   static const String formatVersion = 'dataset-workspace-v1';
   static const int defaultPageLength = 128;
   static const int maxPageLength = 1024;
+  static const String _envStorageRoot = 'DATASET_INSPECTOR_STORAGE_ROOT';
+  static const String _envActiveDatasetRoot =
+      'DATASET_INSPECTOR_ACTIVE_DATASET_ROOT';
+  static const String _envActiveDatasetRoots =
+      'DATASET_INSPECTOR_ACTIVE_DATASET_ROOTS';
 
   static const Set<String> supportedOperationTypes = <String>{
     'set_field',
@@ -40,9 +40,87 @@ class DatasetWorkspaceStore {
 
   final String _rootDirectoryPath;
   final Random _random = Random.secure();
-  final LhotseService _lhotse;
+  DuckDbParquetService? _duckdb;
 
   Directory get _rootDir => Directory(_rootDirectoryPath);
+
+  static String _resolveDefaultRootDirectoryPath() {
+    final explicitStorageRoot = _normalizeLocalRootCandidate(
+      Platform.environment[_envStorageRoot],
+    );
+    if (explicitStorageRoot != null) {
+      return _workspaceRootForBase(explicitStorageRoot);
+    }
+
+    final activeDatasetRoot = _normalizeLocalRootCandidate(
+      Platform.environment[_envActiveDatasetRoot],
+    );
+    if (activeDatasetRoot != null) {
+      return _workspaceRootForBase(activeDatasetRoot);
+    }
+
+    final activeDatasetRoots = Platform.environment[_envActiveDatasetRoots];
+    if (activeDatasetRoots != null && activeDatasetRoots.trim().isNotEmpty) {
+      for (final candidate in activeDatasetRoots.split('|')) {
+        final normalized = _normalizeLocalRootCandidate(candidate);
+        if (normalized != null) {
+          return _workspaceRootForBase(normalized);
+        }
+      }
+    }
+
+    return p.join(
+      Directory.current.path,
+      '.dataset-inspector',
+      'workspaces',
+    );
+  }
+
+  static String _workspaceRootForBase(String basePath) {
+    final normalizedBase = p.normalize(basePath);
+    final leaf = p.basename(normalizedBase);
+    if (leaf == 'workspaces' &&
+        p.basename(p.dirname(normalizedBase)) == '.dataset-inspector') {
+      return normalizedBase;
+    }
+    if (leaf == '.dataset-inspector') {
+      return p.join(normalizedBase, 'workspaces');
+    }
+    return p.join(normalizedBase, '.dataset-inspector', 'workspaces');
+  }
+
+  static String? _normalizeLocalRootCandidate(String? raw) {
+    if (raw == null) return null;
+    var value = raw.trim();
+    if (value.isEmpty) return null;
+    value = _expandHomePrefix(value);
+
+    final parsed = Uri.tryParse(value);
+    if (parsed != null && parsed.hasScheme && parsed.scheme.isNotEmpty) {
+      if (parsed.scheme != 'file') {
+        return null;
+      }
+      try {
+        value = parsed.toFilePath(windows: Platform.isWindows);
+      } catch (_) {
+        return null;
+      }
+    }
+    if (value.isEmpty) return null;
+    return p.normalize(p.absolute(value));
+  }
+
+  static String _expandHomePrefix(String value) {
+    if (!value.startsWith('~')) return value;
+    final home =
+        Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
+    if (home == null || home.trim().isEmpty) return value;
+    if (value == '~') return home;
+    if (value.startsWith('~/') || value.startsWith(r'~\')) {
+      return p.join(home, value.substring(2));
+    }
+    return value;
+  }
 
   Future<Map<String, dynamic>> createWorkspace({
     String? label,
@@ -55,7 +133,6 @@ class DatasetWorkspaceStore {
     await workspaceDir.create(recursive: true);
     await _artifactsDir(workspaceId).create(recursive: true);
     await _snapshotsDir(workspaceId).create(recursive: true);
-    await _lhotseDir(workspaceId).create(recursive: true);
     await _operationsFile(workspaceId).writeAsString('');
 
     final now = _nowIsoUtc();
@@ -73,7 +150,6 @@ class DatasetWorkspaceStore {
       'operation_count': 0,
       'artifact_count': 0,
       'snapshot_count': 0,
-      'lhotse_manifest_count': 0,
       'path': workspaceDir.path,
     };
     await _writeManifest(workspaceId, manifest);
@@ -233,7 +309,6 @@ class DatasetWorkspaceStore {
     required String name,
     required List<dynamic> rows,
     bool overwrite = false,
-    bool syncLhotseCuts = true,
     String recordKeyField = 'record_key',
   }) async {
     await _requireWorkspaceExists(workspaceId);
@@ -242,9 +317,14 @@ class DatasetWorkspaceStore {
     await snapshotDir.create(recursive: true);
     final rowsPath = p.join(snapshotDir.path, '$sanitized.jsonl');
     final metaPath = p.join(snapshotDir.path, '$sanitized.meta.json');
+    final parquetPath = p.join(snapshotDir.path, '$sanitized.parquet');
     final rowsFile = File(rowsPath);
     final metaFile = File(metaPath);
-    if (!overwrite && (await rowsFile.exists() || await metaFile.exists())) {
+    final parquetFile = File(parquetPath);
+    if (!overwrite &&
+        (await rowsFile.exists() ||
+            await metaFile.exists() ||
+            await parquetFile.exists())) {
       throw FormatException('Snapshot already exists: $sanitized');
     }
 
@@ -269,25 +349,19 @@ class DatasetWorkspaceStore {
       'created_at': _nowIsoUtc(),
     };
 
-    if (syncLhotseCuts) {
-      final lhotseResult = await _lhotse.writeEntries(
-        input: _lhotseDir(workspaceId).path,
-        manifest: 'cuts',
-        entries: _lhotse.rowsToCuts(
-          rows,
-          recordKeyField: recordKeyField,
-          cutPrefix: sanitized,
-        ),
-        overwrite: true,
-      );
-      metadata['lhotse_cuts_path'] = lhotseResult['path'];
-      metadata['lhotse_cuts_rows'] = lhotseResult['rows'];
-    }
-
     await metaFile.writeAsString(
       const JsonEncoder.withIndent('  ').convert(metadata),
       flush: true,
     );
+
+    final persistedParquetPath = await _persistSnapshotParquet(
+      rowsPath: rowsPath,
+      parquetPath: parquetPath,
+      sourceRows: rows,
+    );
+    if (persistedParquetPath != null) {
+      metadata['parquet_path'] = persistedParquetPath;
+    }
 
     final manifest = await _refreshManifestCounts(workspaceId);
     return {
@@ -321,81 +395,21 @@ class DatasetWorkspaceStore {
     };
   }
 
-  Future<Map<String, dynamic>> describeLhotseManifests({
+  Future<Map<String, dynamic>> getSnapshot({
     required String workspaceId,
+    required String name,
   }) async {
     await _requireWorkspaceExists(workspaceId);
-    final source = await _lhotse.loadSource(_lhotseDir(workspaceId).path);
-    final manifest = await _refreshManifestCounts(workspaceId);
-    return {
-      'workspace_id': workspaceId,
-      ...source,
-      'lhotse_manifest_count': manifest['lhotse_manifest_count'],
-    };
-  }
-
-  Future<Map<String, dynamic>> listLhotseManifestEntries({
-    required String workspaceId,
-    required String manifest,
-    int offset = 0,
-    int length = defaultPageLength,
-  }) async {
-    _validatePage(offset: offset, length: length);
-    await _requireWorkspaceExists(workspaceId);
-    final listed = await _lhotse.listEntries(
-      input: _lhotseDir(workspaceId).path,
-      manifest: manifest,
-      offset: offset,
-      length: length,
-    );
-    return {
-      'workspace_id': workspaceId,
-      ...listed,
-    };
-  }
-
-  Future<Map<String, dynamic>> saveLhotseManifest({
-    required String workspaceId,
-    required String manifest,
-    required List<dynamic> entries,
-    bool overwrite = false,
-    bool compressed = false,
-  }) async {
-    await _requireWorkspaceExists(workspaceId);
-    final saved = await _lhotse.writeEntries(
-      input: _lhotseDir(workspaceId).path,
-      manifest: manifest,
-      entries: entries,
-      overwrite: overwrite,
-      compressed: compressed,
-    );
-    final refreshed = await _refreshManifestCounts(workspaceId);
-    return {
-      'workspace_id': workspaceId,
-      ...saved,
-      'lhotse_manifest_count': refreshed['lhotse_manifest_count'],
-    };
-  }
-
-  Future<Map<String, dynamic>> appendLhotseManifestEntries({
-    required String workspaceId,
-    required String manifest,
-    required List<dynamic> entries,
-    bool createIfMissing = true,
-  }) async {
-    await _requireWorkspaceExists(workspaceId);
-    final appended = await _lhotse.appendEntries(
-      input: _lhotseDir(workspaceId).path,
-      manifest: manifest,
-      entries: entries,
-      createIfMissing: createIfMissing,
-    );
-    final refreshed = await _refreshManifestCounts(workspaceId);
-    return {
-      'workspace_id': workspaceId,
-      ...appended,
-      'lhotse_manifest_count': refreshed['lhotse_manifest_count'],
-    };
+    final all = await listSnapshots(workspaceId: workspaceId);
+    final snapshots = all['snapshots'] as List<dynamic>;
+    final match = snapshots.whereType<Map<String, dynamic>>().firstWhere(
+          (entry) => _asString(entry['name']) == name,
+          orElse: () => <String, dynamic>{},
+        );
+    if (match.isEmpty) {
+      throw FormatException('Snapshot not found: $name');
+    }
+    return match;
   }
 
   Future<Map<String, dynamic>> applyOperations({
@@ -592,9 +606,6 @@ class DatasetWorkspaceStore {
       _snapshotsDir(workspaceId),
       extension: '.meta.json',
     );
-    manifest['lhotse_manifest_count'] = await _countLhotseManifestFiles(
-      _lhotseDir(workspaceId),
-    );
     manifest['updated_at'] = _nowIsoUtc();
     await _writeManifest(workspaceId, manifest);
     return manifest;
@@ -697,24 +708,6 @@ class DatasetWorkspaceStore {
     return count;
   }
 
-  Future<int> _countLhotseManifestFiles(Directory dir) async {
-    if (!await dir.exists()) return 0;
-    var count = 0;
-    await for (final entity in dir.list(followLinks: false)) {
-      if (entity is! File) continue;
-      final name = p.basename(entity.path).toLowerCase();
-      if (name == 'recordings.jsonl' ||
-          name == 'recordings.jsonl.gz' ||
-          name == 'supervisions.jsonl' ||
-          name == 'supervisions.jsonl.gz' ||
-          name == 'cuts.jsonl' ||
-          name == 'cuts.jsonl.gz') {
-        count++;
-      }
-    }
-    return count;
-  }
-
   void _validatePage({
     required int offset,
     required int length,
@@ -801,6 +794,32 @@ class DatasetWorkspaceStore {
   Directory _snapshotsDir(String workspaceId) =>
       Directory(p.join(_workspaceDir(workspaceId).path, 'snapshots'));
 
-  Directory _lhotseDir(String workspaceId) =>
-      Directory(p.join(_workspaceDir(workspaceId).path, 'lhotse'));
+  Future<String?> _persistSnapshotParquet({
+    required String rowsPath,
+    required String parquetPath,
+    required List<dynamic> sourceRows,
+  }) async {
+    if (sourceRows.isEmpty) {
+      return null;
+    }
+    try {
+      final duckdb = _duckdb ??= DuckDbParquetService();
+      await duckdb.exportJsonlToParquet(
+        jsonlPath: rowsPath,
+        parquetPath: parquetPath,
+      );
+      return parquetPath;
+    } catch (error) {
+      AppLogger.warn(
+        'Snapshot parquet export failed (fallback to jsonl only): $error',
+        tag: 'dataset-workspace',
+      );
+      try {
+        await File(parquetPath).delete();
+      } catch (_) {
+        // Ignore best-effort cleanup failure for optional parquet output.
+      }
+      return null;
+    }
+  }
 }

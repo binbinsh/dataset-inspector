@@ -24,6 +24,6 @@ void main() {
       ),
     );
 
-    expect(find.text('Dataset Inspector'), findsOneWidget);
+    expect(find.text('Items'), findsOneWidget);
   });
 }

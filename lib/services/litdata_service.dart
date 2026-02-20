@@ -214,7 +214,7 @@ class LitDataService {
       rawChunks = parsed.chunks.where((chunk) => selected.contains(chunk.filename)).toList();
     }
 
-    rootDir ??= Directory.current;
+    final resolvedRootDir = rootDir ?? Directory.current;
 
     final covered = rawChunks.map((c) => c.filename).toSet();
     for (final entry in nameToPath.entries) {
@@ -249,7 +249,7 @@ class LitDataService {
     };
 
     final chunks = rawChunks.map((chunk) {
-      final path = nameToPath[chunk.filename] ?? File('${rootDir!.path}/${chunk.filename}');
+      final path = nameToPath[chunk.filename] ?? File('${resolvedRootDir.path}/${chunk.filename}');
       return ChunkSummary(
         filename: chunk.filename,
         path: path.path,
@@ -262,7 +262,7 @@ class LitDataService {
 
     return IndexSummary(
       indexPath: resolvedIndexPath.path,
-      rootDir: rootDir!.path,
+      rootDir: resolvedRootDir.path,
       dataFormat: dataFormat,
       compression: compression,
       chunkSize: chunkSize,
@@ -319,6 +319,72 @@ class LitDataService {
         ));
       }
       return items;
+    } finally {
+      await access.close();
+    }
+  }
+
+  Future<ItemPage> listChunkItemsPaged(
+    String indexPath,
+    String chunkFilename, {
+    int offset = 0,
+    int length = 200,
+  }) async {
+    final parsed = await _parseIndex(File(indexPath));
+    final access = await _loadChunkAccess(parsed, chunkFilename);
+    try {
+      final formatLen = parsed.config.dataFormat?.length ?? 0;
+      final headerLen = formatLen * 4;
+      final numBuf = await access.readExactAt(0, 4);
+      final numItems = _readLeU32(numBuf);
+
+      final safeLength = length < 1 ? 1 : length;
+      final start = offset.clamp(0, numItems).toInt();
+      final end = (start + safeLength).clamp(0, numItems).toInt();
+
+      if (start >= end) {
+        return ItemPage(
+          offset: start,
+          length: safeLength,
+          items: const <ItemMeta>[],
+          partial: start < numItems,
+          numItemsTotal: numItems,
+        );
+      }
+
+      final offsets = await _readOffsetsRange(access, start, end);
+      final items = <ItemMeta>[];
+      for (var itemIdx = start; itemIdx < end; itemIdx += 1) {
+        final localIndex = itemIdx - start;
+        final startOffset = offsets[localIndex];
+        final endOffset = offsets[localIndex + 1];
+        if (endOffset < startOffset) {
+          throw const FormatException('Malformed chunk');
+        }
+        final sizes = <int>[];
+        if (headerLen > 0) {
+          final head = await access.readExactAt(startOffset, headerLen);
+          for (var j = 0; j < formatLen; j += 1) {
+            final pos = j * 4;
+            sizes.add(_readLeU32(head.sublist(pos, pos + 4)));
+          }
+        }
+        items.add(ItemMeta(
+          itemIndex: itemIdx,
+          totalBytes: endOffset - startOffset,
+          fields: List.generate(sizes.length, (idx) {
+            return FieldMeta(fieldIndex: idx, size: sizes[idx]);
+          }),
+        ));
+      }
+
+      return ItemPage(
+        offset: start,
+        length: safeLength,
+        items: items,
+        partial: end < numItems,
+        numItemsTotal: numItems,
+      );
     } finally {
       await access.close();
     }
@@ -678,6 +744,25 @@ class LitDataService {
       offsets.add(_readLeU32(offsetsBuf.sublist(i, i + 4)));
     }
     return (numItems, offsets);
+  }
+
+  Future<List<int>> _readOffsetsRange(
+    _ChunkAccess access,
+    int start,
+    int endExclusive,
+  ) async {
+    if (endExclusive < start) return const <int>[];
+    final count = endExclusive - start + 1;
+    final offsetStart = 4 + (start * 4);
+    final bytes = await access.readExactAt(offsetStart, count * 4);
+    if (bytes.length != count * 4) {
+      throw const FormatException('Malformed chunk');
+    }
+    final offsets = <int>[];
+    for (var i = 0; i < bytes.length; i += 4) {
+      offsets.add(_readLeU32(bytes.sublist(i, i + 4)));
+    }
+    return offsets;
   }
 
   Future<(Uint8List, int)> _readFieldBytes(

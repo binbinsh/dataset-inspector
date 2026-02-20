@@ -277,10 +277,10 @@ class ParquetFileMetadata {
 
 /// Thrift Compact Protocol reader for parsing Parquet metadata.
 class _ThriftCompactReader {
-  _ThriftCompactReader(this.data, [this.offset = 0]);
+  _ThriftCompactReader(this.data);
 
   final Uint8List data;
-  int offset;
+  int offset = 0;
 
   int get remaining => data.length - offset;
 

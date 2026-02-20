@@ -4,7 +4,6 @@ import '../models/webdataset.dart';
 import '../models/zenodo.dart';
 import 'huggingface_service.dart';
 import 'litdata_service.dart';
-import 'lhotse_service.dart';
 import 'mosaicml_service.dart';
 import 'webdataset_service.dart';
 import 'zenodo_service.dart';
@@ -13,7 +12,6 @@ enum DatasetKind {
   litdata,
   mds,
   webdataset,
-  lhotse,
   huggingface,
   zenodo,
 }
@@ -46,7 +44,6 @@ enum DatasetSourceKind {
   litdataChunks,
   mdsIndex,
   webdatasetDir,
-  lhotse,
   unknown,
 }
 
@@ -102,12 +99,6 @@ class DatasetCapabilityMatrix {
         DatasetCapability.prepareAudio,
         DatasetCapability.prepareFile,
       },
-      DatasetKind.lhotse: {
-        DatasetCapability.workspace,
-        DatasetCapability.detectSource,
-        DatasetCapability.loadSource,
-        DatasetCapability.listRecords,
-      },
       DatasetKind.huggingface: {
         DatasetCapability.workspace,
         DatasetCapability.detectSource,
@@ -121,6 +112,7 @@ class DatasetCapabilityMatrix {
         DatasetCapability.detectSource,
         DatasetCapability.loadSource,
         DatasetCapability.listContainers,
+        DatasetCapability.listRecords,
         DatasetCapability.previewFile,
         DatasetCapability.openFile,
         DatasetCapability.prepareFileMedia,
@@ -169,14 +161,12 @@ class DatasetKernel {
     LitDataService? litdata,
     MosaicmlService? mosaicml,
     WebdatasetService? webdataset,
-    LhotseService? lhotse,
     HuggingfaceService? huggingface,
     ZenodoService? zenodo,
     DatasetCapabilityMatrix? capabilityMatrix,
   })  : _litdata = litdata ?? LitDataService(),
         _mosaicml = mosaicml ?? MosaicmlService(),
         _webdataset = webdataset ?? WebdatasetService(),
-        _lhotse = lhotse ?? LhotseService(),
         _huggingface = huggingface ?? HuggingfaceService(),
         _zenodo = zenodo ?? ZenodoService(),
         capabilities = capabilityMatrix ?? DatasetCapabilityMatrix.defaults();
@@ -184,7 +174,6 @@ class DatasetKernel {
   final LitDataService _litdata;
   final MosaicmlService _mosaicml;
   final WebdatasetService _webdataset;
-  final LhotseService _lhotse;
   final HuggingfaceService _huggingface;
   final ZenodoService _zenodo;
   final DatasetCapabilityMatrix capabilities;
@@ -243,15 +232,6 @@ class DatasetKernel {
       _requireCapability(DatasetKind.zenodo, DatasetCapability.detectSource);
       return const DatasetSourceDetection(kind: DatasetSourceKind.zenodo);
     }
-    final isLhotse = await _lhotse.detectLocalSource(trimmed);
-    if (isLhotse) {
-      _requireCapability(DatasetKind.lhotse, DatasetCapability.detectSource);
-      return DatasetSourceDetection(
-        kind: DatasetSourceKind.lhotse,
-        resolvedPath: trimmed,
-      );
-    }
-
     try {
       final detected = await _webdataset.detectLocalDataset(trimmed);
       switch (detected.kind) {
@@ -319,6 +299,21 @@ class DatasetKernel {
       String indexPath, String chunkFilename) {
     _requireCapability(DatasetKind.litdata, DatasetCapability.listRecords);
     return _litdata.listChunkItems(indexPath, chunkFilename);
+  }
+
+  Future<ItemPage> listLitdataChunkItemsPaged({
+    required String indexPath,
+    required String chunkFilename,
+    int? offset,
+    int? length,
+  }) {
+    _requireCapability(DatasetKind.litdata, DatasetCapability.listRecords);
+    return _litdata.listChunkItemsPaged(
+      indexPath,
+      chunkFilename,
+      offset: offset ?? 0,
+      length: length ?? 200,
+    );
   }
 
   Future<FieldPreview> peekLitdataField({
@@ -395,6 +390,21 @@ class DatasetKernel {
     _requireCapability(DatasetKind.mds, DatasetCapability.listRecords);
     return _mosaicml.listSamples(
         indexPath: indexPath, shardFilename: shardFilename);
+  }
+
+  Future<ItemPage> listMdsSamplesPaged({
+    required String indexPath,
+    required String shardFilename,
+    int? offset,
+    int? length,
+  }) {
+    _requireCapability(DatasetKind.mds, DatasetCapability.listRecords);
+    return _mosaicml.listSamplesPaged(
+      indexPath: indexPath,
+      shardFilename: shardFilename,
+      offset: offset ?? 0,
+      length: length ?? 200,
+    );
   }
 
   Future<FieldPreview> peekMdsField({
@@ -542,6 +552,7 @@ class DatasetKernel {
     int? offset,
     int? length,
     String? token,
+    bool useStreamingApi = false,
   }) {
     _requireCapability(DatasetKind.huggingface, DatasetCapability.loadSource);
     return _huggingface.datasetPreview(
@@ -551,64 +562,22 @@ class DatasetKernel {
       offset: offset,
       length: length,
       token: token,
+      useStreamingApi: useStreamingApi,
     );
   }
 
-  Future<Map<String, dynamic>> loadLhotseSource(
-    String input, {
-    int sampleRowsPerManifest = 16,
-  }) {
-    _requireCapability(DatasetKind.lhotse, DatasetCapability.loadSource);
-    return _lhotse.loadSource(
-      input,
-      sampleRowsPerManifest: sampleRowsPerManifest,
-    );
-  }
-
-  Future<Map<String, dynamic>> listLhotseEntries({
+  Future<List<String>> listHuggingfaceParquetFiles({
     required String input,
-    required String manifest,
-    int? offset,
-    int? length,
+    String? config,
+    String? split,
+    String? token,
   }) {
-    _requireCapability(DatasetKind.lhotse, DatasetCapability.listRecords);
-    return _lhotse.listEntries(
+    _requireCapability(DatasetKind.huggingface, DatasetCapability.loadSource);
+    return _huggingface.listParquetFiles(
       input: input,
-      manifest: manifest,
-      offset: offset ?? 0,
-      length: length ?? LhotseService.defaultPageLength,
-    );
-  }
-
-  Future<Map<String, dynamic>> writeLhotseEntries({
-    required String input,
-    required String manifest,
-    required List<dynamic> entries,
-    bool overwrite = false,
-    bool compressed = false,
-  }) {
-    _requireCapability(DatasetKind.lhotse, DatasetCapability.workspace);
-    return _lhotse.writeEntries(
-      input: input,
-      manifest: manifest,
-      entries: entries,
-      overwrite: overwrite,
-      compressed: compressed,
-    );
-  }
-
-  Future<Map<String, dynamic>> appendLhotseEntries({
-    required String input,
-    required String manifest,
-    required List<dynamic> entries,
-    bool createIfMissing = true,
-  }) {
-    _requireCapability(DatasetKind.lhotse, DatasetCapability.workspace);
-    return _lhotse.appendEntries(
-      input: input,
-      manifest: manifest,
-      entries: entries,
-      createIfMissing: createIfMissing,
+      config: config,
+      split: split,
+      token: token,
     );
   }
 

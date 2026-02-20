@@ -1,4 +1,4 @@
-platform :osx, '10.15'
+platform :osx, '15.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -38,6 +38,21 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_macos_build_settings(target)
+    target.build_configurations.each do |config|
+      # Match zstd binary minimum macOS version (15.0+) to avoid linker version warnings.
+      config.build_settings['MACOSX_DEPLOYMENT_TARGET'] = '15.0'
+
+      if target.name == 'video_player_avfoundation'
+        # The plugin still references AVKeyValueStatus which is deprecated with modern SDKs.
+        # Suppress this dependency warning without changing plugin code.
+        other_cflags = config.build_settings['OTHER_CFLAGS']
+        config.build_settings['OTHER_CFLAGS'] = if other_cflags
+          "#{other_cflags} -Wno-deprecated-declarations"
+        else
+          '$(inherited) -Wno-deprecated-declarations'
+        end
+      end
+    end
   end
 
   frameworks_script = File.join(

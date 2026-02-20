@@ -26,6 +26,8 @@
 	<string>$(PRODUCT_COPYRIGHT)</string>
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Dataset Inspector needs local network access to connect to intranet SMB and SSH hosts.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

@@ -64,7 +64,7 @@ cd ..
 
 # Prepare httpfs extension sources
 HTTPFS_DIR="$BUILD_DIR/duckdb/extension/httpfs"
-HTTPFS_SRC="${HTTPFS_SRC:-$PROJECT_DIR/vendor/duckdb-httpfs}"
+HTTPFS_SRC="${HTTPFS_SRC:-$PROJECT_DIR/third_party/duckdb-httpfs}"
 
 if [ -d "$HTTPFS_SRC" ]; then
     echo "Using httpfs source from: $HTTPFS_SRC"

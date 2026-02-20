@@ -103,6 +103,30 @@ class WebdatasetService {
     );
   }
 
+  Future<WdsSampleListResponse> listSamplesFromStream({
+    required Stream<List<int>> shardStream,
+    required String shardFilename,
+    int? offset,
+    int? length,
+    bool? computeTotal,
+  }) async {
+    final trimmed = shardFilename.trim();
+    if (trimmed.isEmpty) throw const FormatException('shard filename is empty');
+    if (!_looksLikeWdsShard(trimmed)) {
+      throw const FormatException('file is not a supported WebDataset shard');
+    }
+    final pageOffset = offset ?? 0;
+    final pageLength = (length ?? 200).clamp(1, _maxListedSamples).toInt();
+    final wantTotal = computeTotal ?? false;
+    final stream = _openShardStreamFromStream(shardStream, trimmed);
+    return _listSamplesFromOpenShardStream(
+      stream: stream,
+      offset: pageOffset,
+      length: pageLength,
+      computeTotal: wantTotal,
+    );
+  }
+
   Future<FieldPreview> peekMember({
     required String dirPath,
     required String shardFilename,
@@ -118,6 +142,30 @@ class WebdatasetService {
 
     final (data, size) =
         await _readMemberBytes(shardPath, normalized, _previewBytes);
+    final previewText = previewUtf8Text(data);
+    final guessedExt = _guessExtFromMember(normalized, data);
+    return FieldPreview(
+      previewText: previewText,
+      hexSnippet: hexSnippet(data),
+      guessedExt: guessedExt,
+      isBinary: previewText == null,
+      size: size,
+    );
+  }
+
+  Future<FieldPreview> peekMemberFromStream({
+    required Stream<List<int>> shardStream,
+    required String shardFilename,
+    required String memberPath,
+  }) async {
+    final normalized = normalizeTarPath(memberPath);
+    if (normalized.isEmpty) throw const FormatException('member path is empty');
+    final (data, size) = await _readMemberBytesFromStream(
+      shardStream: shardStream,
+      shardFilename: shardFilename,
+      memberPath: normalized,
+      limit: _previewBytes,
+    );
     final previewText = previewUtf8Text(data);
     final guessedExt = _guessExtFromMember(normalized, data);
     return FieldPreview(
@@ -147,7 +195,7 @@ class WebdatasetService {
     var ext = _guessExtFromMember(normalized, data) ?? 'bin';
     final tempDir = Directory('${Directory.systemTemp.path}/dataset-inspector');
     await tempDir.create(recursive: true);
-    final baseName = _sanitize('${shardFilename}-${normalized}');
+    final baseName = _sanitize('$shardFilename-$normalized');
     var out = File('${tempDir.path}/$baseName.$ext');
     await out.writeAsBytes(data, flush: true);
 
@@ -158,7 +206,67 @@ class WebdatasetService {
         out = wavOut;
         ext = 'wav';
       } on Exception catch (err) {
-        final base = '${out.path} (${size} bytes)';
+        final base = '${out.path} ($size bytes)';
+        return OpenLeafResponse(
+          path: out.path,
+          size: size,
+          ext: ext,
+          opened: false,
+          needsOpener: true,
+          message: '$base · sph decode failed: $err · choose an app to open it',
+        );
+      }
+    }
+
+    final result = await _openWith.openFile(out.path, appPath: openerAppPath);
+    final needsOpener = !result.opened;
+    final message = result.opened
+        ? 'Opened ${out.path} ($size bytes)'
+        : 'Could not open ${out.path} · ${result.error ?? 'unknown error'}';
+
+    return OpenLeafResponse(
+      path: out.path,
+      size: size,
+      ext: ext,
+      opened: result.opened,
+      needsOpener: needsOpener,
+      message: message,
+    );
+  }
+
+  Future<OpenLeafResponse> openMemberFromStream({
+    required Stream<List<int>> shardStream,
+    required String shardFilename,
+    required String memberPath,
+    String? openerAppPath,
+  }) async {
+    final normalized = normalizeTarPath(memberPath);
+    if (normalized.isEmpty) throw const FormatException('member path is empty');
+    final (data, size) = await _readMemberBytesFromStream(
+      shardStream: shardStream,
+      shardFilename: shardFilename,
+      memberPath: normalized,
+      limit: null,
+    );
+    if (size > _maxOpenBytes) {
+      throw FormatException('member too large to open ($size bytes)');
+    }
+
+    var ext = _guessExtFromMember(normalized, data) ?? 'bin';
+    final tempDir = Directory('${Directory.systemTemp.path}/dataset-inspector');
+    await tempDir.create(recursive: true);
+    final baseName = _sanitize('$shardFilename-$normalized');
+    var out = File('${tempDir.path}/$baseName.$ext');
+    await out.writeAsBytes(data, flush: true);
+
+    if (ext == 'sph') {
+      final wavOut = File('${tempDir.path}/$baseName.wav');
+      try {
+        await writeSphereAsWav(data, wavOut);
+        out = wavOut;
+        ext = 'wav';
+      } on Exception catch (err) {
+        final base = '${out.path} ($size bytes)';
         return OpenLeafResponse(
           path: out.path,
           size: size,
@@ -199,6 +307,25 @@ class WebdatasetService {
     );
   }
 
+  Future<PreparedMediaResponse> prepareAudioPreviewFromStream({
+    required Stream<List<int>> shardStream,
+    required String shardFilename,
+    required String memberPath,
+  }) async {
+    var (data, _) = await _readMemberBytesFromStream(
+      shardStream: shardStream,
+      shardFilename: shardFilename,
+      memberPath: memberPath,
+      limit: null,
+    );
+    var ext = _guessExtFromMember(memberPath, data) ?? 'bin';
+    if (ext == 'sph') {
+      data = await decodeSphereToWavWithFallback(data);
+      ext = 'wav';
+    }
+    return PreparedMediaResponse(bytes: data, size: data.length, ext: ext);
+  }
+
   Future<PreparedFileResponse> prepareMemberFile({
     required String dirPath,
     required String shardFilename,
@@ -210,6 +337,33 @@ class WebdatasetService {
       memberPath: memberPath,
       convertSphereToWav: false,
     );
+  }
+
+  Future<PreparedFileResponse> prepareMemberFileFromStream({
+    required Stream<List<int>> shardStream,
+    required String shardFilename,
+    required String memberPath,
+  }) async {
+    final normalized = normalizeTarPath(memberPath);
+    if (normalized.isEmpty) throw const FormatException('member path is empty');
+    final (data, size) = await _readMemberBytesFromStream(
+      shardStream: shardStream,
+      shardFilename: shardFilename,
+      memberPath: normalized,
+      limit: null,
+    );
+    if (size > _maxOpenBytes) {
+      throw FormatException('member too large to preview ($size bytes)');
+    }
+
+    var ext = _guessExtFromMember(normalized, data) ?? 'bin';
+    final tempDir = Directory('${Directory.systemTemp.path}/dataset-inspector');
+    await tempDir.create(recursive: true);
+    final baseName = _sanitize('$shardFilename-$normalized');
+    var out = File('${tempDir.path}/$baseName.$ext');
+    await out.writeAsBytes(data, flush: true);
+
+    return PreparedFileResponse(path: out.path, size: size, ext: ext);
   }
 
   Future<PreparedFileResponse> _prepareMemberFile({
@@ -230,7 +384,7 @@ class WebdatasetService {
     var ext = _guessExtFromMember(normalized, data) ?? 'bin';
     final tempDir = Directory('${Directory.systemTemp.path}/dataset-inspector');
     await tempDir.create(recursive: true);
-    final baseName = _sanitize('${shardFilename}-${normalized}');
+    final baseName = _sanitize('$shardFilename-$normalized');
     var out = File('${tempDir.path}/$baseName.$ext');
     await out.writeAsBytes(data, flush: true);
 
@@ -567,6 +721,25 @@ class WebdatasetService {
     return shardPath.openRead();
   }
 
+  Stream<List<int>> _openShardStreamFromStream(
+    Stream<List<int>> source,
+    String shardFilename,
+  ) {
+    final filename = shardFilename.toLowerCase();
+    if (filename.endsWith('.tar')) {
+      return source;
+    }
+    if (filename.endsWith('.tar.gz') || filename.endsWith('.tgz')) {
+      return gzip.decoder.bind(source);
+    }
+    if (filename.endsWith('.tar.zst') || filename.endsWith('.tar.zstd')) {
+      throw const FormatException(
+        'Streaming .tar.zst/.tar.zstd shards is not supported yet.',
+      );
+    }
+    return source;
+  }
+
   File? _resolveTarFile(File shardPath) {
     final filename = shardPath.uri.pathSegments.last.toLowerCase();
     if (filename.endsWith('.tar')) {
@@ -628,6 +801,128 @@ class WebdatasetService {
     }
 
     throw FormatException('member not found in shard: $memberPath');
+  }
+
+  Future<(Uint8List, int)> _readMemberBytesFromStream({
+    required Stream<List<int>> shardStream,
+    required String shardFilename,
+    required String memberPath,
+    required int? limit,
+  }) async {
+    final normalized = normalizeTarPath(memberPath);
+    if (normalized.isEmpty) throw const FormatException('member path is empty');
+    final stream = _openShardStreamFromStream(shardStream, shardFilename);
+    final readerHandle = openTarStreamReader(stream);
+    final tar = createTarStream(readerHandle);
+
+    while (true) {
+      final entry = await tar.nextWithBytes((meta) {
+        if (meta.isDir) return 0;
+        if (meta.path != normalized) return 0;
+        if (limit == null) return meta.size;
+        return meta.size < limit ? meta.size : limit;
+      });
+      if (entry == null) break;
+      if (entry.meta.isDir || entry.meta.path != normalized) continue;
+      final bytes = entry.bytes ?? Uint8List(0);
+      return (bytes, entry.meta.size);
+    }
+    throw FormatException('member not found in shard: $normalized');
+  }
+
+  Future<WdsSampleListResponse> _listSamplesFromOpenShardStream({
+    required Stream<List<int>> stream,
+    required int offset,
+    required int length,
+    required bool computeTotal,
+  }) async {
+    final tar = createTarStream(openTarStreamReader(stream));
+    final pageOffset = offset < 0 ? 0 : offset;
+    final pageLength = length.clamp(1, _maxListedSamples).toInt();
+    final targetEnd = pageOffset + pageLength;
+    final pageSamples = <WdsSampleInfo>[];
+
+    String? currentKey;
+    final currentFields = <WdsFieldInfo>[];
+    var currentBytes = 0;
+    var sampleIndex = 0;
+    var done = false;
+    var stoppedEarly = false;
+
+    void flushCurrent() {
+      final keyValue = currentKey;
+      if (keyValue == null) {
+        currentFields.clear();
+        currentBytes = 0;
+        return;
+      }
+      final fields = List<WdsFieldInfo>.from(currentFields);
+      fields.sort((a, b) {
+        final primary = a.name.compareTo(b.name);
+        if (primary != 0) return primary;
+        return a.memberPath.compareTo(b.memberPath);
+      });
+      if (sampleIndex >= pageOffset && pageSamples.length < pageLength) {
+        pageSamples.add(
+          WdsSampleInfo(
+            sampleIndex: sampleIndex,
+            key: keyValue,
+            totalBytes: currentBytes,
+            fields: fields,
+          ),
+        );
+      }
+      sampleIndex += 1;
+      currentFields.clear();
+      currentBytes = 0;
+    }
+
+    while (true) {
+      final entry = await tar.nextWithBytes((_) => 0);
+      if (entry == null) {
+        done = true;
+        break;
+      }
+      if (entry.meta.isDir) continue;
+      final memberPath = entry.meta.path;
+      final (key, fieldName) = _splitSampleKey(memberPath);
+      if (currentKey != null && currentKey != key) {
+        flushCurrent();
+        if (!computeTotal &&
+            sampleIndex >= targetEnd &&
+            pageSamples.length >= pageLength) {
+          stoppedEarly = true;
+          currentKey = null;
+          currentFields.clear();
+          currentBytes = 0;
+          break;
+        }
+      }
+      if (currentKey != key) {
+        currentKey = key;
+      }
+      currentBytes += entry.meta.size;
+      currentFields.add(
+        WdsFieldInfo(
+          name: fieldName,
+          memberPath: memberPath,
+          size: entry.meta.size,
+        ),
+      );
+    }
+
+    if (!stoppedEarly) {
+      flushCurrent();
+    }
+
+    final total = computeTotal && done ? sampleIndex : null;
+    return WdsSampleListResponse(
+      offset: pageOffset,
+      length: pageLength,
+      numSamplesTotal: total,
+      partial: !done,
+      samples: pageSamples,
+    );
   }
 
   Future<(Uint8List, int)> _readMemberBytesAt(
@@ -930,6 +1225,7 @@ class _ShardScanState {
   final List<WdsFieldInfo> _currentFields = [];
   int _currentBytes = 0;
   int currentSampleIndex = 0;
+  Future<void>? _scanFuture;
 
   File? get tarFile => _tarFile;
 
@@ -939,14 +1235,46 @@ class _ShardScanState {
     int? captureStart,
     int? captureEnd,
   }) async {
-    if (done) return;
-    if (!computeTotal && samples.length >= targetCount) return;
+    while (true) {
+      if (done) return;
+      if (!computeTotal && samples.length >= targetCount) return;
 
+      final pendingScan = _scanFuture;
+      if (pendingScan != null) {
+        await pendingScan;
+        continue;
+      }
+
+      final scanRun = _runScan(
+        targetCount,
+        computeTotal,
+        captureStart: captureStart,
+        captureEnd: captureEnd,
+      );
+      _scanFuture = scanRun;
+
+      try {
+        await scanRun;
+      } finally {
+        if (identical(_scanFuture, scanRun)) {
+          _scanFuture = null;
+        }
+      }
+    }
+  }
+
+  Future<void> _runScan(
+    int targetCount,
+    bool computeTotal, {
+    int? captureStart,
+    int? captureEnd,
+  }) async {
     final captureEnabled =
         captureStart != null && captureEnd != null && captureEnd > captureStart;
     final captureStartValue = captureStart ?? 0;
     final captureEndValue = captureEnd ?? 0;
     var stoppedEarly = false;
+
     while (!done) {
       final entry = captureEnabled
           ? await _tar.nextWithBytes((meta) {

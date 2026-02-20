@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
@@ -11,7 +10,8 @@ import '../services/app_logger.dart';
 import '../models/common.dart';
 
 class AudioPreview extends StatefulWidget {
-  const AudioPreview({super.key, this.path, this.bytes, this.label, this.loader})
+  const AudioPreview(
+      {super.key, this.path, this.bytes, this.label, this.loader})
       : assert(path != null || bytes != null || loader != null);
 
   final String? path;
@@ -56,7 +56,7 @@ class _AudioPreviewState extends State<AudioPreview> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.path != widget.path ||
         oldWidget.bytes != widget.bytes ||
-        oldWidget.loader != widget.loader) {
+        oldWidget.label != widget.label) {
       _syncSource();
     }
   }
@@ -91,7 +91,8 @@ class _AudioPreviewState extends State<AudioPreview> {
         _loading = false;
       });
     } catch (err, stack) {
-      AppLogger.error('Audio load failed', tag: 'audio', error: err, stackTrace: stack);
+      AppLogger.error('Audio load failed',
+          tag: 'audio', error: err, stackTrace: stack);
       if (!mounted) return;
       setState(() {
         _loading = false;
@@ -126,7 +127,8 @@ class _AudioPreviewState extends State<AudioPreview> {
       });
       return true;
     } catch (err, stack) {
-      AppLogger.error('Audio load failed', tag: 'audio', error: err, stackTrace: stack);
+      AppLogger.error('Audio load failed',
+          tag: 'audio', error: err, stackTrace: stack);
       if (!mounted) return false;
       setState(() {
         _loading = false;
@@ -191,12 +193,11 @@ class _AudioPreviewState extends State<AudioPreview> {
     if (!await outDir.exists()) {
       await outDir.create(recursive: true);
     }
-    final hash = Object.hashAll(bytes).toUnsigned(20).toRadixString(16).padLeft(5, '0');
+    final uniqueName =
+        '${DateTime.now().microsecondsSinceEpoch}-${bytes.length.toRadixString(16)}';
     final safeExt = ext.isEmpty ? 'bin' : ext;
-    final file = File('${outDir.path}/$hash.$safeExt');
-    if (!await file.exists()) {
-      await file.writeAsBytes(bytes, flush: true);
-    }
+    final file = File('${outDir.path}/$uniqueName.$safeExt');
+    await file.writeAsBytes(bytes, flush: true);
     _tempFilePath = file.path;
     return file.path;
   }
@@ -225,7 +226,8 @@ class _AudioPreviewState extends State<AudioPreview> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const SizedBox(height: 48, child: Center(child: CircularProgressIndicator()));
+      return const SizedBox(
+          height: 48, child: Center(child: CircularProgressIndicator()));
     }
     if (_error != null) {
       return SizedBox(
@@ -236,9 +238,9 @@ class _AudioPreviewState extends State<AudioPreview> {
       );
     }
     if (!_ready) {
-      return const SizedBox(height: 48, child: Center(child: Text('Audio unavailable')));
+      return const SizedBox(
+          height: 48, child: Center(child: Text('Audio unavailable')));
     }
-    final scheme = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
@@ -249,7 +251,9 @@ class _AudioPreviewState extends State<AudioPreview> {
       child: Row(
         children: [
           IconButton.filledTonal(
-            icon: Icon(_playerState == PlayerState.playing ? Icons.pause : Icons.play_arrow),
+            icon: Icon(_playerState == PlayerState.playing
+                ? Icons.pause
+                : Icons.play_arrow),
             onPressed: () async {
               if (_loading || _actionInFlight) return;
               _actionInFlight = true;
@@ -273,18 +277,23 @@ class _AudioPreviewState extends State<AudioPreview> {
                     }
                     if (_shouldUseTempFileForBytes()) {
                       _path = await _writeTempFile(_bytes!, ext);
-                      await _player.play(DeviceFileSource(_path!, mimeType: mimeType));
+                      await _player
+                          .play(DeviceFileSource(_path!, mimeType: mimeType));
                     } else {
-                      await _player.play(BytesSource(_bytes!, mimeType: mimeType));
+                      await _player
+                          .play(BytesSource(_bytes!, mimeType: mimeType));
                     }
                   } else if (_path != null) {
-                    final ext = _ext ?? _normalizeExt(_extFromPath(_path)) ?? '';
+                    final ext =
+                        _ext ?? _normalizeExt(_extFromPath(_path)) ?? '';
                     final mimeType = _mimeTypeForExt(ext);
-                    await _player.play(DeviceFileSource(_path!, mimeType: mimeType));
+                    await _player
+                        .play(DeviceFileSource(_path!, mimeType: mimeType));
                   }
                 }
               } catch (err, stack) {
-                AppLogger.error('Audio play failed', tag: 'audio', error: err, stackTrace: stack);
+                AppLogger.error('Audio play failed',
+                    tag: 'audio', error: err, stackTrace: stack);
                 if (!mounted) return;
                 setState(() {
                   _error = err.toString();
@@ -301,7 +310,8 @@ class _AudioPreviewState extends State<AudioPreview> {
               try {
                 await _player.stop();
               } catch (err, stack) {
-                AppLogger.error('Audio stop failed', tag: 'audio', error: err, stackTrace: stack);
+                AppLogger.error('Audio stop failed',
+                    tag: 'audio', error: err, stackTrace: stack);
               }
             },
           ),

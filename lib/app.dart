@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import 'services/app_menu_bridge.dart';
 import 'state/viewer_state.dart';
+import 'utils/app_fonts.dart';
 import 'widgets/inspector_screen.dart';
 
 class DatasetInspectorApp extends StatelessWidget {
@@ -33,9 +34,10 @@ class DatasetInspectorApp extends StatelessWidget {
       onError: const Color(0xFFFFFFFF),
     );
 
-    final textTheme = GoogleFonts.googleSansTextTheme(
+    final baseTextTheme = GoogleFonts.googleSansTextTheme(
       ThemeData.light().textTheme,
-    ).apply(
+    );
+    final textTheme = AppFonts.applyTitleFont(baseTextTheme).apply(
       displayColor: baseScheme.onSurface,
       bodyColor: baseScheme.onSurface,
     );
@@ -43,7 +45,7 @@ class DatasetInspectorApp extends StatelessWidget {
     final theme = ThemeData(
       colorScheme: baseScheme,
       scaffoldBackgroundColor: baseScheme.surfaceContainerLowest,
-      fontFamily: GoogleFonts.googleSans().fontFamily,
+      fontFamily: AppFonts.sansFamily,
       textTheme: textTheme,
       useMaterial3: true,
       dividerColor: baseScheme.outlineVariant,
@@ -92,7 +94,7 @@ class DatasetInspectorApp extends StatelessWidget {
     return ChangeNotifierProvider(
       create: (_) => ViewerState()..bootstrap(),
       child: MaterialApp(
-        title: 'Dataset Inspector',
+        title: '',
         theme: theme,
         home: const InspectorScreen(),
         debugShowCheckedModeBanner: false,

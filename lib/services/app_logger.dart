@@ -17,22 +17,27 @@ class AppLogger {
 
   static void info(String message, {String tag = 'app'}) {
     if (!_enabled) return;
+    // ignore: avoid_print
     print('[INFO][$tag] $message');
   }
 
   static void warn(String message, {String tag = 'app'}) {
     if (!_enabled) return;
+    // ignore: avoid_print
     print('[WARN][$tag] $message');
   }
 
   static void error(String message,
       {String tag = 'app', Object? error, StackTrace? stackTrace}) {
     if (!_enabled) return;
+    // ignore: avoid_print
     print('[ERROR][$tag] $message');
     if (error != null) {
+      // ignore: avoid_print
       print('error: $error');
     }
     if (stackTrace != null) {
+      // ignore: avoid_print
       print(stackTrace.toString());
     }
   }

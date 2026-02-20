@@ -88,18 +88,12 @@ void main() {
         rows: rows,
       );
       expect(snapshot['snapshot_count'], 1);
-      expect(snapshot['lhotse_cuts_rows'], 1);
+      expect(snapshot['row_count'], 1);
 
       final artifacts = await store.listArtifacts(workspaceId: workspaceId);
       final snapshots = await store.listSnapshots(workspaceId: workspaceId);
       expect(artifacts['total'], 1);
       expect(snapshots['total'], 1);
-
-      final lhotse = await store.listLhotseManifestEntries(
-        workspaceId: workspaceId,
-        manifest: 'cuts',
-      );
-      expect(lhotse['total'], 1);
     });
   });
 }

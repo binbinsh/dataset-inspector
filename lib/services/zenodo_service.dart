@@ -735,10 +735,8 @@ class _TarScanCache {
 
 class _TarScanState {
   _TarScanState({required http.Client client, required this.url, required this.filename})
-      : _client = client,
-        _tar = createTarStream(openTarStreamReader(_openRemoteTarStreamStatic(client, url, filename)));
+      : _tar = createTarStream(openTarStreamReader(_openRemoteTarStreamStatic(client, url, filename)));
 
-  final http.Client _client;
   final Uri url;
   final String filename;
   final TarStreamReader _tar;

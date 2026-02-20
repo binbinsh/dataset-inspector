@@ -32,6 +32,9 @@ class HfDatasetPreview {
     required this.partial,
     required this.features,
     required this.rows,
+    required this.featureOffset,
+    required this.featureCount,
+    required this.totalFeatureCount,
   });
 
   final String dataset;
@@ -44,4 +47,7 @@ class HfDatasetPreview {
   final bool partial;
   final List<HfFeature> features;
   final List<dynamic> rows;
+  final int featureOffset;
+  final int featureCount;
+  final int totalFeatureCount;
 }

@@ -30,7 +30,8 @@ class HuggingfaceService {
   HfParquetApi? _parquetApi;
   DuckDbParquetService? _duckDb;
 
-  HfParquetApi get _getParquetApi => _parquetApi ??= HfParquetApi(client: _client);
+  HfParquetApi get _getParquetApi =>
+      _parquetApi ??= HfParquetApi(client: _client);
   DuckDbParquetService get _getDuckDb => _duckDb ??= DuckDbParquetService();
 
   /// Pre-initialize DuckDB in background (call on app start)
@@ -50,14 +51,22 @@ class HuggingfaceService {
     int? offset,
     int? length,
     String? token,
+    int? maxFeatureCount,
+    int? featureOffset,
+    bool useStreamingApi = false,
   }) async {
     var dataset = _extractRepoId(input);
     final pageOffset = offset ?? 0;
     final pageLength = (length ?? _defaultRows).clamp(1, _maxRows).toInt();
     final tokenValue = token?.trim();
 
-    final userConfig = config?.trim().isNotEmpty == true ? config!.trim() : null;
+    final userConfig =
+        config?.trim().isNotEmpty == true ? config!.trim() : null;
     final userSplit = split?.trim().isNotEmpty == true ? split!.trim() : null;
+    final requestedFeatureCount =
+        maxFeatureCount == null || maxFeatureCount <= 0
+            ? null
+            : maxFeatureCount;
 
     AppLogger.info(
       'preview input="$input" dataset="$dataset" config=${userConfig ?? "-"} split=${userSplit ?? "-"} '
@@ -74,6 +83,9 @@ class HuggingfaceService {
           pageOffset,
           pageLength,
           tokenValue,
+          featureOffset: featureOffset,
+          maxFeatureCount: requestedFeatureCount,
+          useStreamingApi: useStreamingApi,
         );
         return HfDatasetPreview(
           dataset: dataset,
@@ -86,6 +98,9 @@ class HuggingfaceService {
           partial: rowsResp.partial,
           features: rowsResp.features,
           rows: rowsResp.rows,
+          featureOffset: rowsResp.featureOffset,
+          featureCount: rowsResp.featureCount,
+          totalFeatureCount: rowsResp.totalFeatureCount,
         );
       } on _HfException catch (err) {
         if (!err.isNotFound) rethrow;
@@ -97,10 +112,12 @@ class HuggingfaceService {
         dataset = splitsResult.$1;
         final configsMap = splitsResult.$2;
         if (configsMap.isEmpty) {
-          throw FormatException('No supported splits found for dataset $dataset.');
+          throw FormatException(
+              'No supported splits found for dataset $dataset.');
         }
-        final selectedConfig =
-            configsMap.containsKey(userConfig) ? userConfig : configsMap.keys.first;
+        final selectedConfig = configsMap.containsKey(userConfig)
+            ? userConfig
+            : configsMap.keys.first;
         final splitsForConfig = configsMap[selectedConfig]!;
         final selectedSplit = splitsForConfig.contains(userSplit)
             ? userSplit
@@ -113,10 +130,14 @@ class HuggingfaceService {
           pageOffset,
           pageLength,
           tokenValue,
+          featureOffset: featureOffset,
+          maxFeatureCount: requestedFeatureCount,
+          useStreamingApi: useStreamingApi,
         );
 
         final configs = configsMap.entries
-            .map((entry) => HfConfigSummary(config: entry.key, splits: entry.value.toList()))
+            .map((entry) => HfConfigSummary(
+                config: entry.key, splits: entry.value.toList()))
             .toList();
 
         return HfDatasetPreview(
@@ -130,6 +151,9 @@ class HuggingfaceService {
           partial: rowsResp.partial,
           features: rowsResp.features,
           rows: rowsResp.rows,
+          featureOffset: rowsResp.featureOffset,
+          featureCount: rowsResp.featureCount,
+          totalFeatureCount: rowsResp.totalFeatureCount,
         );
       }
     }
@@ -142,9 +166,10 @@ class HuggingfaceService {
     }
 
     final configsMap = splitsResp;
-    var selectedConfig = userConfig != null && configsMap.containsKey(userConfig)
-        ? userConfig
-        : configsMap.keys.first;
+    var selectedConfig =
+        userConfig != null && configsMap.containsKey(userConfig)
+            ? userConfig
+            : configsMap.keys.first;
     var selectedSplit = _pickDefaultSplit(configsMap[selectedConfig]!);
 
     if (userSplit != null) {
@@ -176,7 +201,17 @@ class HuggingfaceService {
     String? lastNotFound;
     for (final candidate in candidates) {
       try {
-        chosen = await _getRows(dataset, candidate.$1, candidate.$2, pageOffset, pageLength, tokenValue);
+        chosen = await _getRows(
+          dataset,
+          candidate.$1,
+          candidate.$2,
+          pageOffset,
+          pageLength,
+          tokenValue,
+          featureOffset: featureOffset,
+          maxFeatureCount: requestedFeatureCount,
+          useStreamingApi: useStreamingApi,
+        );
         selectedConfig = candidate.$1;
         selectedSplit = candidate.$2;
         break;
@@ -194,7 +229,8 @@ class HuggingfaceService {
     }
 
     final configs = configsMap.entries
-        .map((entry) => HfConfigSummary(config: entry.key, splits: entry.value.toList()))
+        .map((entry) =>
+            HfConfigSummary(config: entry.key, splits: entry.value.toList()))
         .toList();
 
     return HfDatasetPreview(
@@ -208,7 +244,59 @@ class HuggingfaceService {
       partial: chosen.partial,
       features: chosen.features,
       rows: chosen.rows,
+      featureOffset: chosen.featureOffset,
+      featureCount: chosen.featureCount,
+      totalFeatureCount: chosen.totalFeatureCount,
     );
+  }
+
+  Future<List<String>> listParquetFiles({
+    required String input,
+    String? config,
+    String? split,
+    String? token,
+  }) async {
+    var dataset = _extractRepoId(input);
+    final tokenValue = token?.trim();
+    final requestedConfig = config?.trim().isNotEmpty == true ? config!.trim() : null;
+    final requestedSplit = split?.trim().isNotEmpty == true ? split!.trim() : null;
+
+    final (resolvedDataset, configs) = await _getSplits(dataset, tokenValue);
+    dataset = resolvedDataset;
+    if (configs.isEmpty) {
+      throw FormatException('No supported splits found for dataset $dataset.');
+    }
+
+    if (requestedConfig != null && !configs.containsKey(requestedConfig)) {
+      throw FormatException(
+          'Config "$requestedConfig" not found for dataset $dataset.');
+    }
+
+    final resolvedConfig = requestedConfig ?? configs.keys.first;
+    final availableSplits = configs[resolvedConfig]!;
+    if (availableSplits.isEmpty) {
+      throw FormatException('No splits available for config "$resolvedConfig".');
+    }
+
+    final resolvedSplit = requestedSplit != null &&
+            availableSplits.contains(requestedSplit)
+        ? requestedSplit
+        : _pickDefaultSplit(availableSplits);
+
+    final files = await _getParquetApi.getParquetFilesForSplit(
+      dataset: dataset,
+      config: resolvedConfig,
+      split: resolvedSplit,
+      token: tokenValue,
+    );
+
+    if (files.isEmpty) {
+      throw FormatException(
+        'No Parquet files found for $dataset/$resolvedConfig/$resolvedSplit.',
+      );
+    }
+
+    return files.map((file) => file.url).toList(growable: false);
   }
 
   Future<OpenLeafResponse> openField({
@@ -268,9 +356,11 @@ class HuggingfaceService {
           _inferBasicExt(bytes) ??
           'bin';
       final size = bytes.length;
-      final tempDir = Directory('${Directory.systemTemp.path}/dataset-inspector/huggingface');
+      final tempDir = Directory(
+          '${Directory.systemTemp.path}/dataset-inspector/huggingface');
       await tempDir.create(recursive: true);
-      final baseName = _sanitize('$dataset-$configValue-$splitValue-r$rowIndex-$field');
+      final baseName =
+          _sanitize('$dataset-$configValue-$splitValue-r$rowIndex-$field');
       final out = File('${tempDir.path}/$baseName.$ext');
       await out.writeAsBytes(bytes, flush: true);
 
@@ -293,9 +383,11 @@ class HuggingfaceService {
 
     final (bytes, ext) = _serializeValue(value);
     final size = bytes.length;
-    final tempDir = Directory('${Directory.systemTemp.path}/dataset-inspector/huggingface');
+    final tempDir =
+        Directory('${Directory.systemTemp.path}/dataset-inspector/huggingface');
     await tempDir.create(recursive: true);
-    final baseName = _sanitize('$dataset-$configValue-$splitValue-r$rowIndex-$field');
+    final baseName =
+        _sanitize('$dataset-$configValue-$splitValue-r$rowIndex-$field');
     final out = File('${tempDir.path}/$baseName.$ext');
     await out.writeAsBytes(bytes, flush: true);
 
@@ -316,7 +408,8 @@ class HuggingfaceService {
     );
   }
 
-  Future<(String, Map<String, List<String>>)> _getSplits(String dataset, String? token) async {
+  Future<(String, Map<String, List<String>>)> _getSplits(
+      String dataset, String? token) async {
     final url = Uri.parse(_datasetsServerBase).replace(
       path: 'splits',
       queryParameters: {'dataset': dataset},
@@ -328,13 +421,16 @@ class HuggingfaceService {
     } on _HfException catch (err) {
       // Fallback to Parquet API for 501 (Not Implemented) errors
       if (err.is501) {
-        AppLogger.info('Datasets server returned 501, falling back to Parquet API', tag: 'hf');
+        AppLogger.info(
+            'Datasets server returned 501, falling back to Parquet API',
+            tag: 'hf');
         return _getSplitsViaParquet(dataset, token);
       }
       if (err.isCanonicalCandidate) {
         final canonical = await _resolveCanonicalDatasetId(dataset, token);
         if (canonical != null && canonical != dataset) {
-          body = await _getJson(url.replace(queryParameters: {'dataset': canonical}), token);
+          body = await _getJson(
+              url.replace(queryParameters: {'dataset': canonical}), token);
           dataset = canonical;
         } else {
           rethrow;
@@ -353,16 +449,24 @@ class HuggingfaceService {
       configs.putIfAbsent(config, () => <String>{}).add(split);
     }
 
-    return (dataset, configs.map((key, value) => MapEntry(key, value.toList())));
+    return (
+      dataset,
+      configs.map((key, value) => MapEntry(key, value.toList()))
+    );
   }
 
-  Future<(String, Map<String, List<String>>)> _getSplitsViaParquet(String dataset, String? token) async {
-    final parquetResp = await _getParquetApi.getParquetFiles(dataset: dataset, token: token);
+  Future<(String, Map<String, List<String>>)> _getSplitsViaParquet(
+      String dataset, String? token) async {
+    final parquetResp =
+        await _getParquetApi.getParquetFiles(dataset: dataset, token: token);
     final configs = <String, Set<String>>{};
     for (final file in parquetResp.parquetFiles) {
       configs.putIfAbsent(file.config, () => <String>{}).add(file.split);
     }
-    return (dataset, configs.map((key, value) => MapEntry(key, value.toList())));
+    return (
+      dataset,
+      configs.map((key, value) => MapEntry(key, value.toList()))
+    );
   }
 
   Future<_RowsResponse> _getRows(
@@ -371,10 +475,45 @@ class HuggingfaceService {
     String split,
     int offset,
     int length,
-    String? token,
-  ) async {
-    // Use Parquet streaming directly for fast and reliable data access
-    return _getRowsViaParquet(dataset, config, split, offset, length, token);
+    String? token, {
+    int? featureOffset,
+    int? maxFeatureCount,
+    bool useStreamingApi = false,
+  }) async {
+    if (useStreamingApi) {
+      try {
+        return await _getRowsViaRowsApi(
+          dataset,
+          config,
+          split,
+          offset,
+          length,
+          token,
+          featureOffset: featureOffset,
+          maxFeatureCount: maxFeatureCount,
+        );
+      } on _HfException catch (err) {
+        AppLogger.warn(
+          'HF rows API failed, fallback to Parquet: ${err.message}',
+          tag: 'hf',
+        );
+      } catch (err) {
+        AppLogger.warn('HF rows API failed, fallback to Parquet: $err',
+            tag: 'hf');
+      }
+    }
+
+    // Fallback to parquet streaming for stable access.
+    return _getRowsViaParquet(
+      dataset,
+      config,
+      split,
+      offset,
+      length,
+      token,
+      featureOffset: featureOffset,
+      maxFeatureCount: maxFeatureCount,
+    );
   }
 
   Future<_RowsResponse> _getRowsViaParquet(
@@ -383,8 +522,10 @@ class HuggingfaceService {
     String split,
     int offset,
     int length,
-    String? token,
-  ) async {
+    String? token, {
+    int? featureOffset,
+    int? maxFeatureCount,
+  }) async {
     // 1. Get parquet files for this specific config/split
     final files = await _getParquetApi.getParquetFilesForSplit(
       dataset: dataset,
@@ -394,7 +535,8 @@ class HuggingfaceService {
     );
 
     if (files.isEmpty) {
-      throw FormatException('No Parquet files found for $dataset/$config/$split');
+      throw FormatException(
+          'No Parquet files found for $dataset/$config/$split');
     }
 
     // 2. Get accurate total row count from size API
@@ -411,93 +553,34 @@ class HuggingfaceService {
       tag: 'hf',
     );
 
-    // 3. Find the correct file(s) for the requested offset
-    // Since we don't know exact row counts per file, we estimate and search
-    final avgRowsPerFile = totalRows > 0 && files.isNotEmpty
-        ? (totalRows / files.length).ceil()
-        : 10000; // Default estimate
-
-    // Estimate which file contains the offset
-    var fileIndex = avgRowsPerFile > 0 ? offset ~/ avgRowsPerFile : 0;
-    if (fileIndex >= files.length) {
-      fileIndex = files.length - 1;
-    }
-
-    // Calculate local offset within the file
-    var localOffset = offset - (fileIndex * avgRowsPerFile);
-    if (localOffset < 0) localOffset = 0;
-
-    AppLogger.info(
-      'DuckDB targeting file $fileIndex/${files.length}, localOffset=$localOffset',
-      tag: 'hf',
-    );
-
-    // Try to read from estimated file
-    var result = await _getDuckDb.readParquetRows(
-      url: files[fileIndex].url,
-      offset: localOffset,
+    final parquetUrls = files.map((file) => file.url).toList(growable: false);
+    final result = await _getDuckDb.readParquetFilesRows(
+      urls: parquetUrls,
+      offset: offset,
       length: length,
       token: token,
-      knownTotalRows: totalRows,
+      knownTotalRows: totalRows > 0 ? totalRows : null,
+      featureOffset: featureOffset,
+      maxFeatureCount: maxFeatureCount,
     );
 
-    // If we got 0 rows and localOffset > 0, the file might be smaller than expected
-    // Try reading from the start of this file or move to next file
-    if (result.rows.isEmpty && localOffset > 0 && fileIndex + 1 < files.length) {
-      AppLogger.info('No rows at localOffset=$localOffset, trying next file', tag: 'hf');
-      fileIndex++;
-      result = await _getDuckDb.readParquetRows(
-        url: files[fileIndex].url,
-        offset: 0,
-        length: length,
-        token: token,
-        knownTotalRows: totalRows,
-      );
-    }
-
-    // If we still need more rows and there are more files, continue reading
-    if (result.rows.length < length && fileIndex + 1 < files.length) {
-      final remaining = length - result.rows.length;
-      final nextResult = await _getDuckDb.readParquetRows(
-        url: files[fileIndex + 1].url,
-        offset: 0,
-        length: remaining,
-        token: token,
-        knownTotalRows: totalRows,
-      );
-      // Create a new list to avoid modifying the original
-      final combinedRows = <Map<String, dynamic>>[...result.rows, ...nextResult.rows];
-      result = DuckDbParquetResult(
-        features: result.features,
-        rows: combinedRows,
-        totalRows: result.totalRows,
-      );
-    }
-
     // Use size API total if available
-    if (totalRows == 0) {
-      totalRows = result.totalRows > 0 ? result.totalRows : result.rows.length * files.length;
+    if (totalRows <= 0) {
+      totalRows = result.totalRows;
     }
 
     // Prefetch next page in background for faster navigation
-    if (result.rows.length >= length && fileIndex < files.length) {
-      final nextLocalOffset = localOffset + length;
-      // Check if next page is in the same file or next file
-      if (nextLocalOffset < avgRowsPerFile) {
-        _getDuckDb.prefetchNext(
-          url: files[fileIndex].url,
-          nextOffset: nextLocalOffset,
+    if (result.rows.length >= length) {
+      final nextOffset = offset + length;
+      if (nextOffset < totalRows || totalRows == 0) {
+        _getDuckDb.prefetchNextFiles(
+          urls: parquetUrls,
+          nextOffset: nextOffset,
           length: length,
           token: token,
           knownTotalRows: totalRows,
-        );
-      } else if (fileIndex + 1 < files.length) {
-        _getDuckDb.prefetchNext(
-          url: files[fileIndex + 1].url,
-          nextOffset: 0,
-          length: length,
-          token: token,
-          knownTotalRows: totalRows,
+          featureOffset: featureOffset,
+          maxFeatureCount: maxFeatureCount,
         );
       }
     }
@@ -506,8 +589,135 @@ class HuggingfaceService {
       features: result.features,
       rows: result.rows,
       numRowsTotal: totalRows,
-      partial: false,
+      partial: result.partial,
+      featureOffset: result.featureOffset,
+      featureCount: result.featureCount,
+      totalFeatureCount: result.totalFeatureCount,
     );
+  }
+
+  Future<_RowsResponse> _getRowsViaRowsApi(
+    String dataset,
+    String config,
+    String split,
+    int offset,
+    int length,
+    String? token, {
+    int? featureOffset,
+    int? maxFeatureCount,
+  }) async {
+    final url = Uri.parse(_datasetsServerBase).replace(
+      path: 'rows',
+      queryParameters: {
+        'dataset': dataset,
+        'config': config,
+        'split': split,
+        'offset': offset.toString(),
+        'length': length.toString(),
+      },
+    );
+
+    final rowsResp = await _getJson(url, token);
+    final rowsPayload = rowsResp['rows'] as List<dynamic>? ?? [];
+    final rows = <Map<String, dynamic>>[];
+
+    for (final entry in rowsPayload) {
+      if (entry is Map) {
+        final rowValue = entry['row'];
+        if (rowValue is Map) {
+          rows.add(Map<String, dynamic>.from(
+            rowValue.map((key, value) => MapEntry(key.toString(), value)),
+          ));
+        } else {
+          rows.add({'value': rowValue});
+        }
+      } else {
+        rows.add({'value': entry});
+      }
+    }
+
+    final parsedFeatures = _parseRowsApiFeatures(
+      rowsResp['features'],
+      rows,
+      maxFeatureCount: maxFeatureCount,
+      featureOffset: featureOffset,
+    );
+    final total = _toOptionalInt(rowsResp['num_rows_total']) ??
+        _toOptionalInt(rowsResp['num_rows']) ??
+        0;
+    final partial = rowsResp['partial'] == true ||
+        (length > 0 && rows.length >= length && total <= 0);
+
+    final featureCount = parsedFeatures.length;
+    return _RowsResponse(
+      features: parsedFeatures,
+      rows: rows,
+      numRowsTotal: total,
+      partial: partial,
+      featureOffset: featureOffset ?? 0,
+      featureCount: featureCount,
+      totalFeatureCount:
+          _toOptionalInt(rowsResp['num_features']) ?? featureCount,
+    );
+  }
+
+  List<HfFeature> _parseRowsApiFeatures(
+    dynamic rawFeatures,
+    List<Map<String, dynamic>> rows, {
+    int? featureOffset,
+    int? maxFeatureCount,
+  }) {
+    final allFeatures = <HfFeature>[];
+    final declared = rawFeatures as List<dynamic>? ?? const <dynamic>[];
+    for (final feature in declared) {
+      if (feature is Map<String, dynamic>) {
+        final name = feature['name']?.toString();
+        if (name == null || name.isEmpty) continue;
+        final rawType = feature['type'] ?? feature['dtype'] ?? feature['_type'];
+        final label = rawType?.toString();
+        allFeatures.add(HfFeature(
+          name: name,
+          dtype: label,
+          rawType: rawType,
+        ));
+      }
+    }
+
+    if (allFeatures.isNotEmpty) {
+      final start =
+          featureOffset != null && featureOffset > 0 ? featureOffset : 0;
+      final take = maxFeatureCount != null && maxFeatureCount > 0
+          ? maxFeatureCount
+          : allFeatures.length;
+      final end = (start + take).clamp(0, allFeatures.length);
+      return allFeatures.sublist(start, end);
+    }
+
+    if (rows.isEmpty) return const <HfFeature>[];
+    final first = rows.first;
+    for (final entry in first.entries) {
+      allFeatures.add(HfFeature(
+        name: entry.key,
+        dtype: _featureDtypeLabel(entry.value),
+        rawType: entry.value,
+      ));
+    }
+
+    final start =
+        featureOffset != null && featureOffset > 0 ? featureOffset : 0;
+    final take = maxFeatureCount != null && maxFeatureCount > 0
+        ? maxFeatureCount
+        : allFeatures.length;
+    final end = (start + take).clamp(0, allFeatures.length);
+    return allFeatures.sublist(start, end);
+  }
+
+  int? _toOptionalInt(dynamic value) {
+    if (value == null) return null;
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value);
+    return null;
   }
 
   Future<Map<String, dynamic>> _getJson(Uri url, String? token) async {
@@ -519,7 +729,8 @@ class HuggingfaceService {
     final response = await _client.get(url, headers: headers);
     final status = response.statusCode;
     final text = response.body;
-    AppLogger.info('GET $url -> $status (${text.length} bytes)', tag: 'hf-http');
+    AppLogger.info('GET $url -> $status (${text.length} bytes)',
+        tag: 'hf-http');
 
     Map<String, dynamic> value;
     try {
@@ -546,9 +757,11 @@ class HuggingfaceService {
           tag: 'hf-http',
         );
         if (status >= 400 && status < 500 && status != 429) {
-          throw _HfException('HTTP $status from $url: $serverError', isNotFound: _isNotFound(serverError));
+          throw _HfException('HTTP $status from $url: $serverError',
+              isNotFound: _isNotFound(serverError));
         }
-        throw _HfException('HTTP $status from $url: $serverError', is501: is501);
+        throw _HfException('HTTP $status from $url: $serverError',
+            is501: is501);
       }
       AppLogger.warn('HTTP $status from $url', tag: 'hf-http');
       throw _HfException('HTTP $status from $url', is501: is501);
@@ -559,7 +772,8 @@ class HuggingfaceService {
         'HTTP $status from $url: ${_truncateForLog(serverError, _logBodyLimit)}',
         tag: 'hf-http',
       );
-      throw _HfException('HTTP $status from $url: $serverError', isNotFound: _isNotFound(serverError));
+      throw _HfException('HTTP $status from $url: $serverError',
+          isNotFound: _isNotFound(serverError));
     }
 
     return value;
@@ -575,7 +789,8 @@ class HuggingfaceService {
 
     final uri = Uri.tryParse(trimmed);
     if (uri == null) {
-      throw const FormatException('Unsupported input. Provide a dataset URL or hf://datasets/...');
+      throw const FormatException(
+          'Unsupported input. Provide a dataset URL or hf://datasets/...');
     }
 
     final repo = _extractRepoIdFromUrl(uri);
@@ -627,7 +842,8 @@ class HuggingfaceService {
 
   String _pickDefaultSplit(List<String> splits) {
     if (splits.contains('train')) return 'train';
-    final candidate = splits.firstWhere((s) => s.startsWith('train'), orElse: () => splits.first);
+    final candidate = splits.firstWhere((s) => s.startsWith('train'),
+        orElse: () => splits.first);
     return candidate;
   }
 
@@ -635,23 +851,21 @@ class HuggingfaceService {
     return message.toLowerCase().contains('not found');
   }
 
-  Future<String?> _resolveCanonicalDatasetId(String dataset, String? token) async {
+  Future<String?> _resolveCanonicalDatasetId(
+      String dataset, String? token) async {
     final base = Uri.parse('https://huggingface.co/api/datasets/$dataset');
     final headers = <String, String>{};
     if (token != null && token.isNotEmpty) {
       headers[HttpHeaders.authorizationHeader] = 'Bearer $token';
     }
-    for (var i = 0; i < 3; i += 1) {
-      final response = await _client.get(base, headers: headers);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        return null;
-      }
-      final value = jsonDecode(response.body) as Map<String, dynamic>;
-      final id = value['id']?.toString().trim();
-      if (id == null || id.isEmpty) return null;
-      return id;
+    final response = await _client.get(base, headers: headers);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      return null;
     }
-    return null;
+    final value = jsonDecode(response.body) as Map<String, dynamic>;
+    final id = value['id']?.toString().trim();
+    if (id == null || id.isEmpty) return null;
+    return id;
   }
 
   String? _featureDtypeLabel(dynamic value) {
@@ -664,7 +878,8 @@ class HuggingfaceService {
   }
 
   /// Get accurate row count for a split from the /size API
-  Future<int> _getSplitRowCount(String dataset, String config, String split, String? token) async {
+  Future<int> _getSplitRowCount(
+      String dataset, String config, String split, String? token) async {
     final url = Uri.parse(_datasetsServerBase).replace(
       path: 'size',
       queryParameters: {'dataset': dataset},
@@ -737,9 +952,12 @@ class HuggingfaceService {
     }
     AppLogger.info('GET $url (asset)', tag: 'hf-http');
     final res = await _client.get(url, headers: headers);
-    AppLogger.info('GET $url -> ${res.statusCode} (${res.bodyBytes.length} bytes)', tag: 'hf-http');
+    AppLogger.info(
+        'GET $url -> ${res.statusCode} (${res.bodyBytes.length} bytes)',
+        tag: 'hf-http');
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      AppLogger.error('Asset download failed', tag: 'hf-http', error: res.statusCode);
+      AppLogger.error('Asset download failed',
+          tag: 'hf-http', error: res.statusCode);
       throw Exception('asset HTTP ${res.statusCode} from $url');
     }
     return res.bodyBytes;
@@ -776,7 +994,10 @@ class HuggingfaceService {
         data[3] == 0x47) {
       return 'png';
     }
-    if (data.length >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff) {
+    if (data.length >= 3 &&
+        data[0] == 0xff &&
+        data[1] == 0xd8 &&
+        data[2] == 0xff) {
       return 'jpg';
     }
     if (data.length >= 12 &&
@@ -811,12 +1032,18 @@ class _RowsResponse {
     required this.rows,
     required this.numRowsTotal,
     required this.partial,
+    required this.featureOffset,
+    required this.featureCount,
+    required this.totalFeatureCount,
   });
 
   final List<HfFeature> features;
   final List<dynamic> rows;
   final int numRowsTotal;
   final bool partial;
+  final int featureOffset;
+  final int featureCount;
+  final int totalFeatureCount;
 }
 
 class _Asset {
@@ -834,7 +1061,8 @@ class _HfException implements Exception {
   final bool is501;
 
   bool get isCanonicalCandidate =>
-      message.toLowerCase().contains('renamed') || message.toLowerCase().contains('current dataset name');
+      message.toLowerCase().contains('renamed') ||
+      message.toLowerCase().contains('current dataset name');
 
   @override
   String toString() => message;
