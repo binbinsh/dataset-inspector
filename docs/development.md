@@ -31,7 +31,8 @@
 
 ## Notes
 - Heavy dataset parsing runs in Dart services; keep UI responsive by avoiding synchronous loops on the main isolate.
-- Zstd/tar decompression uses temp caches under the system temp directory.
+- Remote data paths must remain direct streaming paths.
+- In-memory caches/prefetch are allowed for performance, but do not reintroduce remote on-disk cache layers.
 - See `docs/audio.md` for audio preview details.
 - DuckDB bundling and custom httpfs builds are documented in `docs/duckdb.md`.
 - Parquet and DuckDB behavior for large datasets is documented in `docs/duckdb.md`.

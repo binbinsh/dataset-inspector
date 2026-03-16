@@ -1,6 +1,7 @@
 part of 'remote_dataset_service.dart';
 
 extension _RemoteDatasetServiceSsh on RemoteDatasetService {
+  // ignore: unused_element
   Future<String> _resolveSshPath(
     RemoteHostConfig host,
     String datasetPath, {
@@ -227,6 +228,7 @@ extension _RemoteDatasetServiceSsh on RemoteDatasetService {
   Stream<List<int>> _openReadSsh({
     required RemoteHostConfig host,
     required String remotePath,
+    int? maxBytes,
     RemoteStatusCallback? onStatus,
   }) async* {
     final config = host.ssh;
@@ -287,7 +289,10 @@ extension _RemoteDatasetServiceSsh on RemoteDatasetService {
         absolutePath,
         mode: SftpFileOpenMode.read,
       );
-      await for (final chunk in remoteFile.read()) {
+      final readStream = maxBytes != null && maxBytes > 0
+          ? remoteFile.read(length: maxBytes)
+          : remoteFile.read();
+      await for (final chunk in readStream) {
         if (chunk.isEmpty) continue;
         yield chunk;
       }

@@ -17,9 +17,10 @@ class AppMenuBridge {
     final navigator = navigatorKey.currentState;
     if (navigator == null) return;
     final messenger = messengerKey.currentState;
+    final state = navigator.context.read<ViewerState>();
     UpdateInfo? update;
     try {
-      update = await navigator.context.read<ViewerState>().checkForUpdateNow();
+      update = await state.checkForUpdateNow();
     } catch (err) {
       messenger?.showSnackBar(
         SnackBar(content: Text('Update check failed: $err')),
@@ -32,9 +33,12 @@ class AppMenuBridge {
       );
       return;
     }
-    final freshNavigator = navigatorKey.currentState;
-    if (freshNavigator == null) return;
-    final state = freshNavigator.context.read<ViewerState>();
-    unawaited(showUpdateDialog(freshNavigator.context, state, update));
+    final updateToShow = update;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final currentNavigator = navigatorKey.currentState;
+      if (currentNavigator == null) return;
+      unawaited(showUpdateDialog(currentNavigator.context, state, updateToShow));
+    });
   }
 }

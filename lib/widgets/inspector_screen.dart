@@ -17,6 +17,7 @@ import '../services/update_service.dart';
 import '../state/viewer_state.dart';
 import '../utils/audio.dart';
 import '../utils/app_fonts.dart';
+import '../utils/dialog_action_styles.dart';
 import 'dataset_add_dialog.dart';
 import 'audio_preview.dart';
 import 'copy_button.dart';
@@ -44,6 +45,10 @@ class InspectorScreen extends StatefulWidget {
 class _InspectorScreenState extends State<InspectorScreen> {
   late final TextEditingController _hfOffsetController;
   late final FocusNode _hfOffsetFocus;
+  String? _lastStatusMessage;
+  String? _statusOverlayMessage;
+  bool _statusOverlayVisible = false;
+  Timer? _statusOverlayTimer;
   String? _localDirectoryTreeDatasetId;
   final Set<String> _localDirectoryExpandedDirs = <String>{};
   final Set<String> _localDirectoryLoadingDirs = <String>{};
@@ -60,6 +65,14 @@ class _InspectorScreenState extends State<InspectorScreen> {
   final Map<String, int> _localTabularSelectedRowByPath = <String, int>{};
   bool _localDirectoryTreeIsRemote = false;
 
+  TextStyle _explorerListTextStyle(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return (Theme.of(context).textTheme.bodySmall ??
+            Theme.of(context).textTheme.bodyMedium ??
+            const TextStyle())
+        .copyWith(color: scheme.onSurface);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -69,6 +82,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
 
   @override
   void dispose() {
+    _statusOverlayTimer?.cancel();
     _hfOffsetController.dispose();
     _hfOffsetFocus.dispose();
     super.dispose();
@@ -78,6 +92,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
   Widget build(BuildContext context) {
     return Consumer<ViewerState>(
       builder: (context, state, _) {
+        _handleStatusMessage(context, state);
         return Scaffold(
           body: SafeArea(
             child: Stack(
@@ -111,6 +126,32 @@ class _InspectorScreenState extends State<InspectorScreen> {
         );
       },
     );
+  }
+
+  void _handleStatusMessage(BuildContext context, ViewerState state) {
+    final message = state.statusMessage?.trim();
+    if (message == null || message.isEmpty) {
+      _lastStatusMessage = null;
+      return;
+    }
+    if (message == _lastStatusMessage) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (state.statusMessage?.trim() != message) return;
+      if (_lastStatusMessage == message) return;
+
+      _statusOverlayTimer?.cancel();
+      setState(() {
+        _statusOverlayMessage = message;
+        _statusOverlayVisible = true;
+      });
+      _statusOverlayTimer = Timer(const Duration(milliseconds: 2200), () {
+        if (!mounted) return;
+        setState(() => _statusOverlayVisible = false);
+      });
+      _lastStatusMessage = message;
+    });
   }
 
   Widget _buildBackdrop(BuildContext context) {
@@ -147,44 +188,87 @@ class _InspectorScreenState extends State<InspectorScreen> {
                         width: 1, thickness: 1, color: scheme.outlineVariant),
                     Expanded(
                       flex: 1,
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
-                          final maxPreviewHeight = _previewMaxHeightForState(
-                              state, constraints.maxHeight);
-                          return Column(
-                            children: [
-                              Expanded(
-                                child: _buildInlinePane(
-                                  title: 'Fields',
-                                  subtitle: _fieldsSubtitle(state),
-                                  child: _buildFieldsContent(state),
-                                ),
-                              ),
-                              Divider(
-                                  height: 1,
-                                  thickness: 1,
-                                  color: scheme.outlineVariant),
-                              AnimatedSize(
-                                duration: const Duration(milliseconds: 240),
-                                curve: Curves.easeOutCubic,
-                                alignment: Alignment.topCenter,
-                                child: ConstrainedBox(
-                                  constraints: BoxConstraints(
-                                      maxHeight: maxPreviewHeight),
-                                  child: _buildInlinePane(
-                                    title: 'Preview',
-                                    subtitle: _previewSubtitle(state),
-                                    subtitleTrailing:
-                                        _buildPreviewActions(state),
-                                    expand: false,
-                                    flexible: true,
-                                    child: _buildPreviewContent2(state),
+                      child: Stack(
+                        children: [
+                          LayoutBuilder(
+                            builder: (context, constraints) {
+                              final maxPreviewHeight =
+                                  _previewMaxHeightForState(
+                                      state, constraints.maxHeight);
+                              return Column(
+                                children: [
+                                  Expanded(
+                                    child: _buildInlinePane(
+                                      title: 'Fields',
+                                      subtitle: _fieldsSubtitle(state),
+                                      child: _buildFieldsContent(state),
+                                    ),
+                                  ),
+                                  Divider(
+                                      height: 1,
+                                      thickness: 1,
+                                      color: scheme.outlineVariant),
+                                  AnimatedSize(
+                                    duration:
+                                        const Duration(milliseconds: 240),
+                                    curve: Curves.easeOutCubic,
+                                    alignment: Alignment.topCenter,
+                                    child: ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                          maxHeight: maxPreviewHeight),
+                                      child: _buildInlinePane(
+                                        title: 'Preview',
+                                        subtitle: _previewSubtitle(state),
+                                        subtitleTrailing:
+                                            _buildPreviewActions(state),
+                                        expand: false,
+                                        flexible: true,
+                                        child:
+                                            _buildPreviewContent2(state),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                          if (_statusOverlayMessage != null)
+                            Positioned(
+                              left: 8,
+                              right: 8,
+                              bottom: 8,
+                              child: IgnorePointer(
+                                ignoring: !_statusOverlayVisible,
+                                child: AnimatedOpacity(
+                                  opacity:
+                                      _statusOverlayVisible ? 1.0 : 0.0,
+                                  duration:
+                                      const Duration(milliseconds: 200),
+                                  onEnd: () {
+                                    if (!_statusOverlayVisible) {
+                                      setState(() =>
+                                          _statusOverlayMessage = null);
+                                    }
+                                  },
+                                  child: Material(
+                                    elevation: 4,
+                                    borderRadius: BorderRadius.circular(8),
+                                    color: const Color(0xFF323232),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 16, vertical: 10),
+                                      child: Text(
+                                        _statusOverlayMessage!,
+                                        style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 13),
+                                      ),
+                                    ),
                                   ),
                                 ),
                               ),
-                            ],
-                          );
-                        },
+                            ),
+                        ],
                       ),
                     ),
                   ],
@@ -228,7 +312,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
                     child: Text(
                       subtitle,
                       style: textTheme.labelSmall?.copyWith(
-                        color: scheme.onSurface.withOpacity(0.5),
+                        color: scheme.onSurface.withValues(alpha: 0.5),
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -277,10 +361,13 @@ class _InspectorScreenState extends State<InspectorScreen> {
   bool _isVideoPreview(ViewerState state) {
     if (state.mode == ViewerMode.zenodo) {
       final entry = state.zenodoSelectedEntryName;
-      if (entry != null && _isVideoPath(entry)) return true;
-      final fileKey = state.zenodoSelectedFileKey;
-      if (entry == null && fileKey != null && _isVideoPath(fileKey))
+      if (entry != null && _isVideoPath(entry)) {
         return true;
+      }
+      final fileKey = state.zenodoSelectedFileKey;
+      if (entry == null && fileKey != null && _isVideoPath(fileKey)) {
+        return true;
+      }
     }
     if (state.mode == ViewerMode.webdatasetDir) {
       final path = state.wdsSelectedMemberPath;
@@ -298,59 +385,71 @@ class _InspectorScreenState extends State<InspectorScreen> {
   }
 
   Widget _buildTopBar(BuildContext context, ViewerState state) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
     final isDesktop = !kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.macOS ||
             defaultTargetPlatform == TargetPlatform.windows ||
             defaultTargetPlatform == TargetPlatform.linux);
-    final isMacOS = !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
-
-    Widget titleContent = Row(
-      children: [
-        if (state.statusMessage != null && state.statusMessage!.isNotEmpty) ...[
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              state.statusMessage!,
-              style: textTheme.labelSmall?.copyWith(
-                color: scheme.onSurface.withOpacity(0.5),
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ] else
-          const Spacer(),
-      ],
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final titleWidget = Text(
+      'Dataset Inspector',
+      textAlign: TextAlign.center,
+      style: AppFonts.flexTextStyle(textTheme.titleSmall).copyWith(
+        fontSize: 14,
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0.1,
+        height: 1.0,
+        color: scheme.onSurface.withValues(alpha: 0.9),
+      ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
     );
 
     return SizedBox(
       height: 36,
-      child: Row(
+      child: Stack(
         children: [
-          if (isMacOS) const SizedBox(width: 64),
-          Expanded(
-            child: isDesktop
-                ? GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onPanStart: (_) => windowManager.startDragging(),
-                    onDoubleTap: () async {
-                      if (await windowManager.isMaximized()) {
-                        await windowManager.unmaximize();
-                      } else {
-                        await windowManager.maximize();
-                      }
-                    },
-                    child: titleContent,
-                  )
-                : titleContent,
+          if (isDesktop)
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onPanStart: (_) => windowManager.startDragging(),
+                onDoubleTap: () async {
+                  if (await windowManager.isMaximized()) {
+                    await windowManager.unmaximize();
+                  } else {
+                    await windowManager.maximize();
+                  }
+                },
+                child: const SizedBox.expand(),
+              ),
+            ),
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Center(child: titleWidget),
+            ),
           ),
-          _buildRemoteHostsButton(state),
-          const SizedBox(width: 8),
-          _buildHfTokenButton(state),
-          const SizedBox(width: 8),
-          _buildUpdateButton(state),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.only(
+                left: 8,
+                right: 8,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildRemoteHostsButton(state),
+                  const SizedBox(width: 8),
+                  _buildHfTokenButton(state),
+                  const SizedBox(width: 8),
+                  _buildApiButton(state),
+                  const SizedBox(width: 8),
+                  _buildUpdateButton(state),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -366,6 +465,39 @@ class _InspectorScreenState extends State<InspectorScreen> {
       style: _topBarActionButtonStyle(),
       icon: const Icon(Icons.dns_outlined, size: 16),
       label: Text(label),
+    );
+  }
+
+  Widget _buildApiButton(ViewerState state) {
+    final host = state.apiEndpointHost;
+    final port = state.apiEndpointPort;
+    final running = state.apiRunning;
+    final configuredHost = state.apiHost;
+    final configuredPort = state.apiPort;
+    final concurrency = state.apiMaxConcurrency;
+    final statusLabel = running ? 'API ON' : 'API OFF';
+    return Tooltip(
+      message: running
+          ? 'API service running at http://$host:$port/api/v1/opened\n'
+                'Max concurrency: $concurrency'
+          : 'API service is off.\n'
+                'Configured endpoint: http://$configuredHost:$configuredPort/api/v1/opened\n'
+                'Configured max concurrency: $concurrency',
+      child: OutlinedButton.icon(
+        onPressed: () {
+          unawaited(_showApiSettings(context, state));
+        },
+        style: _topBarActionButtonStyle(),
+        icon: Icon(
+          running ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
+          size: 16,
+        ),
+        label: Text(
+          running
+              ? '$statusLabel ($host:$port)'
+              : '$statusLabel ($configuredHost:$configuredPort)',
+        ),
+      ),
     );
   }
 
@@ -456,11 +588,6 @@ class _InspectorScreenState extends State<InspectorScreen> {
       context: context,
       initialHosts: state.remoteHosts,
       onTestConnection: (host) => state.testRemoteHostConnection(host),
-      onLoadCacheStats: (host) => state.loadRemoteCacheStats(host: host),
-      onClearCache: (host) => state.clearRemoteCache(host: host),
-      remoteCacheQuotaMb: state.remoteCacheQuotaMb,
-      onSaveRemoteCacheQuota: state.saveRemoteCacheQuotaMb,
-      onApplyRemoteCacheQuota: state.enforceRemoteCacheQuota,
     );
     if (updated == null) return;
     await state.saveRemoteHosts(updated);
@@ -494,8 +621,9 @@ class _InspectorScreenState extends State<InspectorScreen> {
       ),
     );
     var obscureToken = true;
+    bool? changed;
     try {
-      final changed = await showDialog<bool>(
+      changed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) {
           return Theme(
@@ -563,7 +691,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
                     ),
                   ),
                   actions: [
-                    TextButton(
+                    OutlinedButton(
+                      style: buildDialogSecondaryButtonStyle(context),
                       onPressed: (!hasSavedToken && !hasInputToken)
                           ? null
                           : () async {
@@ -573,11 +702,13 @@ class _InspectorScreenState extends State<InspectorScreen> {
                             },
                       child: const Text('Clear'),
                     ),
-                    TextButton(
+                    OutlinedButton(
+                      style: buildDialogSecondaryButtonStyle(context),
                       onPressed: () => Navigator.of(dialogContext).pop(false),
                       child: const Text('Cancel'),
                     ),
                     FilledButton(
+                      style: buildDialogPrimaryButtonStyle(context),
                       onPressed: () async {
                         await state.saveHfToken(tokenController.text);
                         if (!dialogContext.mounted) return;
@@ -592,19 +723,252 @@ class _InspectorScreenState extends State<InspectorScreen> {
           );
         },
       );
-      if (changed != true || !mounted) return;
-      final hasToken = (state.hfToken?.trim().isNotEmpty ?? false);
+    } finally {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        tokenController.dispose();
+      });
+    }
+    if (changed != true || !mounted) return;
+    final hasToken = (state.hfToken?.trim().isNotEmpty ?? false);
+    messenger?.showSnackBar(
+      SnackBar(
+        content: Text(
+          hasToken
+              ? 'Hugging Face token saved.'
+              : 'Hugging Face token cleared.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showApiSettings(BuildContext context, ViewerState state) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final hostController = TextEditingController(text: state.apiHost);
+    final portController = TextEditingController(text: state.apiPort.toString());
+    final concurrencyController =
+        TextEditingController(text: state.apiMaxConcurrency.toString());
+    var enabled = state.apiEnabled;
+    bool? saved;
+    try {
+      saved = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) {
+          final scheme = Theme.of(context).colorScheme;
+          final textTheme = Theme.of(context).textTheme;
+          String? fieldError;
+          return StatefulBuilder(
+            builder: (context, setState) {
+              final host = hostController.text.trim().isEmpty
+                  ? '127.0.0.1'
+                  : hostController.text.trim();
+              final port = int.tryParse(portController.text.trim());
+              final concurrency = int.tryParse(
+                concurrencyController.text.trim(),
+              );
+              final hasInputError = enabled && (port == null ||
+                  port <= 0 ||
+                  port > 65535 ||
+                  concurrency == null ||
+                  concurrency < 1 ||
+                  concurrency > 64);
+              final previewPort = port ?? state.apiPort;
+              final previewConcurrency = concurrency ?? state.apiMaxConcurrency;
+              return AlertDialog(
+                backgroundColor: Colors.white,
+                surfaceTintColor: Colors.transparent,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: const BorderSide(color: Color(0xFFE0E0E0)),
+                ),
+                titleTextStyle: AppFonts.flexTextStyle(
+                        Theme.of(context).textTheme.titleMedium)
+                    .copyWith(fontWeight: FontWeight.w700),
+                title: const Text('Settings · API'),
+                content: SizedBox(
+                  width: 560,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(
+                          'Enable API service',
+                          style: textTheme.labelLarge,
+                        ),
+                        subtitle: Text(
+                          enabled
+                              ? 'Service is enabled.'
+                              : 'Service is disabled.',
+                          style: textTheme.bodySmall?.copyWith(
+                            color: scheme.onSurface.withValues(alpha: 0.65),
+                          ),
+                        ),
+                        value: enabled,
+                        onChanged: (value) {
+                          setState(() {
+                            enabled = value;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: hostController,
+                        onChanged: (_) {
+                          setState(() {});
+                        },
+                        decoration: const InputDecoration(
+                          labelText: 'API Host',
+                          helperText:
+                              'Use 127.0.0.1 for local, 0.0.0.0 for LAN.',
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: portController,
+                              keyboardType: TextInputType.number,
+                              onChanged: (_) {
+                                setState(() {});
+                              },
+                              decoration: const InputDecoration(
+                                labelText: 'API Port',
+                                helperText: '1 - 65535',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: TextField(
+                              controller: concurrencyController,
+                              keyboardType: TextInputType.number,
+                              onChanged: (_) {
+                                setState(() {});
+                              },
+                              decoration: const InputDecoration(
+                                labelText: 'Max Concurrency',
+                                helperText: '1 - 64',
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (state.apiRuntimeError != null) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          state.apiRuntimeError!,
+                          style: textTheme.bodySmall?.copyWith(
+                            color: scheme.error,
+                          ),
+                        ),
+                      ] else ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          enabled
+                              ? 'Endpoint: http://$host:$previewPort/api/v1/opened'
+                              : 'Endpoint will stop when disabled.',
+                          style: textTheme.bodySmall?.copyWith(
+                            color: scheme.onSurface.withValues(alpha: 0.7),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Default concurrency for current settings: $previewConcurrency',
+                          style: textTheme.bodySmall?.copyWith(
+                            color: scheme.onSurface.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ],
+                      if (fieldError != null) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          fieldError!,
+                          style: textTheme.bodySmall?.copyWith(
+                            color: scheme.error,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                actions: [
+                  OutlinedButton(
+                    style: buildDialogSecondaryButtonStyle(context),
+                    onPressed: () => Navigator.of(dialogContext).pop(false),
+                    child: const Text('Close'),
+                  ),
+                  FilledButton(
+                    style: buildDialogPrimaryButtonStyle(context),
+                    onPressed: hasInputError
+                        ? null
+                        : () async {
+                            if (enabled && hostController.text.trim().isEmpty) {
+                              setState(() {
+                                fieldError =
+                                    'API host cannot be empty. Use 127.0.0.1.';
+                              });
+                              return;
+                            }
+                            final normalizedPort = enabled
+                                ? (port ?? state.apiPort)
+                                : state.apiPort;
+                            final normalizedConcurrency = enabled
+                                ? (concurrency ?? state.apiMaxConcurrency)
+                                : state.apiMaxConcurrency;
+                            final changed = await state.applyApiSettings(
+                              enabled: enabled,
+                              host: host.isEmpty ? '127.0.0.1' : host,
+                              port: normalizedPort,
+                              maxConcurrency: normalizedConcurrency,
+                            );
+                            if (!dialogContext.mounted) return;
+                            if (changed && state.apiRuntimeError == null) {
+                              Navigator.of(dialogContext).pop(true);
+                            } else if (!changed) {
+                              Navigator.of(dialogContext).pop(false);
+                            } else {
+                              setState(() {
+                                fieldError = state.apiRuntimeError ??
+                                    'Failed to apply API settings.';
+                              });
+                            }
+                          },
+                    child: const Text('Apply'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        hostController.dispose();
+        portController.dispose();
+        concurrencyController.dispose();
+      });
+    }
+    if (saved != true) return;
+    if (!mounted) return;
+    if (state.apiRuntimeError == null && state.apiEnabled) {
+      messenger?.showSnackBar(
+        const SnackBar(content: Text('API settings applied.')),
+      );
+    } else if (!state.apiEnabled) {
+      messenger?.showSnackBar(
+        const SnackBar(content: Text('API disabled.')),
+      );
+    } else {
       messenger?.showSnackBar(
         SnackBar(
           content: Text(
-            hasToken
-                ? 'Hugging Face token saved.'
-                : 'Hugging Face token cleared.',
+            'Failed to apply API settings: ${state.apiRuntimeError ?? 'unknown error'}',
           ),
         ),
       );
-    } finally {
-      tokenController.dispose();
     }
   }
 
@@ -652,7 +1016,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
                       child: Text(
                         'Scanning... ${state.scanAddedCount} added',
                         style: textTheme.labelSmall?.copyWith(
-                          color: scheme.onSurface.withOpacity(0.5),
+                          color: scheme.onSurface.withValues(alpha: 0.5),
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -723,7 +1087,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
         child: Text(
           'No datasets',
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.4),
+                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
               ),
         ),
       );
@@ -753,14 +1117,24 @@ class _InspectorScreenState extends State<InspectorScreen> {
                             color: Theme.of(context)
                                 .colorScheme
                                 .onSurface
-                                .withOpacity(0.4),
+                                .withValues(alpha: 0.4),
                           ),
                         ),
                         const SizedBox(width: 8),
-                        const Text('Loading...'),
+                        Text(
+                          'Loading...',
+                          style: _explorerListTextStyle(context),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ],
                     )
-                  : const Text('No entries'),
+                  : Text(
+                      'No entries',
+                      style: _explorerListTextStyle(context),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
             ),
           );
         } else {
@@ -768,7 +1142,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
         }
       }
     }
-    return ListView.builder(
+    return ListView.separated(
+      separatorBuilder: (_, __) => const SizedBox(height: 6),
       itemCount: rows.length,
       itemBuilder: (context, index) => rows[index],
     );
@@ -799,7 +1174,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
     final selected = state.isDatasetActive(dataset.id);
     final leadingIcon = _datasetModeIcon(dataset.mode);
     final bg =
-        selected ? scheme.secondary.withOpacity(0.12) : Colors.transparent;
+        selected ? scheme.secondary.withValues(alpha: 0.12) : Colors.transparent;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
@@ -818,7 +1193,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
               Icon(
                 dataset.expanded ? Icons.expand_more : Icons.chevron_right,
                 size: 14,
-                color: scheme.onSurface.withOpacity(0.5),
+                color: scheme.onSurface.withValues(alpha: 0.5),
               ),
               const SizedBox(width: 2),
               Icon(leadingIcon, size: 14, color: scheme.primary),
@@ -828,7 +1203,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
                   dataset.label,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w600,
                         color: scheme.primary,
                       ),
@@ -837,7 +1212,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
               IconButton(
                 tooltip: 'Remove',
                 icon: Icon(Icons.close,
-                    size: 12, color: scheme.onSurface.withOpacity(0.4)),
+                    size: 12, color: scheme.onSurface.withValues(alpha: 0.4)),
                 onPressed: () => unawaited(state.removeDataset(dataset.id)),
                 constraints:
                     const BoxConstraints.tightFor(width: 20, height: 20),
@@ -868,7 +1243,12 @@ class _InspectorScreenState extends State<InspectorScreen> {
                   state.activateDatasetShard(dataset.id, shard.filename)),
               indent: 20,
               icon: Icons.archive_outlined,
-              title: Text(shard.filename),
+              title: Text(
+                shard.filename,
+                style: _explorerListTextStyle(context),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
               subtitle: _formatBytes(shard.bytes),
             ),
           )
@@ -889,7 +1269,12 @@ class _InspectorScreenState extends State<InspectorScreen> {
                 icon: entry.isDirectory
                     ? Icons.folder_outlined
                     : Icons.description_outlined,
-                title: Text(entry.name),
+                title: Text(
+                  entry.name,
+                  style: _explorerListTextStyle(context),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
                 subtitle: entry.size == null ? null : _formatBytes(entry.size!),
               ),
             )
@@ -939,6 +1324,9 @@ class _InspectorScreenState extends State<InspectorScreen> {
                 option.split.isEmpty
                     ? option.config
                     : '${option.config} / ${option.split}',
+                style: _explorerListTextStyle(context),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           )
@@ -956,7 +1344,12 @@ class _InspectorScreenState extends State<InspectorScreen> {
                   state.activateDatasetZenodoFile(dataset.id, file.key)),
               indent: 20,
               icon: Icons.description_outlined,
-              title: Text(file.key),
+              title: Text(
+                file.key,
+                style: _explorerListTextStyle(context),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
               subtitle: _formatBytes(file.size),
             ),
           )
@@ -975,7 +1368,12 @@ class _InspectorScreenState extends State<InspectorScreen> {
             icon: dataset.mode == ViewerMode.mdsIndex
                 ? Icons.view_module_outlined
                 : Icons.segment_outlined,
-            title: Text(chunk.filename),
+            title: Text(
+              chunk.filename,
+              style: _explorerListTextStyle(context),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
             subtitle:
                 '${chunk.chunkSize} items · ${_formatBytes(chunk.chunkBytes)}',
           ),
@@ -1099,11 +1497,22 @@ class _InspectorScreenState extends State<InspectorScreen> {
             Expanded(
               child: Text(
                 item.name,
-                style: Theme.of(context).textTheme.bodySmall,
+                style: _explorerListTextStyle(context),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
             ),
+            if (!_isDirectoryItem(item) && item.size != null)
+              SizedBox(
+                width: 76,
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: _buildInlineMetaText(
+                    context,
+                    _formatBytes(item.size!),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
@@ -1149,7 +1558,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
         selected: selected,
         onTap: onTap ?? () {},
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Padding(
               padding: const EdgeInsets.only(top: 2),
@@ -1157,13 +1566,24 @@ class _InspectorScreenState extends State<InspectorScreen> {
             ),
             const SizedBox(width: 6),
             Expanded(
-              child: DefaultTextStyle(
-                style:
-                    Theme.of(context).textTheme.bodySmall ?? const TextStyle(),
-                softWrap: true,
-                child: title,
+              flex: 3,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 0),
+                child: DefaultTextStyle(
+                  style: _explorerListTextStyle(context),
+                  softWrap: true,
+                  child: title,
+                ),
               ),
             ),
+            if (subtitle != null)
+              SizedBox(
+                width: 76,
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: _buildInlineMetaText(context, subtitle),
+                ),
+              ),
           ],
         ),
       ),
@@ -1379,8 +1799,9 @@ class _InspectorScreenState extends State<InspectorScreen> {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _LoadingList();
         }
-        if (!snapshot.hasData)
+        if (!snapshot.hasData) {
           return const Center(child: Text('No fields found.'));
+        }
         return _buildFieldList(state, snapshot.data!);
       },
     );
@@ -1388,15 +1809,18 @@ class _InspectorScreenState extends State<InspectorScreen> {
 
   Widget _buildMdsFieldsPane(ViewerState state) {
     final future = state.mdsItemsFuture;
-    if (future == null) return const Center(child: Text('Select a sample.'));
+    if (future == null) {
+      return const Center(child: Text('Select a sample.'));
+    }
     return FutureBuilder<List<ItemMeta>>(
       future: future,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _LoadingList();
         }
-        if (!snapshot.hasData)
+        if (!snapshot.hasData) {
           return const Center(child: Text('No fields found.'));
+        }
         return _buildFieldList(state, snapshot.data!);
       },
     );
@@ -1450,7 +1874,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
   bool _isLocalTabularFilePath(String path) {
     final normalized = _normalizeDirectoryPath(path);
     final ext = p.extension(normalized).toLowerCase();
-    return ext == '.tsv' || ext == '.csv';
+    return ext == '.tsv' || ext == '.csv' || ext == '.parquet';
   }
 
   bool _isLocalMdsShardFilePath(ViewerState state, String path) {
@@ -1614,6 +2038,18 @@ class _InspectorScreenState extends State<InspectorScreen> {
     if (existing != null) return existing;
     final future = () async {
       try {
+        final ext = p.extension(normalizedPath).toLowerCase();
+        if (ext == '.parquet') {
+          final preview = await state.readDirectoryParquetTable(
+            normalizedPath,
+            offset: 0,
+            length: _kLocalTabularMaxRows,
+          );
+          return _LocalTabularData(
+            headers: preview.headers,
+            rows: preview.rows,
+          );
+        }
         final text = await state.readDirectoryFileText(normalizedPath);
         final lines = <String>[];
         for (final line in const LineSplitter().convert(text)) {
@@ -1631,7 +2067,6 @@ class _InspectorScreenState extends State<InspectorScreen> {
             rows: <List<String>>[],
           );
         }
-        final ext = p.extension(normalizedPath).toLowerCase();
         final delimiter = ext == '.tsv' ? '\t' : ',';
         final parsedRows = <List<String>>[];
         for (final line in lines) {
@@ -2529,7 +2964,11 @@ class _InspectorScreenState extends State<InspectorScreen> {
           return const Center(child: Text('No preview.'));
         }
         final preview = snapshot.data!;
-        return _buildPreviewContent(state, preview);
+        return _buildPreviewContent(
+          state,
+          preview,
+          sourcePath: selectedPath,
+        );
       },
     );
   }
@@ -2569,15 +3008,18 @@ class _InspectorScreenState extends State<InspectorScreen> {
 
   Widget _buildWdsFieldsPaneFromState(ViewerState state) {
     final future = state.wdsSamplesFuture;
-    if (future == null) return const Center(child: Text('Select a sample.'));
+    if (future == null) {
+      return const Center(child: Text('Select a sample.'));
+    }
     return FutureBuilder<WdsSampleListResponse>(
       future: future,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _LoadingList();
         }
-        if (!snapshot.hasData)
+        if (!snapshot.hasData) {
           return const Center(child: Text('No fields found.'));
+        }
         return _buildWdsFieldsPane(state, snapshot.data!.samples);
       },
     );
@@ -2585,17 +3027,22 @@ class _InspectorScreenState extends State<InspectorScreen> {
 
   Widget _buildHfFieldsPaneFromState(ViewerState state) {
     final preview = state.hfPreview;
-    if (preview != null) return _buildHfFieldsPane(state, preview);
+    if (preview != null) {
+      return _buildHfFieldsPane(state, preview);
+    }
     final future = state.hfPreviewFuture;
-    if (future == null) return const Center(child: Text('No dataset loaded.'));
+    if (future == null) {
+      return const Center(child: Text('No dataset loaded.'));
+    }
     return FutureBuilder<HfDatasetPreview>(
       future: future,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _LoadingList();
         }
-        if (!snapshot.hasData)
+        if (!snapshot.hasData) {
           return const Center(child: Text('No fields found.'));
+        }
         return _buildHfFieldsPane(state, snapshot.data!);
       },
     );
@@ -2603,15 +3050,18 @@ class _InspectorScreenState extends State<InspectorScreen> {
 
   Widget _buildLitdataItemsPane(ViewerState state) {
     final future = state.litdataItemsFuture;
-    if (future == null) return const Center(child: Text('Select a chunk.'));
+    if (future == null) {
+      return const Center(child: Text('Select a chunk.'));
+    }
     return FutureBuilder<List<ItemMeta>>(
       future: future,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _LoadingList();
         }
-        if (!snapshot.hasData)
+        if (!snapshot.hasData) {
           return const Center(child: Text('No items found.'));
+        }
         final items = snapshot.data!;
         return _buildItemList(state, items);
       },
@@ -2620,15 +3070,18 @@ class _InspectorScreenState extends State<InspectorScreen> {
 
   Widget _buildMdsItemsPane(ViewerState state) {
     final future = state.mdsItemsFuture;
-    if (future == null) return const Center(child: Text('Select a shard.'));
+    if (future == null) {
+      return const Center(child: Text('Select a shard.'));
+    }
     return FutureBuilder<List<ItemMeta>>(
       future: future,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _LoadingList();
         }
-        if (!snapshot.hasData)
+        if (!snapshot.hasData) {
           return const Center(child: Text('No samples found.'));
+        }
         final items = snapshot.data!;
         return _buildItemList(state, items);
       },
@@ -2717,8 +3170,9 @@ class _InspectorScreenState extends State<InspectorScreen> {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _LoadingList();
         }
-        if (!snapshot.hasData)
+        if (!snapshot.hasData) {
           return const Center(child: Text('No samples found.'));
+        }
         final response = snapshot.data!;
         final samples = response.samples;
         final total = response.numSamplesTotal;
@@ -2833,9 +3287,20 @@ class _InspectorScreenState extends State<InspectorScreen> {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _LoadingList();
         }
-        if (!snapshot.hasData)
+        if (!snapshot.hasData) {
           return const Center(child: Text('No rows available.'));
+        }
         final preview = snapshot.data!;
+        final hasKnownTotal = preview.numRowsTotal > 0;
+        final pageSize = preview.length;
+        final pageCount = preview.rows.length;
+        final canGoPrev = preview.offset > 0 && pageSize > 0;
+        final prevOffset = preview.offset - pageSize;
+        final canGoNext = hasKnownTotal
+            ? preview.offset + pageCount < preview.numRowsTotal
+            : preview.partial || (pageSize > 0 && pageCount >= pageSize);
+        final nextOffset =
+            preview.offset + (pageCount > 0 ? pageCount : pageSize);
         if (!_hfOffsetFocus.hasFocus) {
           final nextText = (preview.offset + 1).toString();
           if (_hfOffsetController.text != nextText) {
@@ -2874,12 +3339,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
               child: Row(
                 children: [
                   IconButton(
-                    onPressed: preview.offset > 0
-                        ? () => state.setHfOffset(
-                              (preview.offset - preview.length)
-                                  .clamp(0, preview.numRowsTotal)
-                                  .toInt(),
-                            )
+                    onPressed: canGoPrev
+                        ? () => state.setHfOffset(prevOffset < 0 ? 0 : prevOffset)
                         : null,
                     icon: const Icon(Icons.chevron_left),
                   ),
@@ -2916,10 +3377,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
                     ),
                   ),
                   IconButton(
-                    onPressed: preview.offset + preview.rows.length <
-                            preview.numRowsTotal
-                        ? () => state
-                            .setHfOffset(preview.offset + preview.rows.length)
+                    onPressed: canGoNext
+                        ? () => state.setHfOffset(nextOffset)
                         : null,
                     icon: const Icon(Icons.chevron_right),
                   ),
@@ -2937,12 +3396,21 @@ class _InspectorScreenState extends State<InspectorScreen> {
     final requested = int.tryParse(raw);
     if (requested == null) return;
     final total = preview.numRowsTotal;
-    if (total <= 0) {
-      state.setHfOffset(0);
-      return;
-    }
     var rowNumber = requested;
     if (rowNumber < 1) rowNumber = 1;
+    if (total <= 0) {
+      final offset = rowNumber - 1;
+      if (offset != preview.offset) {
+        state.setHfOffset(offset);
+      }
+      if (_hfOffsetController.text != rowNumber.toString()) {
+        _hfOffsetController.text = rowNumber.toString();
+        _hfOffsetController.selection = TextSelection.collapsed(
+          offset: _hfOffsetController.text.length,
+        );
+      }
+      return;
+    }
     if (rowNumber > total) rowNumber = total;
     final offset = rowNumber - 1;
     if (offset != preview.offset) {
@@ -2990,19 +3458,17 @@ class _InspectorScreenState extends State<InspectorScreen> {
   }
 
   Widget _buildInlineMetaText(BuildContext context, String text) {
-    return Flexible(
-      fit: FlexFit.loose,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(minWidth: 72, maxWidth: 240),
-        child: Align(
-          alignment: Alignment.centerRight,
-          child: Text(
-            text,
-            style: Theme.of(context).textTheme.bodySmall,
-            textAlign: TextAlign.right,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 180),
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: Text(
+          text,
+          style: Theme.of(context).textTheme.bodySmall,
+          textAlign: TextAlign.right,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          softWrap: false,
         ),
       ),
     );
@@ -3010,15 +3476,18 @@ class _InspectorScreenState extends State<InspectorScreen> {
 
   Widget _buildZenodoEntriesPane(ViewerState state) {
     final recordFuture = state.zenodoRecordFuture;
-    if (recordFuture == null)
+    if (recordFuture == null) {
       return const Center(child: Text('No record loaded.'));
+    }
     return FutureBuilder<ZenodoRecordSummary>(
       future: recordFuture,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _LoadingList();
         }
-        if (!snapshot.hasData) return const Center(child: Text('No entries.'));
+        if (!snapshot.hasData) {
+          return const Center(child: Text('No entries.'));
+        }
         if (state.zenodoZipEntriesFuture != null) {
           return _buildZenodoZipEntries(state);
         }
@@ -3224,8 +3693,9 @@ class _InspectorScreenState extends State<InspectorScreen> {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const _LoadingPreview();
           }
-          if (!snapshot.hasData)
-            return const Center(child: Text('No preview.'));
+        if (!snapshot.hasData) {
+          return const Center(child: Text('No preview.'));
+        }
           final preview = snapshot.data!;
           return _buildZenodoInlinePreview(state, preview);
         },
@@ -3238,8 +3708,9 @@ class _InspectorScreenState extends State<InspectorScreen> {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const _LoadingPreview();
           }
-          if (!snapshot.hasData)
-            return const Center(child: Text('No preview.'));
+        if (!snapshot.hasData) {
+          return const Center(child: Text('No preview.'));
+        }
           final preview = snapshot.data!;
           return _buildPreviewContent(state, preview);
         },
@@ -3249,7 +3720,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
   }
 
   Widget _buildZenodoInlinePreview(ViewerState state, FieldPreview preview) {
-    final ext = preview.guessedExt?.toLowerCase() ?? '';
+    final ext = _resolvePreviewExt(preview, state: state);
     if (_isVideoExt(ext)) {
       return _PreviewSection(
         scrollable: false,
@@ -3278,7 +3749,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
 
   Widget _buildInlineMediaPreview(
       InlineMediaResponse media, FieldPreview preview) {
-    final ext = media.ext.toLowerCase();
+    final ext = _normalizeExtToken(media.ext);
     Widget content;
     if (_isImageExt(ext)) {
       final bytes = base64Decode(media.base64);
@@ -3316,8 +3787,12 @@ class _InspectorScreenState extends State<InspectorScreen> {
   }
 
   Widget _buildPreviewContent(ViewerState state, FieldPreview preview,
-      {bool isWds = false}) {
-    final ext = preview.guessedExt?.toLowerCase() ?? '';
+      {bool isWds = false, String? sourcePath}) {
+    final ext = _resolvePreviewExt(
+      preview,
+      state: state,
+      fallbackPath: sourcePath,
+    );
     final showAudio = _isAudioExt(ext);
     final showImage = _isImageExt(ext);
     final content = showAudio
@@ -3450,7 +3925,12 @@ class _InspectorScreenState extends State<InspectorScreen> {
     return AudioPreview(
       key: ValueKey('audio:$selectionKey'),
       label: 'Audio preview',
-      loader: () => _prepareAudioPreview(state, preview, isWds: isWds),
+      loader: () => _prepareAudioPreview(
+        state,
+        preview,
+        isWds: isWds,
+        sourcePath: _resolveSelectedLocalItemPath(state),
+      ),
     );
   }
 
@@ -3474,9 +3954,17 @@ class _InspectorScreenState extends State<InspectorScreen> {
   }
 
   Future<PreparedMediaResponse> _prepareAudioPreview(
-      ViewerState state, FieldPreview preview,
-      {required bool isWds}) async {
-    if (!_isAudioExt(preview.guessedExt ?? '')) {
+    ViewerState state,
+    FieldPreview preview, {
+    required bool isWds,
+    String? sourcePath,
+  }) async {
+    final ext = _resolvePreviewExt(
+      preview,
+      state: state,
+      fallbackPath: sourcePath,
+    );
+    if (!_isAudioExt(ext)) {
       throw Exception('Not audio');
     }
     if (state.mode == ViewerMode.zenodo) {
@@ -3762,8 +4250,9 @@ class _InspectorScreenState extends State<InspectorScreen> {
 
   Future<void> _openHfSelectedField(
       ViewerState state, HfDatasetPreview preview) async {
-    if (state.hfSelectedRowIndex == null || state.hfSelectedFieldName == null)
+    if (state.hfSelectedRowIndex == null || state.hfSelectedFieldName == null) {
       return;
+    }
     try {
       var open = await state.huggingfaceOpenField(
         input: state.sourceInput,
@@ -3806,7 +4295,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
     final trimmed = ext.trim().toLowerCase();
     if (trimmed.isEmpty || trimmed == 'unknown') return 'unknown';
     if (trimmed.startsWith('.')) return trimmed;
-    return '.${trimmed}';
+    return '.$trimmed';
   }
 
   String _extFromFormat(String? format) {
@@ -3913,6 +4402,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
         cleaned == 'json' ||
         cleaned == 'csv' ||
         cleaned == 'tsv' ||
+        cleaned == 'parquet' ||
         cleaned == 'md' ||
         cleaned == 'yaml' ||
         cleaned == 'yml') {
@@ -3922,7 +4412,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
   }
 
   bool _isImageExt(String ext) {
-    switch (ext.toLowerCase()) {
+    switch (_normalizeExtToken(ext)) {
       case 'png':
       case 'jpg':
       case 'jpeg':
@@ -3937,7 +4427,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
   }
 
   bool _isAudioExt(String ext) {
-    switch (ext.toLowerCase()) {
+    switch (_normalizeExtToken(ext)) {
       case 'wav':
       case 'mp3':
       case 'flac':
@@ -3953,7 +4443,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
   }
 
   bool _isVideoExt(String ext) {
-    switch (ext.toLowerCase()) {
+    switch (_normalizeExtToken(ext)) {
       case 'mp4':
       case 'webm':
       case 'mov':
@@ -3974,6 +4464,60 @@ class _InspectorScreenState extends State<InspectorScreen> {
     }
     final decimals = v >= 10 || v < 1 ? 0 : 1;
     return '${v.toStringAsFixed(decimals)} ${units[idx]}';
+  }
+
+  String _resolvePreviewExt(
+    FieldPreview preview, {
+    required ViewerState state,
+    String? fallbackPath,
+  }) {
+    final guessedExt = _normalizeExtToken(preview.guessedExt);
+    if (guessedExt.isNotEmpty) return guessedExt;
+    if (state.mode == ViewerMode.localDirectory) {
+      final sourcePath = fallbackPath ?? _resolveSelectedLocalItemPath(state);
+      if (sourcePath == null || sourcePath.isEmpty) {
+        return '';
+      }
+      final fromPath = _normalizeExtToken(_extFromPath(sourcePath));
+      if (fromPath.isNotEmpty) {
+        return fromPath;
+      }
+    }
+    return '';
+  }
+
+  String _normalizeExtToken(String? ext) {
+    if (ext == null) return '';
+    var normalized = ext.trim().toLowerCase();
+    if (normalized.isEmpty) return '';
+    final queryIndex = normalized.indexOf('?');
+    if (queryIndex >= 0) {
+      normalized = normalized.substring(0, queryIndex);
+    }
+    final semicolonIndex = normalized.indexOf(';');
+    if (semicolonIndex >= 0) {
+      normalized = normalized.substring(0, semicolonIndex);
+    }
+    final slashIndex = normalized.lastIndexOf('/');
+    if (slashIndex >= 0 && slashIndex + 1 < normalized.length) {
+      normalized = normalized.substring(slashIndex + 1);
+    }
+    if (normalized.isEmpty) return '';
+    if (normalized.startsWith('.')) {
+      normalized = normalized.substring(1);
+    }
+    if (normalized.isEmpty) return '';
+    final audioSuffixIndex = normalized.indexOf('audio/');
+    if (audioSuffixIndex == 0) {
+      normalized = normalized.substring('audio/'.length);
+    }
+    if (normalized.endsWith('.')) return '';
+    final dotIndex = normalized.lastIndexOf('.');
+    if (dotIndex >= 0) {
+      if (dotIndex + 1 >= normalized.length) return '';
+      normalized = normalized.substring(dotIndex + 1);
+    }
+    return normalized;
   }
 }
 
@@ -4155,9 +4699,9 @@ class _ExplorerTileState extends State<_ExplorerTile> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final bg = widget.selected
-        ? scheme.primary.withOpacity(0.12)
+        ? scheme.primary.withValues(alpha: 0.12)
         : _hovered
-            ? scheme.onSurface.withOpacity(0.06)
+            ? scheme.onSurface.withValues(alpha: 0.06)
             : Colors.transparent;
 
     return MouseRegion(
@@ -4177,9 +4721,9 @@ class _ExplorerTileState extends State<_ExplorerTile> {
           ),
           padding: EdgeInsets.fromLTRB(
             widget.selected ? 6 : 8,
-            4,
-            8,
-            4,
+            6,
+            10,
+            6,
           ),
           child: widget.child,
         ),

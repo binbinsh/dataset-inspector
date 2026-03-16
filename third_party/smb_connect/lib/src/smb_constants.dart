@@ -9,8 +9,8 @@ abstract class SmbConstants {
   static const int DEFAULT_MAX_MPX_COUNT = 10;
   static const int DEFAULT_RESPONSE_TIMEOUT = 30000;
   static const int DEFAULT_SO_TIMEOUT = 10000; //35000;
-  static const int DEFAULT_RCV_BUF_SIZE = 0xFFFF;
-  static const int DEFAULT_SND_BUF_SIZE = 0xFFFF;
+  static const int DEFAULT_RCV_BUF_SIZE = 1024 * 1024; // 1 MB
+  static const int DEFAULT_SND_BUF_SIZE = 1024 * 1024; // 1 MB
   // static const int DEFAULT_NOTIFY_BUF_SIZE = 1024;
 
   // static const int DEFAULT_SSN_LIMIT = 250;

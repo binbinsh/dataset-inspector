@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/remote_host.dart';
 import '../services/remote_dataset_service.dart';
+import '../utils/dialog_action_styles.dart';
 
 Future<String?> showRemotePathPickerDialog({
   required BuildContext context,
@@ -182,15 +183,18 @@ Future<String?> showRemotePathPickerDialog({
               ),
             ),
             actions: [
-              TextButton(
+              OutlinedButton(
+                style: buildDialogSecondaryButtonStyle(context),
                 onPressed: () => Navigator.of(dialogContext).pop(),
                 child: const Text('Cancel'),
               ),
-              TextButton(
+              OutlinedButton(
+                style: buildDialogSecondaryButtonStyle(context),
                 onPressed: () => Navigator.of(dialogContext).pop(currentPath),
                 child: const Text('Use Current Folder'),
               ),
               FilledButton(
+                style: buildDialogPrimaryButtonStyle(context),
                 onPressed: selectedPath.trim().isEmpty
                     ? null
                     : () => Navigator.of(dialogContext).pop(selectedPath),

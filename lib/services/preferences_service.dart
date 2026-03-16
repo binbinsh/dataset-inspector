@@ -19,9 +19,12 @@ class PreferencesService {
   static const _storeLastIndex = 'last_index';
   static const _storeOpenersByExt = 'openers_by_ext';
   static const _storeHfToken = 'hf_token';
+  static const _storeApiEnabled = 'api_enabled';
+  static const _storeApiHost = 'api_host';
+  static const _storeApiPort = 'api_port';
+  static const _storeApiMaxConcurrency = 'api_max_concurrency';
   static const _storeRecentSources = 'recent_sources';
   static const _storeRemoteHosts = 'remote_hosts_v1';
-  static const _storeRemoteCacheQuotaMb = 'remote_cache_quota_mb_v1';
   static const _storeViewerSession = 'viewer_session_v1';
   static const _viewerSessionFilename = 'viewer_session.json';
 
@@ -123,22 +126,6 @@ class PreferencesService {
     await prefs.setString(_storeRemoteHosts, jsonEncode(payload));
   }
 
-  Future<int?> readRemoteCacheQuotaMb() async {
-    final prefs = await _getPrefs();
-    final value = prefs.getInt(_storeRemoteCacheQuotaMb);
-    if (value == null || value <= 0) return null;
-    return value;
-  }
-
-  Future<void> saveRemoteCacheQuotaMb(int? quotaMb) async {
-    final prefs = await _getPrefs();
-    if (quotaMb == null || quotaMb <= 0) {
-      await prefs.remove(_storeRemoteCacheQuotaMb);
-      return;
-    }
-    await prefs.setInt(_storeRemoteCacheQuotaMb, quotaMb);
-  }
-
   Future<void> saveHfToken(String token) async {
     final prefs = await _getPrefs();
     await prefs.setString(_storeHfToken, token.trim());
@@ -147,6 +134,62 @@ class PreferencesService {
   Future<void> clearHfToken() async {
     final prefs = await _getPrefs();
     await prefs.remove(_storeHfToken);
+  }
+
+  Future<bool> readApiEnabled() async {
+    final prefs = await _getPrefs();
+    return prefs.getBool(_storeApiEnabled) ?? false;
+  }
+
+  Future<String?> readApiHost() async {
+    final prefs = await _getPrefs();
+    final raw = prefs.getString(_storeApiHost);
+    if (raw == null) return null;
+    final normalized = raw.trim();
+    return normalized.isEmpty ? null : normalized;
+  }
+
+  Future<int?> readApiPort() async {
+    final prefs = await _getPrefs();
+    return prefs.getInt(_storeApiPort);
+  }
+
+  Future<int?> readApiMaxConcurrency() async {
+    final prefs = await _getPrefs();
+    return prefs.getInt(_storeApiMaxConcurrency);
+  }
+
+  Future<void> saveApiEnabled(bool enabled) async {
+    final prefs = await _getPrefs();
+    await prefs.setBool(_storeApiEnabled, enabled);
+  }
+
+  Future<void> saveApiHost(String host) async {
+    final normalized = host.trim();
+    if (normalized.isEmpty) {
+      await _getPrefs().then((prefs) => prefs.remove(_storeApiHost));
+    } else {
+      final prefs = await _getPrefs();
+      await prefs.setString(_storeApiHost, normalized);
+    }
+  }
+
+  Future<void> saveApiPort(int port) async {
+    if (port <= 0 || port > 65535) {
+      await _getPrefs().then((prefs) => prefs.remove(_storeApiPort));
+      return;
+    }
+    final prefs = await _getPrefs();
+    await prefs.setInt(_storeApiPort, port);
+  }
+
+  Future<void> saveApiMaxConcurrency(int maxConcurrency) async {
+    if (maxConcurrency < 1) {
+      await _getPrefs().then((prefs) => prefs.remove(_storeApiMaxConcurrency));
+      return;
+    }
+    final prefs = await _getPrefs();
+    await prefs.setInt(_storeApiMaxConcurrency, maxConcurrency);
   }
 
   Future<ViewerSessionSnapshot?> readViewerSession() async {

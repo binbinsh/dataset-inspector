@@ -1,0 +1,796 @@
+openapi: 3.0.3
+info:
+  title: Dataset Inspector API
+  version: 26.0228.1031
+  description: |
+    Read-only inspection API for currently opened datasets in dataset-inspector.
+    Supports mixed local/remote sources and mixed formats through a uniform dataset view.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local dataset-inspector default
+tags:
+  - name: datasets
+    description: Opened dataset inspection APIs
+
+paths:
+  /health:
+    get:
+      tags:
+        - datasets
+      summary: Health check
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiEnvelope'
+  /api/v1/opened:
+    get:
+      tags:
+        - datasets
+      summary: List opened datasets
+      operationId: listOpenedDatasets
+      parameters:
+        - name: ids
+          in: query
+          required: false
+          description: Comma or semicolon separated list of dataset IDs.
+          schema:
+            type: string
+        - name: idList
+          in: query
+          required: false
+          description: Alias for ids.
+          schema:
+            type: string
+        - name: datasetIds
+          in: query
+          required: false
+          description: Alias for ids.
+          schema:
+            type: string
+        - name: details
+          in: query
+          required: false
+          description: Include detailed per-dataset information.
+          schema:
+            type: boolean
+            default: true
+        - name: fields
+          in: query
+          required: false
+          description: Comma/semicolon separated projection fields. `*` means full object.
+          schema:
+            type: string
+        - name: projection
+          in: query
+          required: false
+          description: Alias of `fields`.
+          schema:
+            type: string
+        - name: concurrency
+          in: query
+          required: false
+          description: Maximum concurrent dataset inspections.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 64
+            default: 8
+        - name: includeMissing
+          in: query
+          required: false
+          description: Return not-found IDs in the `missing` array in response.
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Successful dataset list response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenedListResponseEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags:
+        - datasets
+      summary: List or batch inspect datasets
+      operationId: listOrBatchInspect
+      description: |
+        Without `ids`, behaves like listing all opened datasets.
+        With `ids`, behaves as a batch request.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ListDatasetsRequest'
+      parameters:
+        - name: concurrency
+          in: query
+          required: false
+          description: Default fallback when body does not specify concurrency.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 64
+            default: 8
+        - name: includeMissing
+          in: query
+          required: false
+          description: Default fallback when body does not specify includeMissing.
+          schema:
+            type: boolean
+            default: false
+        - name: fields
+          in: query
+          required: false
+          description: Projection override for response fields.
+          schema:
+            type: string
+        - name: projection
+          in: query
+          required: false
+          description: Alias of `fields`.
+          schema:
+            type: string
+        - name: X-Request-ID
+          in: header
+          required: false
+          description: Optional request identifier propagated in response header and body.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response (single list or batch payload)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenedListResponseEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+  /api/v1/opened/{datasetId}:
+    get:
+      tags:
+        - datasets
+      summary: Inspect one opened dataset
+      operationId: inspectDataset
+      parameters:
+        - name: datasetId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: details
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+        - name: fields
+          in: query
+          required: false
+          description: Comma/semicolon separated projection fields.
+          schema:
+            type: string
+        - name: projection
+          in: query
+          required: false
+          description: Alias of `fields`.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Single dataset response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenedDatasetEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/opened/{datasetId}/extract:
+    post:
+      tags:
+        - datasets
+      summary: Stream or materialize a bounded wav+text probe set from one opened dataset
+      operationId: extractOpenedDatasetSample
+      parameters:
+        - name: datasetId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: concurrency
+          in: query
+          required: false
+          description: Maximum concurrent record extraction workers.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 64
+            default: 8
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtractRequest'
+      responses:
+        '200':
+          description: Successful extraction response
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+                description: |
+                  Chunked NDJSON stream. The first line is `type=meta`,
+                  followed by `type=record` or `type=error` lines,
+                  then a final `type=summary` line.
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtractResponseEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+  /api/v1/opened/batch:
+    post:
+      tags:
+        - datasets
+      summary: Batch inspect opened datasets
+      operationId: batchInspectDatasets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchOpenedRequest'
+      parameters:
+        - name: X-Request-ID
+          in: header
+          required: false
+          description: Optional request identifier propagated in response header and body.
+          schema:
+            type: string
+        - name: concurrency
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 64
+            default: 8
+        - name: includeMissing
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+        - name: fields
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: projection
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Batch dataset response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchOpenedResponseEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+  /api/v1/opened/_batch:
+    post:
+      tags:
+        - datasets
+      summary: Legacy batch inspect endpoint
+      deprecated: true
+      operationId: legacyBatchInspectDatasets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchOpenedRequest'
+      parameters:
+        - name: X-Request-ID
+          in: header
+          required: false
+          description: Optional request identifier propagated in response header and body.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Batch dataset response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchOpenedResponseEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+
+components:
+  responses:
+    BadRequest:
+      description: Invalid request payload or parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiErrorEnvelope'
+    UnsupportedMediaType:
+      description: Unsupported Content-Type for JSON endpoints
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiErrorEnvelope'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiErrorEnvelope'
+
+  schemas:
+    ApiEnvelope:
+      type: object
+      required:
+        - ok
+        - requestId
+        - apiVersion
+        - timestamp
+        - meta
+      properties:
+        ok:
+          type: boolean
+          example: true
+        requestId:
+          type: string
+          example: '1709099090000-000001'
+        apiVersion:
+          type: string
+          example: '26.0228.1031'
+        timestamp:
+          type: string
+          format: date-time
+          example: '2026-02-28T10:00:00.000Z'
+        meta:
+          type: object
+          additionalProperties: true
+        data:
+          type: object
+          additionalProperties: true
+    ApiErrorEnvelope:
+      type: object
+      required:
+        - ok
+        - requestId
+        - apiVersion
+        - timestamp
+        - meta
+        - error
+      properties:
+        ok:
+          type: boolean
+          example: false
+        requestId:
+          type: string
+        apiVersion:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        meta:
+          $ref: '#/components/schemas/ErrorMeta'
+        error:
+          $ref: '#/components/schemas/ErrorBody'
+    ErrorMeta:
+      type: object
+      required:
+        - path
+        - method
+        - service
+        - durationMs
+      properties:
+        path:
+          type: string
+          example: /api/v1/opened
+        method:
+          type: string
+          example: GET
+        service:
+          type: string
+          example: dataset-inspector
+        durationMs:
+          type: integer
+          example: 12
+        status:
+          type: integer
+          example: 400
+    ErrorBody:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          enum:
+            - INVALID_BOOLEAN
+            - INVALID_CONCURRENCY
+            - INVALID_JSON
+            - INVALID_FIELDS
+            - INVALID_IDS
+            - TOO_MANY_IDS
+            - INVALID_REQUEST
+            - UNSUPPORTED_MEDIA_TYPE
+            - DATASET_NOT_FOUND
+            - NOT_FOUND
+            - INTERNAL_ERROR
+            - METHOD_NOT_ALLOWED
+            - LIST_FAILED
+          example: INVALID_BOOLEAN
+        message:
+          type: string
+          example: Invalid boolean for `details`.
+        details:
+          type: object
+          additionalProperties: true
+
+    OpenedListResponse:
+      type: object
+      required:
+        - activeDatasetId
+        - datasets
+      properties:
+        activeDatasetId:
+          type: string
+          nullable: true
+        sourceInput:
+          type: string
+          nullable: true
+        datasets:
+          type: array
+          items:
+            $ref: '#/components/schemas/DatasetSnapshot'
+        requested:
+          type: integer
+        returned:
+          type: integer
+        count:
+          type: integer
+        missing:
+          type: array
+          items:
+            type: string
+
+    OpenedListResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            meta:
+              $ref: '#/components/schemas/ListMeta'
+            data:
+              $ref: '#/components/schemas/OpenedListResponse'
+
+    OpenedDatasetEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            meta:
+              $ref: '#/components/schemas/SingleMeta'
+            data:
+              allOf:
+                - $ref: '#/components/schemas/DatasetSnapshot'
+                - type: object
+                  nullable: true
+
+    ExtractResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            meta:
+              $ref: '#/components/schemas/ListMeta'
+            data:
+              $ref: '#/components/schemas/ExtractResponse'
+
+    BatchOpenedResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            meta:
+              $ref: '#/components/schemas/ListMeta'
+            data:
+              $ref: '#/components/schemas/OpenedListResponse'
+
+    ExtractRequest:
+      type: object
+      required:
+        - shardName
+        - audioFieldIndex
+        - textFieldIndex
+      properties:
+        shardName:
+          type: string
+        offset:
+          type: integer
+          default: 0
+        limit:
+          type: integer
+          default: 32
+        audioFieldIndex:
+          type: integer
+        textFieldIndex:
+          type: integer
+        idFieldIndex:
+          type: integer
+          nullable: true
+        responseMode:
+          type: string
+          enum:
+            - stream
+            - materialize
+          default: stream
+        audioEncoding:
+          type: string
+          enum:
+            - base64
+            - none
+          default: base64
+        outputDir:
+          type: string
+          nullable: true
+        manifestName:
+          type: string
+          default: manifest.jsonl
+        audioDirName:
+          type: string
+          default: audio
+        overwrite:
+          type: boolean
+          default: false
+
+    ExtractResponse:
+      type: object
+      required:
+        - datasetId
+        - mode
+        - sourceInput
+        - shardName
+        - recordCount
+        - records
+      properties:
+        datasetId:
+          type: string
+        mode:
+          type: string
+        sourceInput:
+          type: string
+        shardName:
+          type: string
+        offset:
+          type: integer
+        limit:
+          type: integer
+        total:
+          type: integer
+          nullable: true
+        recordCount:
+          type: integer
+        outputDir:
+          type: string
+          nullable: true
+        audioDir:
+          type: string
+          nullable: true
+        manifestPath:
+          type: string
+          nullable: true
+        records:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    ListMeta:
+      allOf:
+        - $ref: '#/components/schemas/BaseMeta'
+        - type: object
+          properties:
+            requested:
+              type: integer
+              example: 4
+            returned:
+              type: integer
+              example: 4
+            count:
+              type: integer
+              example: 4
+            concurrency:
+              type: integer
+              example: 8
+            includeDetails:
+              type: boolean
+            projection:
+              type: array
+              nullable: true
+              items:
+                type: string
+
+    SingleMeta:
+      allOf:
+        - $ref: '#/components/schemas/BaseMeta'
+        - type: object
+          properties:
+            requested:
+              type: integer
+              example: 1
+            returned:
+              type: integer
+              example: 1
+            count:
+              type: integer
+              example: 1
+            includeDetails:
+              type: boolean
+
+    BaseMeta:
+      type: object
+      required:
+        - path
+        - method
+        - service
+        - durationMs
+      properties:
+        path:
+          type: string
+          example: /api/v1/opened
+        method:
+          type: string
+          example: GET
+        service:
+          type: string
+          example: dataset-inspector
+        durationMs:
+          type: integer
+          example: 20
+
+    ListDatasetsRequest:
+      type: object
+      properties:
+        ids:
+          oneOf:
+            - type: string
+              description: Comma/semicolon separated ids
+            - type: array
+              items:
+                type: string
+          example: ["id1", "id2"]
+        details:
+          type: boolean
+          default: true
+        includeDetails:
+          type: boolean
+          default: true
+        includeMissing:
+          type: boolean
+          default: false
+        concurrency:
+          type: integer
+          minimum: 1
+          maximum: 64
+          default: 8
+        fields:
+          type: string
+          description: Comma/semicolon separated projection fields
+        projection:
+          type: string
+          description: Alias of `fields`
+
+    BatchOpenedRequest:
+      type: object
+      required:
+        - ids
+      properties:
+        ids:
+          oneOf:
+            - type: string
+              description: Comma/semicolon separated ids
+            - type: array
+              items:
+                type: string
+          example: ["id1", "id2", "id3"]
+        details:
+          type: boolean
+          default: true
+        includeDetails:
+          type: boolean
+          default: true
+        includeMissing:
+          type: boolean
+          default: true
+        concurrency:
+          type: integer
+          minimum: 1
+          maximum: 64
+          default: 8
+        fields:
+          type: string
+          description: Comma/semicolon separated projection fields
+        projection:
+          type: string
+          description: Alias of `fields`
+
+    DatasetSnapshot:
+      type: object
+      required:
+        - id
+        - identity
+        - label
+        - mode
+        - isActive
+        - selection
+      properties:
+        id:
+          type: string
+        identity:
+          type: string
+        label:
+          type: string
+        mode:
+          type: string
+          example: huggingface
+        sourceInput:
+          type: string
+          nullable: true
+        payload:
+          oneOf:
+            - type: string
+            - type: 'null'
+        paths:
+          type: array
+          items:
+            type: string
+          nullable: true
+        expanded:
+          type: boolean
+        isActive:
+          type: boolean
+        selection:
+          type: object
+          additionalProperties: true
+        details:
+          type: object
+          additionalProperties: true
+        uniform:
+          type: object
+          additionalProperties: true
+        ok:
+          type: boolean
+        status:
+          type: string

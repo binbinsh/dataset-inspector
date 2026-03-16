@@ -8,7 +8,12 @@ import 'utils/app_fonts.dart';
 import 'widgets/inspector_screen.dart';
 
 class DatasetInspectorApp extends StatelessWidget {
-  const DatasetInspectorApp({super.key});
+  const DatasetInspectorApp({
+    super.key,
+    required this.viewerState,
+  });
+
+  final ViewerState viewerState;
 
   @override
   Widget build(BuildContext context) {
@@ -58,7 +63,7 @@ class DatasetInspectorApp extends StatelessWidget {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: baseScheme.surfaceContainerLow,
-        hintStyle: textTheme.bodySmall?.copyWith(color: baseScheme.onSurface.withOpacity(0.5)),
+        hintStyle: textTheme.bodySmall?.copyWith(color: baseScheme.onSurface.withValues(alpha: 0.5)),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
           borderSide: BorderSide(color: baseScheme.outlineVariant),
@@ -91,8 +96,8 @@ class DatasetInspectorApp extends StatelessWidget {
       ),
     );
 
-    return ChangeNotifierProvider(
-      create: (_) => ViewerState()..bootstrap(),
+    return ChangeNotifierProvider<ViewerState>.value(
+      value: viewerState,
       child: MaterialApp(
         title: '',
         theme: theme,

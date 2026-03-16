@@ -1,108 +1,6 @@
 part of 'remote_dataset_service.dart';
 
 extension _RemoteDatasetServiceR2 on RemoteDatasetService {
-  Future<String> _syncR2PrefixToCache(
-    RemoteHostConfig host,
-    String datasetPath, {
-    RemoteStatusCallback? onStatus,
-  }) async {
-    final config = host.r2;
-    if (config == null) {
-      throw const FormatException('Invalid Cloudflare R2 host configuration.');
-    }
-
-    final context = _buildR2Context(config);
-    final effectivePrefix = _joinPrefix(config.basePrefix ?? '', datasetPath);
-    final listedPrefix = effectivePrefix.isEmpty ? '' : '$effectivePrefix/';
-
-    final localPrefixSlug = _slugifyPath(effectivePrefix);
-    final cacheRoot = await _resolveR2CacheRoot(config);
-    final destination = Directory(
-      p.join(
-        cacheRoot.path,
-        _slugifyHost(host.id),
-        _slugifyHost(config.bucket),
-        localPrefixSlug,
-      ),
-    );
-    await destination.create(recursive: true);
-
-    onStatus?.call(
-      'Listing R2 objects: ${host.label} / ${config.bucket} / ${listedPrefix.isEmpty ? "<root>" : listedPrefix}',
-    );
-
-    final objects = await _listR2Objects(
-      client: context.client,
-      bucket: context.bucket,
-      prefix: listedPrefix,
-      recursive: true,
-    );
-
-    if (objects.isEmpty) {
-      throw FormatException(
-        'No objects found under R2 prefix "${listedPrefix.isEmpty ? "/" : listedPrefix}"',
-      );
-    }
-
-    final totalBytes = objects.fold<int>(
-      0,
-      (sum, object) => sum + object.sizeBytes,
-    );
-
-    onStatus?.call(
-      'Syncing ${objects.length} objects (${_formatBytes(totalBytes)}) from R2...',
-    );
-
-    var completed = 0;
-    for (final object in objects) {
-      final key = object.key.trim();
-      if (key.isEmpty) continue;
-      final relativePath = _relativeObjectPath(
-        key: key,
-        listedPrefix: listedPrefix,
-      );
-      if (relativePath == null || relativePath.isEmpty) continue;
-
-      final outPath = p.normalize(p.join(destination.path, relativePath));
-      if (!p.isWithin(destination.path, outPath) &&
-          outPath != destination.path) {
-        continue;
-      }
-
-      final outFile = File(outPath);
-      await outFile.parent.create(recursive: true);
-
-      final expectedSize = object.sizeBytes;
-      final existingSize =
-          await outFile.stat().then((s) => s.size).catchError((_) => -1);
-      if (existingSize == expectedSize && expectedSize >= 0) {
-        completed += 1;
-        if (completed % 50 == 0 || completed == objects.length) {
-          onStatus?.call('R2 sync progress: $completed / ${objects.length}');
-        }
-        continue;
-      }
-
-      final stream = await context.client.getObject(context.bucket, key);
-      final sink = outFile.openWrite();
-      try {
-        await stream.pipe(sink);
-      } finally {
-        await sink.close();
-      }
-
-      completed += 1;
-      if (completed % 20 == 0 || completed == objects.length) {
-        onStatus?.call('R2 sync progress: $completed / ${objects.length}');
-      }
-    }
-
-    onStatus?.call(
-      'R2 sync complete: ${objects.length} objects cached at ${destination.path}',
-    );
-    return destination.path;
-  }
-
   Future<RemoteHostConnectionResult> _testR2Connection({
     required RemoteHostConfig host,
     required bool verifyWrite,
@@ -304,6 +202,7 @@ extension _RemoteDatasetServiceR2 on RemoteDatasetService {
   Stream<List<int>> _openReadR2({
     required RemoteHostConfig host,
     required String remotePath,
+    int? maxBytes,
     RemoteStatusCallback? onStatus,
   }) async* {
     final config = host.r2;
@@ -320,7 +219,9 @@ extension _RemoteDatasetServiceR2 on RemoteDatasetService {
     final key = _joinPrefix(config.basePrefix ?? '', normalizedPath);
     onStatus?.call('Streaming R2 object: ${context.bucket}/$key');
 
-    final stream = await context.client.getObject(context.bucket, key);
+    final stream = maxBytes != null && maxBytes > 0
+        ? await context.client.getPartialObject(context.bucket, key, 0, maxBytes)
+        : await context.client.getObject(context.bucket, key);
     await for (final chunk in stream) {
       if (chunk.isEmpty) continue;
       yield chunk;
@@ -423,6 +324,7 @@ extension _RemoteDatasetServiceR2 on RemoteDatasetService {
     );
   }
 
+  // ignore: unused_element
   Future<List<_R2ObjectMeta>> _listR2Objects({
     required s3.Minio client,
     required String bucket,
@@ -485,14 +387,5 @@ extension _RemoteDatasetServiceR2 on RemoteDatasetService {
       client: client,
       bucket: config.bucket.trim(),
     );
-  }
-
-  Future<Directory> _resolveR2CacheRoot(R2RemoteHostConfig config) async {
-    final customRoot = config.cacheRoot?.trim();
-    if (customRoot != null && customRoot.isNotEmpty) {
-      return Directory(customRoot);
-    }
-    final support = await getApplicationSupportDirectory();
-    return Directory(p.join(support.path, 'remote_cache', 'r2'));
   }
 }

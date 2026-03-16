@@ -52,12 +52,17 @@ class HfParquetResponse {
 
   /// Get all unique splits for a given config.
   Set<String> splitsForConfig(String config) {
-    return parquetFiles.where((f) => f.config == config).map((f) => f.split).toSet();
+    return parquetFiles
+        .where((f) => f.config == config)
+        .map((f) => f.split)
+        .toSet();
   }
 
   /// Get parquet files for a specific config and split.
   List<HfParquetFile> filesForSplit(String config, String split) {
-    return parquetFiles.where((f) => f.config == config && f.split == split).toList();
+    return parquetFiles
+        .where((f) => f.config == config && f.split == split)
+        .toList();
   }
 }
 
@@ -66,8 +71,6 @@ class HfParquetApi {
   HfParquetApi({http.Client? client}) : _client = client ?? http.Client();
 
   final http.Client _client;
-
-  /// Cache for parquet file lists (keyed by "dataset/config/split")
   final Map<String, List<HfParquetFile>> _filesCache = {};
 
   /// Fetches the list of Parquet files for a specific config/split.
@@ -79,9 +82,8 @@ class HfParquetApi {
     String? token,
   }) async {
     final cacheKey = '$dataset/$config/$split';
-    if (_filesCache.containsKey(cacheKey)) {
-      return _filesCache[cacheKey]!;
-    }
+    final cached = _filesCache[cacheKey];
+    if (cached != null) return cached;
 
     final url = Uri.parse(_datasetsServerBase).replace(
       path: 'parquet',
@@ -101,7 +103,8 @@ class HfParquetApi {
     final response = await _client.get(url, headers: headers);
     final status = response.statusCode;
     final text = response.body;
-    AppLogger.info('GET $url -> $status (${text.length} bytes)', tag: 'hf-parquet');
+    AppLogger.info('GET $url -> $status (${text.length} bytes)',
+        tag: 'hf-parquet');
 
     if (status < 200 || status >= 300) {
       String? errorMessage;
@@ -128,7 +131,6 @@ class HfParquetApi {
         .whereType<Map<String, dynamic>>()
         .map((json) => HfParquetFile.fromJson(json))
         .toList();
-
     _filesCache[cacheKey] = parquetFiles;
     return parquetFiles;
   }
@@ -155,7 +157,8 @@ class HfParquetApi {
     final response = await _client.get(url, headers: headers);
     final status = response.statusCode;
     final text = response.body;
-    AppLogger.info('GET $url -> $status (${text.length} bytes)', tag: 'hf-parquet');
+    AppLogger.info('GET $url -> $status (${text.length} bytes)',
+        tag: 'hf-parquet');
 
     if (status < 200 || status >= 300) {
       String? errorMessage;

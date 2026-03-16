@@ -31,7 +31,7 @@ class TarEntry {
 class TarStreamReader {
   TarStreamReader(this._reader);
 
-  final _ByteReader _reader;
+  final ByteReader _reader;
   String? _pendingLongName;
   String? _pendingPaxPath;
 
@@ -137,8 +137,8 @@ class TarStreamReader {
   }
 }
 
-class _ByteReader {
-  _ByteReader(Stream<List<int>> stream) : _iterator = StreamIterator(stream);
+class ByteReader {
+  ByteReader(Stream<List<int>> stream) : _iterator = StreamIterator(stream);
 
   final StreamIterator<List<int>> _iterator;
   final List<int> _buffer = [];
@@ -254,14 +254,14 @@ String normalizeTarPath(String path) {
 }
 
 ByteReaderHandle openTarStreamReader(Stream<List<int>> stream) {
-  final reader = _ByteReader(stream);
+  final reader = ByteReader(stream);
   return ByteReaderHandle(reader);
 }
 
 class ByteReaderHandle {
   ByteReaderHandle(this.reader);
 
-  final _ByteReader reader;
+  final ByteReader reader;
 }
 
 TarStreamReader createTarStream(ByteReaderHandle handle) {

@@ -12,6 +12,7 @@ const _previewBytes = 16 * 1024;
 const _maxCacheBytes = 128 * 1024 * 1024;
 
 class _ChunkCache {
+  // In-memory only. Never persist decoded chunks as cache files.
   final _cache = <String, Uint8List>{};
 
   Uint8List? fetch(String key) => _cache[key];
@@ -48,7 +49,8 @@ class _IndexFile {
     final chunks = (json['chunks'] as List<dynamic>? ?? [])
         .map((e) => _RawChunk.fromJson(e as Map<String, dynamic>))
         .toList();
-    final config = _IndexConfig.fromJson(json['config'] as Map<String, dynamic>? ?? {});
+    final config =
+        _IndexConfig.fromJson(json['config'] as Map<String, dynamic>? ?? {});
     return _IndexFile(chunks: chunks, config: config);
   }
 }
@@ -60,6 +62,7 @@ class _IndexConfig {
     required this.chunkBytes,
     required this.dataFormat,
     required this.dataSpec,
+    required this.itemLoader,
   });
 
   final String? compression;
@@ -67,6 +70,7 @@ class _IndexConfig {
   final int? chunkBytes;
   final List<String>? dataFormat;
   final String? dataSpec;
+  final String? itemLoader;
 
   factory _IndexConfig.fromJson(Map<String, dynamic> json) {
     return _IndexConfig(
@@ -77,6 +81,7 @@ class _IndexConfig {
           ?.map((e) => e.toString())
           .toList(),
       dataSpec: json['data_spec'] as String?,
+      itemLoader: json['item_loader'] as String?,
     );
   }
 }
@@ -147,7 +152,8 @@ class _MemoryChunkAccess extends _ChunkAccess {
 }
 
 class LitDataService {
-  LitDataService({OpenWithService? openWith}) : _openWith = openWith ?? OpenWithService();
+  LitDataService({OpenWithService? openWith})
+      : _openWith = openWith ?? OpenWithService();
 
   final _ChunkCache _cache = _ChunkCache();
   final OpenWithService _openWith;
@@ -169,6 +175,33 @@ class LitDataService {
     return IndexSummary(
       indexPath: parsed.source.path,
       rootDir: parsed.rootDir.path,
+      dataFormat: parsed.config.dataFormat ?? <String>[],
+      compression: parsed.config.compression,
+      chunkSize: parsed.config.chunkSize,
+      chunkBytes: parsed.config.chunkBytes,
+      configRaw: parsed.configRaw,
+      chunks: chunks,
+    );
+  }
+
+  Future<IndexSummary> loadIndexFromBytes(
+    Uint8List indexBytes, {
+    String indexName = 'index.json',
+  }) async {
+    final parsed = _parseIndexBytes(indexBytes, indexName: indexName);
+    final chunks = parsed.chunks.map((chunk) {
+      return ChunkSummary(
+        filename: chunk.filename,
+        path: chunk.filename,
+        chunkSize: chunk.chunkSize,
+        chunkBytes: chunk.chunkBytes,
+        dim: chunk.dim,
+        exists: true,
+      );
+    }).toList(growable: false);
+    return IndexSummary(
+      indexPath: indexName,
+      rootDir: '',
       dataFormat: parsed.config.dataFormat ?? <String>[],
       compression: parsed.config.compression,
       chunkSize: parsed.config.chunkSize,
@@ -211,7 +244,9 @@ class LitDataService {
       indexPath = parsed.source;
       rootDir = parsed.rootDir;
       final selected = nameToPath.keys.toSet();
-      rawChunks = parsed.chunks.where((chunk) => selected.contains(chunk.filename)).toList();
+      rawChunks = parsed.chunks
+          .where((chunk) => selected.contains(chunk.filename))
+          .toList();
     }
 
     final resolvedRootDir = rootDir ?? Directory.current;
@@ -243,13 +278,15 @@ class LitDataService {
     }
 
     final resolvedIndexPath = indexPath ?? File(paths.first);
-    final rawConfig = configRaw ?? <String, dynamic>{
-      'source': 'multi-bin',
-      'data_format': dataFormat,
-    };
+    final rawConfig = configRaw ??
+        <String, dynamic>{
+          'source': 'multi-bin',
+          'data_format': dataFormat,
+        };
 
     final chunks = rawChunks.map((chunk) {
-      final path = nameToPath[chunk.filename] ?? File('${resolvedRootDir.path}/${chunk.filename}');
+      final path = nameToPath[chunk.filename] ??
+          File('${resolvedRootDir.path}/${chunk.filename}');
       return ChunkSummary(
         filename: chunk.filename,
         path: path.path,
@@ -288,12 +325,13 @@ class LitDataService {
     return files.map((file) => file.path).toList();
   }
 
-  Future<List<ItemMeta>> listChunkItems(String indexPath, String chunkFilename) async {
+  Future<List<ItemMeta>> listChunkItems(
+      String indexPath, String chunkFilename) async {
     final parsed = await _parseIndex(File(indexPath));
+    final usesTokensLayout = _usesTokensItemLayout(parsed.config);
     final access = await _loadChunkAccess(parsed, chunkFilename);
     try {
       final formatLen = parsed.config.dataFormat?.length ?? 0;
-      final headerLen = formatLen * 4;
       final (numItems, offsets) = await _parseOffsets(access);
       final items = <ItemMeta>[];
       for (var itemIdx = 0; itemIdx < numItems; itemIdx += 1) {
@@ -302,14 +340,13 @@ class LitDataService {
         if (end < start) {
           throw const FormatException('Malformed chunk');
         }
-        final sizes = <int>[];
-        if (headerLen > 0) {
-          final head = await access.readExactAt(start, headerLen);
-          for (var j = 0; j < formatLen; j += 1) {
-            final pos = j * 4;
-            sizes.add(_readLeU32(head.sublist(pos, pos + 4)));
-          }
-        }
+        final sizes = await _readItemFieldSizes(
+          access,
+          start: start,
+          end: end,
+          formatLen: formatLen,
+          usesTokensLayout: usesTokensLayout,
+        );
         items.add(ItemMeta(
           itemIndex: itemIdx,
           totalBytes: end - start,
@@ -331,10 +368,10 @@ class LitDataService {
     int length = 200,
   }) async {
     final parsed = await _parseIndex(File(indexPath));
+    final usesTokensLayout = _usesTokensItemLayout(parsed.config);
     final access = await _loadChunkAccess(parsed, chunkFilename);
     try {
       final formatLen = parsed.config.dataFormat?.length ?? 0;
-      final headerLen = formatLen * 4;
       final numBuf = await access.readExactAt(0, 4);
       final numItems = _readLeU32(numBuf);
 
@@ -361,14 +398,13 @@ class LitDataService {
         if (endOffset < startOffset) {
           throw const FormatException('Malformed chunk');
         }
-        final sizes = <int>[];
-        if (headerLen > 0) {
-          final head = await access.readExactAt(startOffset, headerLen);
-          for (var j = 0; j < formatLen; j += 1) {
-            final pos = j * 4;
-            sizes.add(_readLeU32(head.sublist(pos, pos + 4)));
-          }
-        }
+        final sizes = await _readItemFieldSizes(
+          access,
+          start: startOffset,
+          end: endOffset,
+          formatLen: formatLen,
+          usesTokensLayout: usesTokensLayout,
+        );
         items.add(ItemMeta(
           itemIndex: itemIdx,
           totalBytes: endOffset - startOffset,
@@ -390,6 +426,56 @@ class LitDataService {
     }
   }
 
+  Future<List<ItemMeta>> listChunkItemsFromStream({
+    String? indexPath,
+    Uint8List? indexBytes,
+    String indexName = 'index.json',
+    required String chunkFilename,
+    required Stream<List<int>> chunkStream,
+  }) async {
+    final parsed = await _loadParsedIndexForStream(
+      indexPath: indexPath,
+      indexBytes: indexBytes,
+      indexName: indexName,
+    );
+    _chunkForFilename(parsed, chunkFilename);
+    final usesTokensLayout = _usesTokensItemLayout(parsed.config);
+    final formatLen = parsed.config.dataFormat?.length ?? 0;
+    final access = await _loadChunkAccessFromStream(
+      parsed: parsed,
+      chunkFilename: chunkFilename,
+      chunkStream: chunkStream,
+    );
+    try {
+      final (numItems, offsets) = await _parseOffsets(access);
+      final items = <ItemMeta>[];
+      for (var itemIdx = 0; itemIdx < numItems; itemIdx += 1) {
+        final start = offsets[itemIdx];
+        final end = offsets[itemIdx + 1];
+        if (end < start) {
+          throw const FormatException('Malformed chunk');
+        }
+        final sizes = await _readItemFieldSizes(
+          access,
+          start: start,
+          end: end,
+          formatLen: formatLen,
+          usesTokensLayout: usesTokensLayout,
+        );
+        items.add(ItemMeta(
+          itemIndex: itemIdx,
+          totalBytes: end - start,
+          fields: List.generate(sizes.length, (idx) {
+            return FieldMeta(fieldIndex: idx, size: sizes[idx]);
+          }),
+        ));
+      }
+      return items;
+    } finally {
+      await access.close();
+    }
+  }
+
   Future<FieldPreview> peekField({
     required String indexPath,
     required String chunkFilename,
@@ -398,6 +484,7 @@ class LitDataService {
   }) async {
     final parsed = await _parseIndex(File(indexPath));
     final format = parsed.config.dataFormat ?? <String>[];
+    final usesTokensLayout = _usesTokensItemLayout(parsed.config);
     final access = await _loadChunkAccess(parsed, chunkFilename);
     try {
       final (data, size) = await _readFieldBytes(
@@ -405,11 +492,60 @@ class LitDataService {
         itemIndex,
         fieldIndex,
         format.length,
+        usesTokensLayout,
         _previewBytes,
       );
       final previewText = previewUtf8Text(data);
       final isBinary = previewText == null;
-      final guessedExt = _guessExt(format.length > fieldIndex ? format[fieldIndex] : null, data);
+      final guessedExt = _guessExt(
+          format.length > fieldIndex ? format[fieldIndex] : null, data);
+      return FieldPreview(
+        previewText: previewText,
+        hexSnippet: hexSnippet(data),
+        guessedExt: guessedExt,
+        isBinary: isBinary,
+        size: size,
+      );
+    } finally {
+      await access.close();
+    }
+  }
+
+  Future<FieldPreview> peekFieldFromStream({
+    String? indexPath,
+    Uint8List? indexBytes,
+    String indexName = 'index.json',
+    required String chunkFilename,
+    required int itemIndex,
+    required int fieldIndex,
+    required Stream<List<int>> chunkStream,
+  }) async {
+    final parsed = await _loadParsedIndexForStream(
+      indexPath: indexPath,
+      indexBytes: indexBytes,
+      indexName: indexName,
+    );
+    _chunkForFilename(parsed, chunkFilename);
+    final format = parsed.config.dataFormat ?? <String>[];
+    final usesTokensLayout = _usesTokensItemLayout(parsed.config);
+    final access = await _loadChunkAccessFromStream(
+      parsed: parsed,
+      chunkFilename: chunkFilename,
+      chunkStream: chunkStream,
+    );
+    try {
+      final (data, size) = await _readFieldBytes(
+        access,
+        itemIndex,
+        fieldIndex,
+        format.length,
+        usesTokensLayout,
+        _previewBytes,
+      );
+      final previewText = previewUtf8Text(data);
+      final isBinary = previewText == null;
+      final guessedExt = _guessExt(
+          format.length > fieldIndex ? format[fieldIndex] : null, data);
       return FieldPreview(
         previewText: previewText,
         hexSnippet: hexSnippet(data),
@@ -437,6 +573,51 @@ class LitDataService {
     );
   }
 
+  Future<PreparedMediaResponse> prepareAudioPreviewFromStream({
+    String? indexPath,
+    Uint8List? indexBytes,
+    String indexName = 'index.json',
+    required String chunkFilename,
+    required int itemIndex,
+    required int fieldIndex,
+    required Stream<List<int>> chunkStream,
+  }) async {
+    final parsed = await _loadParsedIndexForStream(
+      indexPath: indexPath,
+      indexBytes: indexBytes,
+      indexName: indexName,
+    );
+    _chunkForFilename(parsed, chunkFilename);
+    final format = parsed.config.dataFormat ?? <String>[];
+    final usesTokensLayout = _usesTokensItemLayout(parsed.config);
+    final access = await _loadChunkAccessFromStream(
+      parsed: parsed,
+      chunkFilename: chunkFilename,
+      chunkStream: chunkStream,
+    );
+    try {
+      final (data, _) = await _readFieldBytes(
+        access,
+        itemIndex,
+        fieldIndex,
+        format.length,
+        usesTokensLayout,
+        null,
+      );
+      var ext = _guessExt(
+              format.length > fieldIndex ? format[fieldIndex] : null, data) ??
+          'bin';
+      var bytes = data;
+      if (ext == 'sph') {
+        bytes = await decodeSphereToWavWithFallback(data);
+        ext = 'wav';
+      }
+      return PreparedMediaResponse(bytes: bytes, size: bytes.length, ext: ext);
+    } finally {
+      await access.close();
+    }
+  }
+
   Future<PreparedFileResponse> prepareFieldFile({
     required String indexPath,
     required String chunkFilename,
@@ -452,6 +633,52 @@ class LitDataService {
     );
   }
 
+  Future<PreparedFileResponse> prepareFieldFileFromStream({
+    String? indexPath,
+    Uint8List? indexBytes,
+    String indexName = 'index.json',
+    required String chunkFilename,
+    required int itemIndex,
+    required int fieldIndex,
+    required Stream<List<int>> chunkStream,
+  }) async {
+    final parsed = await _loadParsedIndexForStream(
+      indexPath: indexPath,
+      indexBytes: indexBytes,
+      indexName: indexName,
+    );
+    _chunkForFilename(parsed, chunkFilename);
+    final format = parsed.config.dataFormat ?? <String>[];
+    final usesTokensLayout = _usesTokensItemLayout(parsed.config);
+    final access = await _loadChunkAccessFromStream(
+      parsed: parsed,
+      chunkFilename: chunkFilename,
+      chunkStream: chunkStream,
+    );
+    try {
+      final (data, size) = await _readFieldBytes(
+        access,
+        itemIndex,
+        fieldIndex,
+        format.length,
+        usesTokensLayout,
+        null,
+      );
+      var ext = _guessExt(
+              format.length > fieldIndex ? format[fieldIndex] : null, data) ??
+          'bin';
+      final tempDir =
+          Directory('${Directory.systemTemp.path}/dataset-inspector');
+      await tempDir.create(recursive: true);
+      final baseName = _sanitize('$chunkFilename-i$itemIndex-f$fieldIndex');
+      final out = File('${tempDir.path}/$baseName.$ext');
+      await out.writeAsBytes(data, flush: true);
+      return PreparedFileResponse(path: out.path, size: size, ext: ext);
+    } finally {
+      await access.close();
+    }
+  }
+
   Future<PreparedFileResponse> _prepareFieldFile({
     required String indexPath,
     required String chunkFilename,
@@ -461,6 +688,7 @@ class LitDataService {
   }) async {
     final parsed = await _parseIndex(File(indexPath));
     final format = parsed.config.dataFormat ?? <String>[];
+    final usesTokensLayout = _usesTokensItemLayout(parsed.config);
     final access = await _loadChunkAccess(parsed, chunkFilename);
     try {
       final (data, size) = await _readFieldBytes(
@@ -468,12 +696,16 @@ class LitDataService {
         itemIndex,
         fieldIndex,
         format.length,
+        usesTokensLayout,
         null,
       );
-      var ext = _guessExt(format.length > fieldIndex ? format[fieldIndex] : null, data) ?? 'bin';
-      final tempDir = Directory('${Directory.systemTemp.path}/dataset-inspector');
+      var ext = _guessExt(
+              format.length > fieldIndex ? format[fieldIndex] : null, data) ??
+          'bin';
+      final tempDir =
+          Directory('${Directory.systemTemp.path}/dataset-inspector');
       await tempDir.create(recursive: true);
-      final baseName = _sanitize('${chunkFilename}-i$itemIndex-f$fieldIndex');
+      final baseName = _sanitize('$chunkFilename-i$itemIndex-f$fieldIndex');
       var out = File('${tempDir.path}/$baseName.$ext');
       await out.writeAsBytes(data, flush: true);
 
@@ -499,6 +731,7 @@ class LitDataService {
   }) async {
     final parsed = await _parseIndex(File(indexPath));
     final format = parsed.config.dataFormat ?? <String>[];
+    final usesTokensLayout = _usesTokensItemLayout(parsed.config);
     final access = await _loadChunkAccess(parsed, chunkFilename);
     try {
       final (data, _) = await _readFieldBytes(
@@ -506,9 +739,12 @@ class LitDataService {
         itemIndex,
         fieldIndex,
         format.length,
+        usesTokensLayout,
         null,
       );
-      var ext = _guessExt(format.length > fieldIndex ? format[fieldIndex] : null, data) ?? 'bin';
+      var ext = _guessExt(
+              format.length > fieldIndex ? format[fieldIndex] : null, data) ??
+          'bin';
       var bytes = data;
       if (convertSphereToWav && ext == 'sph') {
         bytes = await decodeSphereToWavWithFallback(data);
@@ -529,6 +765,7 @@ class LitDataService {
   }) async {
     final parsed = await _parseIndex(File(indexPath));
     final format = parsed.config.dataFormat ?? <String>[];
+    final usesTokensLayout = _usesTokensItemLayout(parsed.config);
     final access = await _loadChunkAccess(parsed, chunkFilename);
     try {
       final (data, size) = await _readFieldBytes(
@@ -536,12 +773,16 @@ class LitDataService {
         itemIndex,
         fieldIndex,
         format.length,
+        usesTokensLayout,
         null,
       );
-      var ext = _guessExt(format.length > fieldIndex ? format[fieldIndex] : null, data) ?? 'bin';
-      final tempDir = Directory('${Directory.systemTemp.path}/dataset-inspector');
+      var ext = _guessExt(
+              format.length > fieldIndex ? format[fieldIndex] : null, data) ??
+          'bin';
+      final tempDir =
+          Directory('${Directory.systemTemp.path}/dataset-inspector');
       await tempDir.create(recursive: true);
-      final baseName = _sanitize('${chunkFilename}-i$itemIndex-f$fieldIndex');
+      final baseName = _sanitize('$chunkFilename-i$itemIndex-f$fieldIndex');
       var out = File('${tempDir.path}/$baseName.$ext');
       await out.writeAsBytes(data, flush: true);
 
@@ -552,20 +793,21 @@ class LitDataService {
           out = wavOut;
           ext = 'wav';
         } on Exception catch (err) {
-          final base = '${out.path} (${size} bytes)';
+          final base = '${out.path} ($size bytes)';
           return OpenLeafResponse(
             path: out.path,
             size: size,
             ext: ext,
             opened: false,
             needsOpener: true,
-            message: '$base · sph decode failed: $err · choose an app to open it',
+            message:
+                '$base · sph decode failed: $err · choose an app to open it',
           );
         }
       }
 
       final result = await _openWith.openFile(out.path, appPath: openerAppPath);
-      final base = '${out.path} (${size} bytes)';
+      final base = '${out.path} ($size bytes)';
       final needsOpener = !result.opened && result.error != null;
       var message = base;
       if (needsOpener) {
@@ -582,6 +824,170 @@ class LitDataService {
     } finally {
       await access.close();
     }
+  }
+
+  Future<_ParsedIndex> _loadParsedIndexForStream({
+    String? indexPath,
+    Uint8List? indexBytes,
+    String indexName = 'index.json',
+  }) async {
+    if (indexBytes != null) {
+      return _parseIndexBytes(indexBytes, indexName: indexName);
+    }
+    final normalizedPath = indexPath?.trim() ?? '';
+    if (normalizedPath.isEmpty) {
+      throw const FormatException(
+          'missing LitData index source (indexPath or indexBytes)');
+    }
+    return _parseIndex(File(normalizedPath));
+  }
+
+  _RawChunk _chunkForFilename(_ParsedIndex parsed, String chunkFilename) {
+    final trimmed = chunkFilename.trim();
+    if (trimmed.isEmpty) {
+      throw const FormatException('chunk filename is empty');
+    }
+    for (final chunk in parsed.chunks) {
+      if (chunk.filename == trimmed) return chunk;
+    }
+    throw FormatException('Unknown chunk filename: $chunkFilename');
+  }
+
+  Future<_ChunkAccess> _loadChunkAccessFromStream({
+    required _ParsedIndex parsed,
+    required String chunkFilename,
+    required Stream<List<int>> chunkStream,
+  }) async {
+    final chunk = _chunkForFilename(parsed, chunkFilename);
+    final compression = parsed.config.compression?.toLowerCase();
+    final bytes = await _readStreamBytes(chunkStream);
+    if (compression == 'zstd') {
+      final decoded = decodeZstd(bytes);
+      _validateChunkLength(chunk, decoded.length);
+      return _MemoryChunkAccess(decoded);
+    }
+    if (compression == null) {
+      if (_isLikelyZstdChunk(chunkFilename: chunkFilename, bytes: bytes)) {
+        try {
+          final decoded = decodeZstd(bytes);
+          _validateChunkLength(chunk, decoded.length);
+          return _MemoryChunkAccess(decoded);
+        } catch (_) {
+          // Fall through to raw bytes when payload is not valid zstd.
+        }
+      }
+      _validateChunkLength(chunk, bytes.length);
+      return _MemoryChunkAccess(bytes);
+    }
+    throw FormatException('Unsupported compression: $compression');
+  }
+
+  bool _usesTokensItemLayout(_IndexConfig config) {
+    final itemLoader = config.itemLoader?.trim();
+    if (itemLoader == null || itemLoader.isEmpty) {
+      return false;
+    }
+    if (itemLoader == 'PyTreeLoader') {
+      return false;
+    }
+    if (itemLoader == 'TokensLoader') {
+      return true;
+    }
+    throw FormatException('Unsupported LitData item loader: $itemLoader');
+  }
+
+  void _validateChunkLength(_RawChunk chunk, int actualLength) {
+    if (chunk.chunkBytes <= 0 || actualLength == chunk.chunkBytes) {
+      return;
+    }
+    throw FormatException(
+      'Chunk length mismatch for ${chunk.filename}: expected '
+      '${chunk.chunkBytes} bytes, got $actualLength',
+    );
+  }
+
+  Future<Uint8List> _readStreamBytes(
+    Stream<List<int>> stream, {
+    int? maxBytes,
+  }) async {
+    final limit = maxBytes != null && maxBytes > 0 ? maxBytes : null;
+    final builder = BytesBuilder(copy: false);
+    var read = 0;
+    await for (final chunk in stream) {
+      if (chunk.isEmpty) continue;
+      if (limit == null) {
+        builder.add(chunk);
+        read += chunk.length;
+        continue;
+      }
+      final remaining = limit - read;
+      if (remaining <= 0) break;
+      if (chunk.length <= remaining) {
+        builder.add(chunk);
+        read += chunk.length;
+      } else {
+        builder.add(chunk.sublist(0, remaining));
+        read += remaining;
+      }
+      if (read >= limit) break;
+    }
+    return builder.takeBytes();
+  }
+
+  _ParsedIndex _parseIndexBytes(
+    Uint8List bytes, {
+    required String indexName,
+  }) {
+    final decodedBytes = _decodeIndexBytes(bytes, fileName: indexName);
+    final decoded =
+        jsonDecode(utf8.decode(decodedBytes)) as Map<String, dynamic>;
+    final parsed = _IndexFile.fromJson(decoded);
+    final config = parsed.config;
+    final configRaw = decoded['config'] is Map<String, dynamic>
+        ? decoded['config'] as Map<String, dynamic>
+        : <String, dynamic>{};
+    return _ParsedIndex(
+      rootDir: Directory.current,
+      source: File(indexName),
+      config: config,
+      configRaw: configRaw,
+      chunks: parsed.chunks,
+    );
+  }
+
+  Uint8List _decodeIndexBytes(Uint8List bytes, {String? fileName}) {
+    final lower = (fileName ?? '').toLowerCase();
+    if (lower.endsWith('.zst') || lower.endsWith('.zstd')) {
+      return decodeZstd(bytes);
+    }
+    if (_looksLikeZstdFrame(bytes)) {
+      try {
+        return decodeZstd(bytes);
+      } catch (_) {
+        // Keep original bytes if the payload is not a valid zstd stream.
+      }
+    }
+    return bytes;
+  }
+
+  bool _looksLikeZstdFrame(Uint8List bytes) {
+    return bytes.length >= 4 &&
+        bytes[0] == 0x28 &&
+        bytes[1] == 0xB5 &&
+        bytes[2] == 0x2F &&
+        bytes[3] == 0xFD;
+  }
+
+  bool _isLikelyZstdChunk({
+    required String chunkFilename,
+    required Uint8List bytes,
+  }) {
+    return _isLikelyZstdChunkName(chunkFilename) || _looksLikeZstdFrame(bytes);
+  }
+
+  bool _isLikelyZstdChunkName(String chunkFilename) {
+    final lower = chunkFilename.toLowerCase();
+    return lower.endsWith('.zst') || lower.endsWith('.zstd');
   }
 
   Future<_ParsedIndex> _parseIndex(File indexPath) async {
@@ -644,6 +1050,7 @@ class LitDataService {
       chunkBytes: size,
       dataFormat: const ['bytes'],
       dataSpec: null,
+      itemLoader: null,
     );
     return _ParsedIndex(
       rootDir: rootDir,
@@ -678,7 +1085,9 @@ class LitDataService {
       final entries = dir
           .listSync()
           .whereType<File>()
-          .where((file) => file.path.endsWith('.index.json') || file.path.contains('.index.json.'))
+          .where((file) =>
+              file.path.endsWith('.index.json') ||
+              file.path.contains('.index.json.'))
           .toList();
       entries.sort((a, b) => a.path.compareTo(b.path));
       if (entries.isNotEmpty) return entries.first;
@@ -711,7 +1120,9 @@ class LitDataService {
     return path.readAsString();
   }
 
-  Future<_ChunkAccess> _loadChunkAccess(_ParsedIndex parsed, String chunkFilename) async {
+  Future<_ChunkAccess> _loadChunkAccess(
+      _ParsedIndex parsed, String chunkFilename) async {
+    final chunk = _chunkForFilename(parsed, chunkFilename);
     final chunkPath = File('${parsed.rootDir.path}/$chunkFilename');
     if (!chunkPath.existsSync()) {
       throw FormatException('Missing ${chunkPath.path}');
@@ -721,16 +1132,33 @@ class LitDataService {
       final key = chunkPath.path;
       final cached = _cache.fetch(key);
       if (cached != null) {
+        _validateChunkLength(chunk, cached.length);
         return _MemoryChunkAccess(cached);
       }
       final bytes = await chunkPath.readAsBytes();
       final decoded = decodeZstd(bytes);
+      _validateChunkLength(chunk, decoded.length);
       _cache.store(key, decoded);
       return _MemoryChunkAccess(decoded);
     }
     if (compression != null) {
       throw FormatException('Unsupported compression: $compression');
     }
+    if (_isLikelyZstdChunkName(chunkFilename)) {
+      final key = chunkPath.path;
+      final cached = _cache.fetch(key);
+      if (cached != null) {
+        _validateChunkLength(chunk, cached.length);
+        return _MemoryChunkAccess(cached);
+      }
+      final bytes = await chunkPath.readAsBytes();
+      final decoded = decodeZstd(bytes);
+      _validateChunkLength(chunk, decoded.length);
+      _cache.store(key, decoded);
+      return _MemoryChunkAccess(decoded);
+    }
+    final fileSize = (await chunkPath.stat()).size;
+    _validateChunkLength(chunk, fileSize);
     return _FileChunkAccess(await chunkPath.open());
   }
 
@@ -770,9 +1198,10 @@ class LitDataService {
     int itemIndex,
     int fieldIndex,
     int formatLen,
+    bool usesTokensLayout,
     int? limit,
   ) async {
-    final headerLen = formatLen * 4;
+    final headerLen = usesTokensLayout ? 0 : formatLen * 4;
     final (numItems, offsets) = await _parseOffsets(access);
     if (itemIndex >= numItems) {
       throw const FormatException('Item index out of range');
@@ -782,14 +1211,13 @@ class LitDataService {
     if (end < start) {
       throw const FormatException('Malformed chunk');
     }
-    List<int> sizes = [];
-    if (headerLen > 0) {
-      final head = await access.readExactAt(start, headerLen);
-      sizes = List.generate(formatLen, (idx) {
-        final pos = idx * 4;
-        return _readLeU32(head.sublist(pos, pos + 4));
-      });
-    }
+    final sizes = await _readItemFieldSizes(
+      access,
+      start: start,
+      end: end,
+      formatLen: formatLen,
+      usesTokensLayout: usesTokensLayout,
+    );
     if (fieldIndex >= sizes.length) {
       throw const FormatException('Field index out of range');
     }
@@ -804,6 +1232,27 @@ class LitDataService {
       cursor += size;
     }
     throw const FormatException('Malformed chunk');
+  }
+
+  Future<List<int>> _readItemFieldSizes(
+    _ChunkAccess access, {
+    required int start,
+    required int end,
+    required int formatLen,
+    required bool usesTokensLayout,
+  }) async {
+    if (usesTokensLayout) {
+      return <int>[end - start];
+    }
+    final headerLen = formatLen * 4;
+    if (headerLen <= 0) {
+      return const <int>[];
+    }
+    final head = await access.readExactAt(start, headerLen);
+    return List<int>.generate(formatLen, (idx) {
+      final pos = idx * 4;
+      return _readLeU32(head.sublist(pos, pos + 4));
+    }, growable: false);
   }
 
   int _readLeU32(List<int> bytes) {
@@ -831,7 +1280,9 @@ class LitDataService {
         name.endsWith('.tar.zstd')) {
       return false;
     }
-    if (name.endsWith('.mds') || name.endsWith('.mds.zst') || name.endsWith('.mds.zstd')) {
+    if (name.endsWith('.mds') ||
+        name.endsWith('.mds.zst') ||
+        name.endsWith('.mds.zstd')) {
       return false;
     }
     return _isChunkPath(path);
@@ -855,7 +1306,8 @@ class LitDataService {
         .listSync()
         .whereType<File>()
         .where((file) =>
-            file.path.endsWith('.index.json') || file.path.contains('.index.json.'))
+            file.path.endsWith('.index.json') ||
+            file.path.contains('.index.json.'))
         .toList();
     globbed.sort((a, b) => a.path.compareTo(b.path));
     return globbed.isNotEmpty ? globbed.first : null;
@@ -937,7 +1389,10 @@ class LitDataService {
         data[11] == 0x45) {
       return 'wav';
     }
-    if (data.length >= 3 && data[0] == 0x49 && data[1] == 0x44 && data[2] == 0x33) {
+    if (data.length >= 3 &&
+        data[0] == 0x49 &&
+        data[1] == 0x44 &&
+        data[2] == 0x33) {
       return 'mp3';
     }
     if (data.length >= 2 && data[0] == 0xff && (data[1] & 0xe0) == 0xe0) {
@@ -957,7 +1412,10 @@ class LitDataService {
         data[3] == 0x47) {
       return 'png';
     }
-    if (data.length >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff) {
+    if (data.length >= 3 &&
+        data[0] == 0xff &&
+        data[1] == 0xd8 &&
+        data[2] == 0xff) {
       return 'jpg';
     }
     if (data.length >= 6 &&

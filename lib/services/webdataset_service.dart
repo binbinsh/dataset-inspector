@@ -1,16 +1,14 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-
-import 'package:crypto/crypto.dart';
 
 import '../models/common.dart';
 import '../models/webdataset.dart';
 import '../utils/audio.dart';
 import '../utils/preview.dart';
 import '../utils/tar_stream.dart';
-import '../utils/zstd.dart';
 import 'litdata_service.dart';
 import 'mosaicml_service.dart';
 import 'open_with_service.dart';
@@ -47,6 +45,8 @@ class WebdatasetService {
   final OpenWithService _openWith;
   final MosaicmlService _mosaicml;
   final LitDataService _litdata;
+  // In-memory scan/preview cache for sequential browsing performance.
+  // Do not add on-disk shard cache directories.
   final _WdsScanCache _cache = _WdsScanCache();
 
   Future<WdsDirSummary> loadDir(String dirPath) async {
@@ -75,7 +75,6 @@ class WebdatasetService {
     final pageOffset = offset ?? 0;
     final pageLength = (length ?? 200).clamp(1, _maxListedSamples).toInt();
     final wantTotal = computeTotal ?? false;
-
     final state = await _cache.getOrCreate(shardPath);
     final captureStart = pageOffset;
     final captureEnd = pageOffset + pageLength;
@@ -135,7 +134,6 @@ class WebdatasetService {
     final shardPath = _resolveShardPath(dirPath, shardFilename);
     final normalized = normalizeTarPath(memberPath);
     if (normalized.isEmpty) throw const FormatException('member path is empty');
-
     final state = await _cache.getOrCreate(shardPath);
     final cached = state.cachedPreview(normalized);
     if (cached != null) return cached;
@@ -706,17 +704,15 @@ class WebdatasetService {
   }
 
   Stream<List<int>> _openShardStream(File shardPath) {
-    final tarFile = _resolveTarFile(shardPath);
-    if (tarFile != null) {
-      return tarFile.openRead();
-    }
     final filename = shardPath.uri.pathSegments.last.toLowerCase();
+    if (filename.endsWith('.tar')) {
+      return shardPath.openRead();
+    }
     if (filename.endsWith('.tar.gz') || filename.endsWith('.tgz')) {
       return gzip.decoder.bind(shardPath.openRead());
     }
     if (filename.endsWith('.tar.zst') || filename.endsWith('.tar.zstd')) {
-      final decompressed = _decompressZstdToTemp(shardPath);
-      return decompressed.openRead();
+      return _openZstdDecodedStream(shardPath.openRead());
     }
     return shardPath.openRead();
   }
@@ -733,38 +729,9 @@ class WebdatasetService {
       return gzip.decoder.bind(source);
     }
     if (filename.endsWith('.tar.zst') || filename.endsWith('.tar.zstd')) {
-      throw const FormatException(
-        'Streaming .tar.zst/.tar.zstd shards is not supported yet.',
-      );
+      return _openZstdDecodedStream(source);
     }
     return source;
-  }
-
-  File? _resolveTarFile(File shardPath) {
-    final filename = shardPath.uri.pathSegments.last.toLowerCase();
-    if (filename.endsWith('.tar')) {
-      return shardPath;
-    }
-    if (filename.endsWith('.tar.zst') || filename.endsWith('.tar.zstd')) {
-      return _decompressZstdToTemp(shardPath);
-    }
-    return null;
-  }
-
-  File _decompressZstdToTemp(File path) {
-    final stat = path.statSync();
-    final payload =
-        '${path.path}:${stat.size}:${stat.modified.millisecondsSinceEpoch}';
-    final key = sha1.convert(utf8.encode(payload)).toString();
-    final outDir =
-        Directory('${Directory.systemTemp.path}/dataset-inspector/wds-cache');
-    outDir.createSync(recursive: true);
-    final out = File('${outDir.path}/$key.tar');
-    if (out.existsSync()) return out;
-    final bytes = path.readAsBytesSync();
-    final decoded = decodeZstd(bytes);
-    out.writeAsBytesSync(decoded, flush: true);
-    return out;
   }
 
   Future<(Uint8List, int)> _readMemberBytes(
@@ -801,6 +768,23 @@ class WebdatasetService {
     }
 
     throw FormatException('member not found in shard: $memberPath');
+  }
+
+  Future<(Uint8List, int)> _readMemberBytesAt(
+    File tarFile,
+    _TarEntryLocation location,
+    int? limit,
+  ) async {
+    final size = location.size;
+    final length = limit == null ? size : (limit < size ? limit : size);
+    final raf = await tarFile.open();
+    try {
+      await raf.setPosition(location.dataOffset);
+      final data = await raf.read(length);
+      return (data, size);
+    } finally {
+      await raf.close();
+    }
   }
 
   Future<(Uint8List, int)> _readMemberBytesFromStream({
@@ -923,23 +907,6 @@ class WebdatasetService {
       partial: !done,
       samples: pageSamples,
     );
-  }
-
-  Future<(Uint8List, int)> _readMemberBytesAt(
-    File tarFile,
-    _TarEntryLocation location,
-    int? limit,
-  ) async {
-    final size = location.size;
-    final length = limit == null ? size : (limit < size ? limit : size);
-    final raf = await tarFile.open();
-    try {
-      await raf.setPosition(location.dataOffset);
-      final data = await raf.read(length);
-      return (data, size);
-    } finally {
-      await raf.close();
-    }
   }
 
   (String, String) _splitSampleKey(String memberPath) {
@@ -1402,17 +1369,15 @@ class _ShardScanState {
   }
 
   static Stream<List<int>> _openShardStreamStatic(File shardPath) {
-    final tarFile = _resolveTarFileStatic(shardPath);
-    if (tarFile != null) {
-      return tarFile.openRead();
-    }
     final filename = shardPath.uri.pathSegments.last.toLowerCase();
+    if (filename.endsWith('.tar')) {
+      return shardPath.openRead();
+    }
     if (filename.endsWith('.tar.gz') || filename.endsWith('.tgz')) {
       return gzip.decoder.bind(shardPath.openRead());
     }
     if (filename.endsWith('.tar.zst') || filename.endsWith('.tar.zstd')) {
-      final decompressed = _decompressZstdToTempStatic(shardPath);
-      return decompressed.openRead();
+      return _openZstdDecodedStream(shardPath.openRead());
     }
     return shardPath.openRead();
   }
@@ -1422,26 +1387,7 @@ class _ShardScanState {
     if (filename.endsWith('.tar')) {
       return shardPath;
     }
-    if (filename.endsWith('.tar.zst') || filename.endsWith('.tar.zstd')) {
-      return _decompressZstdToTempStatic(shardPath);
-    }
     return null;
-  }
-
-  static File _decompressZstdToTempStatic(File path) {
-    final stat = path.statSync();
-    final payload =
-        '${path.path}:${stat.size}:${stat.modified.millisecondsSinceEpoch}';
-    final key = sha1.convert(utf8.encode(payload)).toString();
-    final outDir =
-        Directory('${Directory.systemTemp.path}/dataset-inspector/wds-cache');
-    outDir.createSync(recursive: true);
-    final out = File('${outDir.path}/$key.tar');
-    if (out.existsSync()) return out;
-    final bytes = path.readAsBytesSync();
-    final decoded = decodeZstd(bytes);
-    out.writeAsBytesSync(decoded, flush: true);
-    return out;
   }
 
   static (String, String) _splitSampleKeyStatic(String memberPath) {
@@ -1464,6 +1410,203 @@ class _ShardScanState {
     final fieldName = suffix.isEmpty ? 'bin' : suffix.toLowerCase();
     return (key, fieldName);
   }
+}
+
+Stream<List<int>> _openZstdDecodedStream(Stream<List<int>> source) async* {
+  final executable = _resolveSystemZstdExecutable();
+  if (executable == null) {
+    throw const FormatException(
+      'System zstd executable is required for .tar.zst/.tar.zstd streaming.',
+    );
+  }
+  final process = await Process.start(
+    executable,
+    ['-d', '-q', '-c'],
+  );
+  final inputPipe = _startCompressedStreamPipe(
+    compressedStream: source,
+    process: process,
+  );
+  final stderrFuture = process.stderr.transform(utf8.decoder).join();
+
+  try {
+    await for (final chunk in process.stdout) {
+      if (chunk.isEmpty) continue;
+      yield chunk;
+    }
+    final stderrText = await stderrFuture;
+    await inputPipe.done;
+    final exitCode = await process.exitCode;
+    if (exitCode != 0) {
+      final detail = stderrText.trim();
+      if (detail.isNotEmpty) {
+        throw FormatException('failed to stream decode zstd shard: $detail');
+      }
+      throw const FormatException('failed to stream decode zstd shard');
+    }
+  } finally {
+    await inputPipe.stop();
+    process.kill();
+  }
+}
+
+String? _resolveSystemZstdExecutable() {
+  const candidates = [
+    '/opt/homebrew/bin/zstd',
+    '/usr/local/bin/zstd',
+    '/usr/bin/zstd',
+    'zstd',
+  ];
+  for (final candidate in candidates) {
+    try {
+      if (candidate.contains('/')) {
+        if (File(candidate).existsSync()) return candidate;
+        continue;
+      }
+      final check = Process.runSync(candidate, ['--version']);
+      if (check.exitCode == 0) return candidate;
+    } catch (_) {
+      // Ignore and continue trying the next candidate.
+    }
+  }
+  return null;
+}
+
+_ProcessInputPipe _startCompressedStreamPipe({
+  required Stream<List<int>> compressedStream,
+  required Process process,
+}) {
+  final completer = Completer<void>();
+  final inputController = StreamController<List<int>>(sync: true);
+  var stdinClosed = false;
+  var stopping = false;
+  var sourceDone = false;
+  late final StreamSubscription<List<int>> subscription;
+
+  void completeDone([Object? error, StackTrace? stackTrace]) {
+    if (completer.isCompleted) return;
+    if (error == null) {
+      completer.complete();
+    } else {
+      completer.completeError(error, stackTrace ?? StackTrace.current);
+    }
+  }
+
+  Future<void> closeStdin() async {
+    if (stdinClosed) return;
+    stdinClosed = true;
+    try {
+      await process.stdin.close();
+    } catch (_) {}
+  }
+
+  final stdinWriteFuture = () async {
+    try {
+      await process.stdin.addStream(inputController.stream);
+    } catch (error, stackTrace) {
+      if (!_isBenignPipeWriteError(error)) {
+        completeDone(error, stackTrace);
+      }
+    } finally {
+      await closeStdin();
+      if (sourceDone) {
+        completeDone();
+      }
+    }
+  }();
+
+  Future<void> stop() async {
+    if (stopping) {
+      await completer.future;
+      return;
+    }
+    stopping = true;
+    try {
+      await subscription.cancel();
+    } catch (_) {}
+    sourceDone = true;
+    if (!inputController.isClosed) {
+      try {
+        await inputController.close();
+      } catch (_) {}
+    }
+    try {
+      await stdinWriteFuture;
+    } catch (error, stackTrace) {
+      if (!_isBenignPipeWriteError(error)) {
+        completeDone(error, stackTrace);
+      }
+    }
+    await closeStdin();
+    completeDone();
+    await completer.future;
+  }
+
+  subscription = compressedStream.listen(
+    (chunk) {
+      if (chunk.isEmpty || stopping || inputController.isClosed) return;
+      try {
+        inputController.add(chunk);
+      } catch (error, stackTrace) {
+        if (_isBenignPipeWriteError(error)) {
+          completeDone();
+          unawaited(stop().catchError((_) {}));
+          return;
+        }
+        completeDone(error, stackTrace);
+        unawaited(stop().catchError((_) {}));
+      }
+    },
+    onError: (Object error, StackTrace stackTrace) {
+      sourceDone = true;
+      if (!inputController.isClosed) {
+        try {
+          inputController.addError(error, stackTrace);
+        } catch (_) {}
+        unawaited(inputController.close().catchError((_) {}));
+      }
+      if (_isBenignPipeWriteError(error)) {
+        completeDone();
+        return;
+      }
+      completeDone(error, stackTrace);
+    },
+    onDone: () {
+      sourceDone = true;
+      if (!inputController.isClosed) {
+        unawaited(inputController.close().catchError((_) {}));
+      }
+    },
+    cancelOnError: false,
+  );
+
+  unawaited(process.exitCode.then((_) {
+    return stop();
+  }).catchError((_) {}));
+
+  return _ProcessInputPipe(
+    done: completer.future,
+    stop: stop,
+  );
+}
+
+bool _isBenignPipeWriteError(Object error) {
+  final message = error.toString().toLowerCase();
+  return message.contains('broken pipe') ||
+      message.contains('errno = 32') ||
+      message.contains('write failed') ||
+      message.contains('streamsink is closed') ||
+      message.contains('write on closed');
+}
+
+class _ProcessInputPipe {
+  const _ProcessInputPipe({
+    required this.done,
+    required this.stop,
+  });
+
+  final Future<void> done;
+  final Future<void> Function() stop;
 }
 
 String? _guessExtFromMember(String memberPath, Uint8List data) {

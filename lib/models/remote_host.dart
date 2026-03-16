@@ -236,7 +236,6 @@ class R2RemoteHostConfig {
     required this.secretAccessKey,
     this.region = 'auto',
     this.basePrefix,
-    this.cacheRoot,
     this.useHttps = true,
   });
 
@@ -246,7 +245,6 @@ class R2RemoteHostConfig {
   final String secretAccessKey;
   final String region;
   final String? basePrefix;
-  final String? cacheRoot;
   final bool useHttps;
 
   R2RemoteHostConfig copyWith({
@@ -256,7 +254,6 @@ class R2RemoteHostConfig {
     String? secretAccessKey,
     String? region,
     String? basePrefix,
-    String? cacheRoot,
     bool? useHttps,
   }) {
     return R2RemoteHostConfig(
@@ -266,7 +263,6 @@ class R2RemoteHostConfig {
       secretAccessKey: secretAccessKey ?? this.secretAccessKey,
       region: region ?? this.region,
       basePrefix: basePrefix ?? this.basePrefix,
-      cacheRoot: cacheRoot ?? this.cacheRoot,
       useHttps: useHttps ?? this.useHttps,
     );
   }
@@ -280,8 +276,6 @@ class R2RemoteHostConfig {
       'region': region.trim().isEmpty ? 'auto' : region.trim(),
       if (basePrefix != null && basePrefix!.trim().isNotEmpty)
         'basePrefix': basePrefix!.trim(),
-      if (cacheRoot != null && cacheRoot!.trim().isNotEmpty)
-        'cacheRoot': cacheRoot!.trim(),
       'useHttps': useHttps,
     };
   }
@@ -305,7 +299,6 @@ class R2RemoteHostConfig {
       secretAccessKey: secretAccessKey,
       region: _readNullableString(json, 'region') ?? 'auto',
       basePrefix: _readNullableString(json, 'basePrefix'),
-      cacheRoot: _readNullableString(json, 'cacheRoot'),
       useHttps: json['useHttps'] is bool ? json['useHttps'] as bool : true,
     );
   }
@@ -331,7 +324,6 @@ class R2RemoteHostConfig {
         secretAccessKey == other.secretAccessKey &&
         region == other.region &&
         basePrefix == other.basePrefix &&
-        cacheRoot == other.cacheRoot &&
         useHttps == other.useHttps;
   }
 
@@ -343,7 +335,6 @@ class R2RemoteHostConfig {
         secretAccessKey,
         region,
         basePrefix,
-        cacheRoot,
         useHttps,
       );
 }

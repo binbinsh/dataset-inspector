@@ -1,11 +1,10 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/remote_host.dart';
 import '../services/remote_dataset_service.dart';
 import '../utils/app_fonts.dart';
+import '../utils/dialog_action_styles.dart';
 
 const Color _kDialogBorderColor = Color(0xFFE0E0E0);
 const Color _kDialogInputFillColor = Color(0xFFF7F7F7);
@@ -50,12 +49,6 @@ Future<List<RemoteHostConfig>?> showRemoteHostsSettingsDialog({
   required List<RemoteHostConfig> initialHosts,
   required Future<RemoteHostConnectionResult> Function(RemoteHostConfig host)
       onTestConnection,
-  required Future<RemoteCacheStats> Function(RemoteHostConfig? host)
-      onLoadCacheStats,
-  required Future<void> Function(RemoteHostConfig? host) onClearCache,
-  required int? remoteCacheQuotaMb,
-  required Future<void> Function(int? quotaMb) onSaveRemoteCacheQuota,
-  required Future<void> Function() onApplyRemoteCacheQuota,
 }) async {
   final hosts = List<RemoteHostConfig>.from(initialHosts);
   final testingHosts = <String>{};
@@ -116,19 +109,6 @@ Future<List<RemoteHostConfig>?> showRemoteHostsSettingsDialog({
                 testingHosts.remove(id);
                 setState(() {});
               }
-            }
-
-            Future<void> openCacheManager() async {
-              await showRemoteCacheManagerDialog(
-                context: context,
-                hosts: hosts,
-                onLoadCacheStats: onLoadCacheStats,
-                onClearCache: onClearCache,
-                initialQuotaMb: remoteCacheQuotaMb,
-                onSaveQuotaMb: onSaveRemoteCacheQuota,
-                onApplyQuota: onApplyRemoteCacheQuota,
-              );
-              setState(() {});
             }
 
             return AlertDialog(
@@ -272,21 +252,19 @@ Future<List<RemoteHostConfig>?> showRemoteHostsSettingsDialog({
                       ),
               ),
               actions: [
-                TextButton.icon(
-                  onPressed: openCacheManager,
-                  icon: const Icon(Icons.cleaning_services_outlined),
-                  label: const Text('Cache Manager'),
-                ),
-                TextButton.icon(
+                OutlinedButton.icon(
+                  style: buildDialogSecondaryButtonStyle(context),
                   onPressed: addHost,
                   icon: const Icon(Icons.add),
                   label: const Text('Add Host'),
                 ),
-                TextButton(
+                OutlinedButton(
+                  style: buildDialogSecondaryButtonStyle(context),
                   onPressed: () => Navigator.of(dialogContext).pop(),
                   child: const Text('Cancel'),
                 ),
                 FilledButton(
+                  style: buildDialogPrimaryButtonStyle(context),
                   onPressed: () {
                     Navigator.of(dialogContext).pop(hosts);
                   },
@@ -369,9 +347,6 @@ Future<RemoteHostConfig?> showRemoteHostEditorDialog({
   );
   final r2BasePrefixController = TextEditingController(
     text: initial?.r2?.basePrefix ?? '',
-  );
-  final r2CacheRootController = TextEditingController(
-    text: initial?.r2?.cacheRoot ?? '',
   );
   var r2UseHttps = initial?.r2?.useHttps ?? true;
   var obscureSambaPassword = true;
@@ -489,7 +464,6 @@ Future<RemoteHostConfig?> showRemoteHostEditorDialog({
                   secretAccessKey: r2SecretKeyController.text.trim(),
                   region: _emptyToValue(r2RegionController.text, 'auto'),
                   basePrefix: _emptyToNull(r2BasePrefixController.text),
-                  cacheRoot: _emptyToNull(r2CacheRootController.text),
                   useHttps: r2UseHttps,
                 ),
               );
@@ -763,14 +737,6 @@ Future<RemoteHostConfig?> showRemoteHostEditorDialog({
                           ),
                         ),
                         const SizedBox(height: 8),
-                        TextField(
-                          controller: r2CacheRootController,
-                          decoration: const InputDecoration(
-                            labelText: 'Local cache root (optional)',
-                            hintText: '~/.dataset-inspector/remote-cache/r2',
-                          ),
-                        ),
-                        const SizedBox(height: 8),
                         SwitchListTile.adaptive(
                           contentPadding: EdgeInsets.zero,
                           title: const Text('Use HTTPS'),
@@ -822,7 +788,8 @@ Future<RemoteHostConfig?> showRemoteHostEditorDialog({
                 ),
               ),
               actions: [
-                TextButton.icon(
+                OutlinedButton.icon(
+                  style: buildDialogSecondaryButtonStyle(context),
                   onPressed: testingConnection ? null : runConnectionTest,
                   icon: testingConnection
                       ? const SizedBox(
@@ -833,11 +800,13 @@ Future<RemoteHostConfig?> showRemoteHostEditorDialog({
                       : const Icon(Icons.network_check_outlined, size: 16),
                   label: const Text('Test Connection'),
                 ),
-                TextButton(
+                OutlinedButton(
+                  style: buildDialogSecondaryButtonStyle(context),
                   onPressed: () => Navigator.of(dialogContext).pop(),
                   child: const Text('Cancel'),
                 ),
                 FilledButton(
+                  style: buildDialogPrimaryButtonStyle(context),
                   onPressed: () {
                     final host = buildHost();
                     if (host == null) return;
@@ -873,7 +842,6 @@ Future<RemoteHostConfig?> showRemoteHostEditorDialog({
   r2SecretKeyController.dispose();
   r2RegionController.dispose();
   r2BasePrefixController.dispose();
-  r2CacheRootController.dispose();
   return result;
 }
 
@@ -885,236 +853,6 @@ Future<void> _copyToClipboard(BuildContext context, String text) async {
   ScaffoldMessenger.of(context).showSnackBar(
     const SnackBar(content: Text('Copied to clipboard.')),
   );
-}
-
-Future<void> showRemoteCacheManagerDialog({
-  required BuildContext context,
-  required List<RemoteHostConfig> hosts,
-  required Future<RemoteCacheStats> Function(RemoteHostConfig? host)
-      onLoadCacheStats,
-  required Future<void> Function(RemoteHostConfig? host) onClearCache,
-  required int? initialQuotaMb,
-  required Future<void> Function(int? quotaMb) onSaveQuotaMb,
-  required Future<void> Function() onApplyQuota,
-}) async {
-  final perHost = <String, RemoteCacheStats>{};
-  RemoteCacheStats? total;
-  var loading = false;
-  String? clearingHostId;
-  final quotaController = TextEditingController(
-    text: initialQuotaMb == null ? '' : '$initialQuotaMb',
-  );
-  var initialized = false;
-
-  Future<void> refresh(StateSetter setState) async {
-    setState(() {
-      loading = true;
-    });
-    try {
-      final totalStats = await onLoadCacheStats(null);
-      final nextPerHost = <String, RemoteCacheStats>{};
-      for (final host in hosts) {
-        final key = host.id.trim();
-        if (key.isEmpty) continue;
-        nextPerHost[key] = await onLoadCacheStats(host);
-      }
-      setState(() {
-        total = totalStats;
-        perHost
-          ..clear()
-          ..addAll(nextPerHost);
-      });
-    } finally {
-      setState(() {
-        loading = false;
-      });
-    }
-  }
-
-  await showDialog<void>(
-    context: context,
-    builder: (dialogContext) {
-      return Theme(
-        data: _dialogTheme(dialogContext),
-        child: StatefulBuilder(
-          builder: (context, setState) {
-            if (!initialized) {
-              initialized = true;
-              unawaited(refresh(setState));
-            }
-            Future<void> clearOne(RemoteHostConfig host) async {
-              final id = host.id.trim();
-              if (id.isEmpty) return;
-              setState(() {
-                clearingHostId = id;
-              });
-              try {
-                await onClearCache(host);
-                await refresh(setState);
-              } finally {
-                if (context.mounted) {
-                  setState(() {
-                    clearingHostId = null;
-                  });
-                }
-              }
-            }
-
-            Future<void> clearAll() async {
-              setState(() {
-                clearingHostId = '__all__';
-              });
-              try {
-                await onClearCache(null);
-                await refresh(setState);
-              } finally {
-                if (context.mounted) {
-                  setState(() {
-                    clearingHostId = null;
-                  });
-                }
-              }
-            }
-
-            Future<void> saveQuota() async {
-              final parsed = int.tryParse(quotaController.text.trim());
-              final normalized =
-                  (parsed == null || parsed <= 0) ? null : parsed;
-              await onSaveQuotaMb(normalized);
-              await onApplyQuota();
-              await refresh(setState);
-            }
-
-            return AlertDialog(
-              backgroundColor: Colors.white,
-              surfaceTintColor: Colors.transparent,
-              shape: _dialogShape(),
-              titleTextStyle: _dialogTitleStyle(context),
-              title: const Text('Remote Cache Manager'),
-              content: SizedBox(
-                width: 720,
-                height: 420,
-                child: loading && total == null
-                    ? const Center(child: CircularProgressIndicator())
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              SizedBox(
-                                width: 220,
-                                child: TextField(
-                                  controller: quotaController,
-                                  keyboardType: TextInputType.number,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Quota (MB)',
-                                    hintText: 'Empty = unlimited',
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              FilledButton.tonalIcon(
-                                onPressed: saveQuota,
-                                icon: const Icon(Icons.save_outlined, size: 16),
-                                label: const Text('Save Quota'),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: _kDialogInputFillColor,
-                              border: Border.all(
-                                color: _kDialogBorderColor,
-                              ),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              total == null
-                                  ? 'No cache data.'
-                                  : 'Total: ${_formatBytes(total!.totalBytes)} · ${total!.fileCount} files\nRoot: ${total!.rootPath}',
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          Expanded(
-                            child: hosts.isEmpty
-                                ? const Center(
-                                    child: Text('No hosts configured.'),
-                                  )
-                                : ListView.separated(
-                                    itemCount: hosts.length,
-                                    separatorBuilder: (_, __) =>
-                                        const Divider(height: 1),
-                                    itemBuilder: (context, index) {
-                                      final host = hosts[index];
-                                      final stats = perHost[host.id.trim()];
-                                      return ListTile(
-                                        dense: true,
-                                        title: Text(host.label),
-                                        subtitle: Text(
-                                          stats == null
-                                              ? 'No cache data yet'
-                                              : '${_formatBytes(stats.totalBytes)} · ${stats.fileCount} files',
-                                        ),
-                                        trailing: TextButton.icon(
-                                          onPressed:
-                                              clearingHostId == host.id.trim()
-                                                  ? null
-                                                  : () => clearOne(host),
-                                          icon: clearingHostId == host.id.trim()
-                                              ? const SizedBox(
-                                                  width: 14,
-                                                  height: 14,
-                                                  child:
-                                                      CircularProgressIndicator(
-                                                    strokeWidth: 2,
-                                                  ),
-                                                )
-                                              : const Icon(
-                                                  Icons.delete_sweep_outlined,
-                                                  size: 16,
-                                                ),
-                                          label: const Text('Clear'),
-                                        ),
-                                      );
-                                    },
-                                  ),
-                          ),
-                        ],
-                      ),
-              ),
-              actions: [
-                TextButton.icon(
-                  onPressed: loading ? null : () => refresh(setState),
-                  icon: const Icon(Icons.refresh, size: 16),
-                  label: const Text('Refresh'),
-                ),
-                TextButton.icon(
-                  onPressed: clearingHostId == '__all__' ? null : clearAll,
-                  icon: clearingHostId == '__all__'
-                      ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.delete_sweep_outlined, size: 16),
-                  label: const Text('Clear All'),
-                ),
-                FilledButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Close'),
-                ),
-              ],
-            );
-          },
-        ),
-      );
-    },
-  );
-  quotaController.dispose();
 }
 
 String _describeSambaHost(RemoteHostConfig host) {
@@ -1177,18 +915,4 @@ String _generateHostIdFromLabel(
 String _emptyToValue(String value, String fallback) {
   final trimmed = value.trim();
   return trimmed.isEmpty ? fallback : trimmed;
-}
-
-String _formatBytes(int bytes) {
-  if (bytes < 1024) return '$bytes B';
-  const units = <String>['KB', 'MB', 'GB', 'TB'];
-  var value = bytes.toDouble();
-  var unitIndex = -1;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  final fixed =
-      value >= 100 ? value.toStringAsFixed(0) : value.toStringAsFixed(1);
-  return '$fixed ${units[unitIndex]}';
 }

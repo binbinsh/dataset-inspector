@@ -363,8 +363,8 @@ class _VideoPreviewState extends State<VideoPreview> {
                       allowScrubbing: true,
                       colors: VideoProgressColors(
                         playedColor: scheme.primary,
-                        bufferedColor: scheme.primary.withOpacity(0.2),
-                        backgroundColor: scheme.outlineVariant.withOpacity(0.3),
+                        bufferedColor: scheme.primary.withValues(alpha: 0.2),
+                        backgroundColor: scheme.outlineVariant.withValues(alpha: 0.3),
                       ),
                     ),
                   ),

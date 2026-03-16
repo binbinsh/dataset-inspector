@@ -16,7 +16,8 @@ class DuckDbParquetService {
   static bool _libraryPathConfigured = false;
   String? _cachedToken; // Cache token to avoid re-setting on every request
 
-  // Prefetch cache: key = "url:offset:length", value = result
+  // In-memory prefetch cache: key = "url:offset:length", value = result.
+  // Do not persist this cache to disk.
   final Map<String, DuckDbParquetResult> _prefetchCache = {};
   final Map<String, List<String>> _columnNamesCache = {};
   static const int _maxCacheSize = 5;
@@ -214,8 +215,6 @@ class DuckDbParquetService {
         totalFeatureCount: allColumnNames.length,
         partial: partial,
       );
-
-      // Cache the result
       _cacheResult(
         url: url,
         offset: offset,
@@ -224,7 +223,6 @@ class DuckDbParquetService {
         featureOffset: featureOffset,
         maxFeatureCount: maxFeatureCount,
       );
-
       return result;
     } catch (e) {
       AppLogger.error('DuckDB Parquet read failed: $e', tag: 'duckdb');
@@ -476,7 +474,6 @@ class DuckDbParquetService {
         }
       }
     }
-
     _columnNamesCache[url] = columns;
     return columns;
   }
@@ -499,9 +496,8 @@ class DuckDbParquetService {
       return "read_parquet('$escapedPath')";
     }
 
-    final urlList = normalized
-        .map((entry) => "'${_escapeSqlLiteral(entry)}'")
-        .join(', ');
+    final urlList =
+        normalized.map((entry) => "'${_escapeSqlLiteral(entry)}'").join(', ');
     return 'read_parquet([$urlList])';
   }
 
@@ -595,7 +591,9 @@ class DuckDbParquetService {
       }
 
       final resolvedTotalRows = includeTotalRows && totalRows.isNotEmpty
-          ? (totalRows.first.isNotEmpty ? (totalRows.first[0] as num?)?.toInt() ?? 0 : 0)
+          ? (totalRows.first.isNotEmpty
+              ? (totalRows.first[0] as num?)?.toInt() ?? 0
+              : 0)
           : 0;
       final hasMoreRows = includeTotalRows
           ? (offset + rows.length) < resolvedTotalRows
@@ -797,7 +795,6 @@ class DuckDbParquetService {
         featureCount: projectedCount,
         partial: hasMoreRows,
       );
-
       _cacheResult(
         url: cacheKey,
         offset: offset,

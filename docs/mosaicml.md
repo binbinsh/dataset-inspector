@@ -14,6 +14,6 @@ Dataset Inspector treats an MDS dataset as:
 - Only MDS is supported.
 - The app reads raw field bytes and does not deserialize unsafe Python types (for example, pickled objects).
 - Scalar encodings are decoded to text for preview when possible.
-- Compressed shards are decompressed to a temporary cache directory under system temp (`dataset-inspector/mds-cache`).
+- Compressed shards are decoded from stream inputs without creating shard cache files.
 - To keep the UI responsive, the app lists only the first 5000 samples per shard.
 - Opening a field reads the full field and is capped at 256 MB.

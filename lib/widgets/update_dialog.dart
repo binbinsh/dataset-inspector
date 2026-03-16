@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../services/update_service.dart';
 import '../state/viewer_state.dart';
+import '../utils/dialog_action_styles.dart';
 
-Future<void> showUpdateDialog(BuildContext context, ViewerState state, UpdateInfo update) async {
+Future<void> showUpdateDialog(
+    BuildContext context, ViewerState state, UpdateInfo update) async {
   var downloaded = 0;
   int? total;
   var isDownloading = false;
@@ -15,6 +17,7 @@ Future<void> showUpdateDialog(BuildContext context, ViewerState state, UpdateInf
     }
     return message;
   }
+
   return showDialog<void>(
     context: context,
     builder: (dialogContext) {
@@ -23,7 +26,9 @@ Future<void> showUpdateDialog(BuildContext context, ViewerState state, UpdateInf
           final theme = Theme.of(context);
           final showProgress = isDownloading;
           final totalBytes = total;
-          final progress = (totalBytes != null && totalBytes > 0) ? downloaded / totalBytes : null;
+          final progress = (totalBytes != null && totalBytes > 0)
+              ? downloaded / totalBytes
+              : null;
           return AlertDialog(
             title: const Text('Update available'),
             content: Column(
@@ -37,18 +42,23 @@ Future<void> showUpdateDialog(BuildContext context, ViewerState state, UpdateInf
                 ],
                 const SizedBox(height: 16),
                 if (errorMessage != null) ...[
-                  Text(errorMessage!, style: TextStyle(color: theme.colorScheme.error)),
+                  Text(errorMessage!,
+                      style: TextStyle(color: theme.colorScheme.error)),
                   const SizedBox(height: 12),
                 ],
                 if (showProgress) LinearProgressIndicator(value: progress),
               ],
             ),
             actions: [
-              TextButton(
-                onPressed: isDownloading ? null : () => Navigator.of(dialogContext).pop(),
+              OutlinedButton(
+                style: buildDialogSecondaryButtonStyle(context),
+                onPressed: isDownloading
+                    ? null
+                    : () => Navigator.of(dialogContext).pop(),
                 child: const Text('Later'),
               ),
               FilledButton(
+                style: buildDialogPrimaryButtonStyle(context),
                 onPressed: isDownloading
                     ? null
                     : () async {
@@ -59,7 +69,8 @@ Future<void> showUpdateDialog(BuildContext context, ViewerState state, UpdateInf
                           errorMessage = null;
                         });
                         try {
-                          final file = await state.downloadUpdate(update, onProgress: (value, totalBytes) {
+                          final file = await state.downloadUpdate(update,
+                              onProgress: (value, totalBytes) {
                             if (!dialogContext.mounted) return;
                             setState(() {
                               downloaded = value;

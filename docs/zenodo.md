@@ -17,7 +17,7 @@ Dataset Inspector can preview Zenodo records directly over HTTP with range reque
 - Direct file preview is limited to 50 MB; larger files open in the browser.
 - ZIP/TAR entry media is limited to 128 MB.
 - TAR listing stops at 250000 entries.
-- TAR media cache keeps up to 32 MB per entry and 256 MB total.
+- TAR media cache keeps up to 32 MB per entry and 256 MB total in memory (not persisted to disk).
 
 ## Security
 - Only `zenodo.org` and `*.zenodo.org` content URLs are allowed.

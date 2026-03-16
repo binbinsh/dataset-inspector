@@ -94,6 +94,34 @@ class FieldPreview {
   final int size;
 }
 
+class ScanRecord {
+  const ScanRecord({
+    required this.itemIndex,
+    required this.transcript,
+    required this.transcriptChars,
+    this.uttId,
+    this.audioSize,
+  });
+
+  final int itemIndex;
+  final String transcript;
+  final int transcriptChars;
+  final String? uttId;
+  final int? audioSize;
+}
+
+class ScanResult {
+  const ScanResult({
+    required this.shardName,
+    required this.totalItems,
+    required this.records,
+  });
+
+  final String shardName;
+  final int totalItems;
+  final List<ScanRecord> records;
+}
+
 class OpenLeafResponse {
   const OpenLeafResponse({
     required this.path,

@@ -12,17 +12,23 @@ import 'package:smb_connect/src/connect/impl/smb2/create/smb2_close_request.dart
 import 'package:smb_connect/src/connect/impl/smb2/create/smb2_close_response.dart';
 import 'package:smb_connect/src/connect/impl/smb2/io/smb2_read_request.dart';
 import 'package:smb_connect/src/connect/impl/smb2/io/smb2_read_response.dart';
+import 'package:smb_connect/src/connect/impl/smb2/nego/smb2_negotiate_response.dart';
 import 'package:smb_connect/src/smb/request_param.dart';
 import 'package:smb_connect/src/smb_constants.dart';
 
 int openReadNextNum = 0;
 
+/// Read buffer size: 1 MB.  The internal SMB2 READ request already caps at
+/// ~64 KB per round-trip, but a large application-level buffer lets
+/// [smbReadFromFile] fill it with multiple rounds before we yield, cutting
+/// the number of Dart async stream events by ~250× vs the old 4 KB buffer.
+const int _kReadBufferSize = 1024 * 1024; // 1 MB
+
 Stream<Uint8List> smbOpenRead(
     SmbFile file, SmbTree tree, Uint8List? fileId, int fid, int start,
     [int? length]) async* {
-  // int openReadNum = openReadNextNum++;
   length = length ?? (file.size - start);
-  var buffSize = min(length, 0xFFF);
+  var buffSize = min(length, _kReadBufferSize);
   var position = 0;
   Uint8List buff = Uint8List(buffSize);
   do {
@@ -30,10 +36,11 @@ Stream<Uint8List> smbOpenRead(
     var readLen = min(buff.length, remain);
     var res = await smbReadFromFile(
         file, tree, fileId, fid, buff, position + start, 0, readLen);
-    if (readLen == buff.length) {
+    if (res <= 0) break;
+    if (res == buff.length) {
       yield buff;
     } else {
-      yield Uint8List.view(buff.buffer, 0, readLen);
+      yield Uint8List.view(buff.buffer, 0, res);
     }
     position += res;
   } while (position < length);
@@ -43,8 +50,7 @@ Stream<Uint8List> smbOpenRead(
 void readAsync(SmbFile file, SmbTree tree, Uint8List? fileId, int fid,
     int start, int? length, StreamController<Uint8List> controller) async {
   length ??= (file.size - start);
-  var buffSize = min(length, 0xFFF);
-  // int index = 0;
+  var buffSize = min(length, _kReadBufferSize);
   var position = 0;
   Uint8List buff = Uint8List(buffSize);
   do {
@@ -52,11 +58,11 @@ void readAsync(SmbFile file, SmbTree tree, Uint8List? fileId, int fid,
     var readLen = min(buff.length, remain);
     var res = await smbReadFromFile(
         file, tree, fileId, fid, buff, start + position, 0, readLen);
-    if (readLen == buff.length) {
+    if (res <= 0) break;
+    if (res == buff.length) {
       controller.add(buff);
     } else {
-      var lastBuff = Uint8List.view(buff.buffer, 0, readLen);
-      controller.add(lastBuff);
+      controller.add(Uint8List.view(buff.buffer, 0, res));
     }
     position += res;
   } while (position < length);
@@ -99,7 +105,14 @@ Future<int> smbReadFromFile(SmbFile file, SmbTree tree, Uint8List? fileId,
 
   SmbComReadAndXResponse response = SmbComReadAndXResponse(tree.config, b, off);
   int r, n;
+  // Use negotiated maxReadSize when available (can be up to 8 MB with SMB3),
+  // otherwise fall back to a safe default.
   int blockSize = 64936;
+  final negotiated = tree.transport.getNegotiatedResponse();
+  if (negotiated is Smb2NegotiateResponse) {
+    final negotiatedMax = negotiated.maxReadSize;
+    if (negotiatedMax > 0) blockSize = negotiatedMax;
+  }
   // (type == SmbConstants.TYPE_FILESYSTEM) ? readSizeFile : readSize;
   do {
     r = len > blockSize ? blockSize : len;
@@ -171,10 +184,6 @@ Future<int> smbReadFromFile(SmbFile file, SmbTree tree, Uint8List? fileId,
     fp += n;
     len -= n;
     response.adjustOffset(n);
-  } while (len > blockSize && n == r);
-  // this used to be len > 0, but this is BS:
-  // - InputStream.read gives no such guarantee
-  // - otherwise the caller would need to figure out the block size, or otherwise might end up with very small
-  // reads
+  } while (len > 0 && n == r);
   return (fp - start);
 }

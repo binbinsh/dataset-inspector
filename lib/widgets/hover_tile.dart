@@ -23,7 +23,7 @@ class _HoverTileState extends State<HoverTile> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final bg = widget.selected
-        ? scheme.primary.withOpacity(0.12)
+        ? scheme.primary.withValues(alpha: 0.12)
         : _hovered
             ? const Color(0xFFF5F5F5)
             : Colors.transparent;

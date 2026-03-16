@@ -30,17 +30,14 @@ dependencies:
   zstd: ^0.0.1-dev.2
   dart_duckdb: ^1.4.4
   minio: ^3.5.8
-  smb_connect: ^0.0.9
+  libsmbclient_ffi:
+    path: third_party/libsmbclient_ffi
   dartssh2: ^2.13.0
 
 dev_dependencies:
   flutter_lints: ^6.0.0
   flutter_test:
     sdk: flutter
-
-dependency_overrides:
-  smb_connect:
-    path: third_party/smb_connect
 
 flutter:
   uses-material-design: true

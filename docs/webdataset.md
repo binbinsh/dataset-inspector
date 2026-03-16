@@ -16,7 +16,8 @@ Dataset Inspector treats a WebDataset as:
 - The UI supports **Prev/Next paging** (no random jump). Without an index, jumping to an arbitrary sample requires scanning.
 - Sequential paging is fast because the backend keeps a per-shard scan cache and continues from the last read position.
 - Member previews are cached while scanning the current page, so previews are fastest when browsing forward.
-- `.tar.zst`/`.tar.zstd` shards are decompressed to a temp cache under system temp (`dataset-inspector/wds-cache`).
+- `.tar.zst`/`.tar.zstd` shards are decoded in streaming mode.
+- WebDataset acceleration caches are in-memory only (no shard cache files are written).
 - Opening a member reads the full entry and is capped at 256 MB.
 - When `numSamplesTotal` is missing, the total is not known without a full scan.
 - Preview/open operations extract the selected member to a temp file before opening.

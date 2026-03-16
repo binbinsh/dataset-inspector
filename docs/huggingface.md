@@ -71,6 +71,7 @@ Dataset Inspector uses [DuckDB](https://duckdb.org/) to stream Parquet files dir
 - **HTTP metadata caching**: Reduces redundant metadata fetches
 - **Prefetch cache**: Pre-loads next page in background
 - **HTTP keep-alive**: Reuses connections for faster sequential requests
+- All preview/prefetch acceleration caches are in-memory only; no remote dataset cache files are persisted.
 
 ## Opening fields
 

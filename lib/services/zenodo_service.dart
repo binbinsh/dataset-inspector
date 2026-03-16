@@ -42,6 +42,7 @@ class ZenodoService {
   final OpenWithService _openWith;
   final http.Client _client;
   late final RemoteZipService _remoteZip;
+  // In-memory TAR scan/media cache only. Not persisted to disk.
   final _TarScanCache _tarCache = _TarScanCache();
 
   Future<ZenodoRecordSummary> recordSummary(String input) async {
@@ -100,7 +101,8 @@ class ZenodoService {
     final url = _parseContentUrl(contentUrl);
     final (data, totalSize) = await _rangeRequest(url, 0, _peekBytes - 1);
     final previewText = previewUtf8Text(data);
-    final guessedExt = _extFromFilename(_fileNameFromUrl(url)) ?? _inferBasicExt(data);
+    final guessedExt =
+        _extFromFilename(_fileNameFromUrl(url)) ?? _inferBasicExt(data);
     return FieldPreview(
       previewText: previewText,
       hexSnippet: hexSnippet(data),
@@ -123,8 +125,10 @@ class ZenodoService {
       throw const FormatException('File too large for preview.');
     }
     final bytes = await _download(url);
-    final ext =
-        _extFromFilename(name) ?? _extFromFilename(_fileNameFromUrl(url)) ?? _inferBasicExt(bytes) ?? 'bin';
+    final ext = _extFromFilename(name) ??
+        _extFromFilename(_fileNameFromUrl(url)) ??
+        _inferBasicExt(bytes) ??
+        'bin';
     return PreparedMediaResponse(bytes: bytes, size: bytes.length, ext: ext);
   }
 
@@ -139,10 +143,15 @@ class ZenodoService {
 
     final (_, totalSize) = await _rangeRequest(url, 0, 0);
     final size = totalSize ?? 0;
-    final ext = _extFromFilename(name) ?? _extFromFilename(_fileNameFromUrl(url)) ?? 'bin';
+    final ext = _extFromFilename(name) ??
+        _extFromFilename(_fileNameFromUrl(url)) ??
+        'bin';
 
     if (size == 0 || size > _maxInlineDownloadBytes) {
-      final opened = await _openWith.openUrl(url.toString()).then((_) => true).catchError((_) => false);
+      final opened = await _openWith
+          .openUrl(url.toString())
+          .then((_) => true)
+          .catchError((_) => false);
       final message = opened
           ? 'Opened download URL (${size.clamp(0, 0xFFFFFFFF).toInt()} bytes) in your browser.'
           : 'Unable to open download URL.';
@@ -157,12 +166,15 @@ class ZenodoService {
     }
 
     final bytes = await _download(url);
-    final tempDir = Directory('${Directory.systemTemp.path}/dataset-inspector/zenodo');
+    final tempDir =
+        Directory('${Directory.systemTemp.path}/dataset-inspector/zenodo');
     await tempDir.create(recursive: true);
     final recordId = _recordIdFromContentUrl(url) ?? 'unknown';
     final sanitized = _sanitize(name);
-    final stem = sanitized.contains('.') ? sanitized.split('.').first : sanitized;
-    final out = File('${tempDir.path}/${_sanitize(url.host)}-r$recordId-$stem.$ext');
+    final stem =
+        sanitized.contains('.') ? sanitized.split('.').first : sanitized;
+    final out =
+        File('${tempDir.path}/${_sanitize(url.host)}-r$recordId-$stem.$ext');
     await out.writeAsBytes(bytes, flush: true);
 
     final result = await _openWith.openFile(out.path, appPath: openerAppPath);
@@ -208,7 +220,9 @@ class ZenodoService {
   }) async {
     final name = filename.trim();
     if (name.isEmpty) throw const FormatException('Missing filename.');
-    if (!_looksLikeZip(name)) throw const FormatException('Selected file is not a ZIP archive.');
+    if (!_looksLikeZip(name)) {
+      throw const FormatException('Selected file is not a ZIP archive.');
+    }
     return _remoteZip.peekEntry(
       contentUrl: contentUrl,
       entryName: entryName,
@@ -224,7 +238,9 @@ class ZenodoService {
   }) async {
     final name = filename.trim();
     if (name.isEmpty) throw const FormatException('Missing filename.');
-    if (!_looksLikeZip(name)) throw const FormatException('Selected file is not a ZIP archive.');
+    if (!_looksLikeZip(name)) {
+      throw const FormatException('Selected file is not a ZIP archive.');
+    }
     final url = _parseContentUrl(contentUrl);
     final bytes = await _remoteZip.readEntryBytes(
       contentUrl: contentUrl,
@@ -232,11 +248,13 @@ class ZenodoService {
       limitBytes: remoteZipInlineMaxBytes,
     );
     final ext = _extFromFilename(entryName) ?? _inferBasicExt(bytes) ?? 'bin';
-    final tempDir = Directory('${Directory.systemTemp.path}/dataset-inspector/zenodo');
+    final tempDir =
+        Directory('${Directory.systemTemp.path}/dataset-inspector/zenodo');
     await tempDir.create(recursive: true);
     final recordId = _recordIdFromContentUrl(url) ?? 'unknown';
     final baseName = _sanitize('${_fileNameFromUrl(url)}-$entryName');
-    final out = File('${tempDir.path}/${_sanitize(url.host)}-r$recordId-$baseName.$ext');
+    final out = File(
+        '${tempDir.path}/${_sanitize(url.host)}-r$recordId-$baseName.$ext');
     await out.writeAsBytes(bytes, flush: true);
 
     final result = await _openWith.openFile(out.path, appPath: openerAppPath);
@@ -263,7 +281,9 @@ class ZenodoService {
   }) async {
     final name = filename.trim();
     if (name.isEmpty) throw const FormatException('Missing filename.');
-    if (!_looksLikeZip(name)) throw const FormatException('Selected file is not a ZIP archive.');
+    if (!_looksLikeZip(name)) {
+      throw const FormatException('Selected file is not a ZIP archive.');
+    }
     final bytes = await _remoteZip.readEntryBytes(
       contentUrl: contentUrl,
       entryName: entryName,
@@ -288,7 +308,9 @@ class ZenodoService {
   }) async {
     final name = filename.trim();
     if (name.isEmpty) throw const FormatException('Missing filename.');
-    if (!_looksLikeZip(name)) throw const FormatException('Selected file is not a ZIP archive.');
+    if (!_looksLikeZip(name)) {
+      throw const FormatException('Selected file is not a ZIP archive.');
+    }
     final bytes = await _remoteZip.readEntryBytes(
       contentUrl: contentUrl,
       entryName: entryName,
@@ -307,12 +329,13 @@ class ZenodoService {
     final name = filename.trim();
     if (name.isEmpty) throw const FormatException('Missing filename.');
     if (!_looksLikeTar(name)) {
-      throw const FormatException('Selected file is not a supported TAR archive.');
+      throw const FormatException(
+          'Selected file is not a supported TAR archive.');
     }
 
     final pageOffset = (offset ?? 0).clamp(0, 0x7FFFFFFF).toInt();
-    final pageLength = (length ?? _tarDefaultPageSize).clamp(1, _tarMaxPageSize).toInt();
-
+    final pageLength =
+        (length ?? _tarDefaultPageSize).clamp(1, _tarMaxPageSize).toInt();
     final state = await _tarCache.getOrCreate(_client, contentUrl, name);
     final captureStart = pageOffset;
     final captureEnd = pageOffset + pageLength;
@@ -340,12 +363,12 @@ class ZenodoService {
   }) async {
     final name = filename.trim();
     if (!_looksLikeTar(name)) {
-      throw const FormatException('Selected file is not a supported TAR archive.');
+      throw const FormatException(
+          'Selected file is not a supported TAR archive.');
     }
     final state = await _tarCache.getOrCreate(_client, contentUrl, name);
     final cached = state.cachedPreview(entryName);
     if (cached != null) return cached;
-
     final url = _parseContentUrl(contentUrl);
     final entry = await _readTarEntry(url, name, entryName, _peekBytes);
     return entry.preview;
@@ -359,17 +382,22 @@ class ZenodoService {
   }) async {
     final name = filename.trim();
     if (!_looksLikeTar(name)) {
-      throw const FormatException('Selected file is not a supported TAR archive.');
+      throw const FormatException(
+          'Selected file is not a supported TAR archive.');
     }
     final url = _parseContentUrl(contentUrl);
-    final entry = await _readTarEntry(url, name, entryName, _tarInlineMediaMaxBytes);
+    final entry =
+        await _readTarEntry(url, name, entryName, _tarInlineMediaMaxBytes);
 
-    final ext = _extFromFilename(entryName) ?? _inferBasicExt(entry.bytes) ?? 'bin';
-    final tempDir = Directory('${Directory.systemTemp.path}/dataset-inspector/zenodo');
+    final ext =
+        _extFromFilename(entryName) ?? _inferBasicExt(entry.bytes) ?? 'bin';
+    final tempDir =
+        Directory('${Directory.systemTemp.path}/dataset-inspector/zenodo');
     await tempDir.create(recursive: true);
     final recordId = _recordIdFromContentUrl(url) ?? 'unknown';
     final baseName = _sanitize(entryName);
-    final out = File('${tempDir.path}/${_sanitize(url.host)}-r$recordId-$baseName.$ext');
+    final out = File(
+        '${tempDir.path}/${_sanitize(url.host)}-r$recordId-$baseName.$ext');
     await out.writeAsBytes(entry.bytes, flush: true);
 
     final result = await _openWith.openFile(out.path, appPath: openerAppPath);
@@ -396,9 +424,9 @@ class ZenodoService {
   }) async {
     final name = filename.trim();
     if (!_looksLikeTar(name)) {
-      throw const FormatException('Selected file is not a supported TAR archive.');
+      throw const FormatException(
+          'Selected file is not a supported TAR archive.');
     }
-
     final state = await _tarCache.getOrCreate(_client, contentUrl, name);
     final cached = state.cachedMedia(entryName);
     if (cached != null) {
@@ -411,8 +439,10 @@ class ZenodoService {
     }
 
     final url = _parseContentUrl(contentUrl);
-    final entry = await _readTarEntry(url, name, entryName, _tarInlineMediaMaxBytes);
-    final ext = _extFromFilename(entryName) ?? _inferBasicExt(entry.bytes) ?? 'bin';
+    final entry =
+        await _readTarEntry(url, name, entryName, _tarInlineMediaMaxBytes);
+    final ext =
+        _extFromFilename(entryName) ?? _inferBasicExt(entry.bytes) ?? 'bin';
     final mime = _mimeForExt(ext);
     final base64 = base64Encode(entry.bytes);
 
@@ -431,12 +461,16 @@ class ZenodoService {
   }) async {
     final name = filename.trim();
     if (!_looksLikeTar(name)) {
-      throw const FormatException('Selected file is not a supported TAR archive.');
+      throw const FormatException(
+          'Selected file is not a supported TAR archive.');
     }
     final url = _parseContentUrl(contentUrl);
-    final entry = await _readTarEntry(url, name, entryName, _tarInlineMediaMaxBytes);
-    final ext = _extFromFilename(entryName) ?? _inferBasicExt(entry.bytes) ?? 'bin';
-    return PreparedMediaResponse(bytes: entry.bytes, size: entry.bytes.length, ext: ext);
+    final entry =
+        await _readTarEntry(url, name, entryName, _tarInlineMediaMaxBytes);
+    final ext =
+        _extFromFilename(entryName) ?? _inferBasicExt(entry.bytes) ?? 'bin';
+    return PreparedMediaResponse(
+        bytes: entry.bytes, size: entry.bytes.length, ext: ext);
   }
 
   Future<_TarEntryRead> _readTarEntry(
@@ -459,7 +493,8 @@ class ZenodoService {
       if (entry.meta.isDir) continue;
       if (entry.meta.path != entryName) continue;
       if (entry.meta.size > maxBytes) {
-        throw FormatException('Entry too large to read (${entry.meta.size} bytes).');
+        throw FormatException(
+            'Entry too large to read (${entry.meta.size} bytes).');
       }
       final bytes = entry.bytes ?? Uint8List(0);
       final previewText = previewUtf8Text(bytes);
@@ -476,7 +511,8 @@ class ZenodoService {
     throw FormatException('Entry not found in TAR: $entryName');
   }
 
-  Future<Stream<List<int>>> _openRemoteTarStream(Uri url, String filenameHint) async {
+  Future<Stream<List<int>>> _openRemoteTarStream(
+      Uri url, String filenameHint) async {
     final request = http.Request('GET', url);
     request.headers[HttpHeaders.userAgentHeader] = _userAgent;
     final response = await _client.send(request).timeout(_requestTimeout);
@@ -489,7 +525,8 @@ class ZenodoService {
       return gzip.decoder.bind(response.stream);
     }
     if (name.endsWith('.tar.zst') || name.endsWith('.tar.zstd')) {
-      final bytes = await response.stream.fold<BytesBuilder>(BytesBuilder(), (b, c) {
+      final bytes =
+          await response.stream.fold<BytesBuilder>(BytesBuilder(), (b, c) {
         b.add(c);
         return b;
       }).then((b) => b.toBytes());
@@ -511,7 +548,8 @@ class ZenodoService {
   }
 
   Future<Map<String, dynamic>> _getJson(Uri url) async {
-    final response = await _client.get(url, headers: {HttpHeaders.userAgentHeader: _userAgent});
+    final response = await _client
+        .get(url, headers: {HttpHeaders.userAgentHeader: _userAgent});
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception('HTTP ${response.statusCode} from $url');
     }
@@ -522,14 +560,17 @@ class ZenodoService {
     final trimmed = input.trim();
     final url = Uri.tryParse(trimmed);
     if (url == null) {
-      throw const FormatException('Provide a Zenodo record URL like https://zenodo.org/records/<id>.');
+      throw const FormatException(
+          'Provide a Zenodo record URL like https://zenodo.org/records/<id>.');
     }
     if (!_validateZenodoUrl(url)) {
-      throw const FormatException('Unsupported Zenodo URL. Expected https://zenodo.org/records/<id>.');
+      throw const FormatException(
+          'Unsupported Zenodo URL. Expected https://zenodo.org/records/<id>.');
     }
     final recordId = _extractRecordIdFromUrl(url);
     if (recordId == null) {
-      throw const FormatException('Unsupported Zenodo URL. Expected https://zenodo.org/records/<id>.');
+      throw const FormatException(
+          'Unsupported Zenodo URL. Expected https://zenodo.org/records/<id>.');
     }
     return ('${url.scheme}://${url.host}', recordId);
   }
@@ -639,10 +680,16 @@ class ZenodoService {
         data[3] == 0x47) {
       return 'png';
     }
-    if (data.length >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff) {
+    if (data.length >= 3 &&
+        data[0] == 0xff &&
+        data[1] == 0xd8 &&
+        data[2] == 0xff) {
       return 'jpg';
     }
-    if (data.length >= 6 && data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46) {
+    if (data.length >= 6 &&
+        data[0] == 0x47 &&
+        data[1] == 0x49 &&
+        data[2] == 0x46) {
       return 'gif';
     }
     return null;
@@ -661,7 +708,8 @@ class ZenodoService {
     return buffer.toString();
   }
 
-  Future<(Uint8List, int?)> _rangeRequest(Uri url, int start, int endInclusive) async {
+  Future<(Uint8List, int?)> _rangeRequest(
+      Uri url, int start, int endInclusive) async {
     final response = await _client.get(
       url,
       headers: {
@@ -672,7 +720,8 @@ class ZenodoService {
     if (response.statusCode != 200 && response.statusCode != 206) {
       throw Exception('HTTP ${response.statusCode} from $url');
     }
-    final totalSize = _parseContentRangeTotal(response.headers['content-range']);
+    final totalSize =
+        _parseContentRangeTotal(response.headers['content-range']);
     return (response.bodyBytes, totalSize);
   }
 
@@ -685,7 +734,8 @@ class ZenodoService {
   }
 
   Future<Uint8List> _download(Uri url) async {
-    final res = await _client.get(url, headers: {HttpHeaders.userAgentHeader: _userAgent});
+    final res = await _client
+        .get(url, headers: {HttpHeaders.userAgentHeader: _userAgent});
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw Exception('download HTTP ${res.statusCode} from $url');
     }
@@ -703,13 +753,15 @@ class _TarEntryRead {
 class _TarScanCache {
   final Map<String, _TarScanState> _states = {};
 
-  Future<_TarScanState> getOrCreate(http.Client client, String contentUrl, String filename) async {
+  Future<_TarScanState> getOrCreate(
+      http.Client client, String contentUrl, String filename) async {
     final key = contentUrl.trim();
     if (key.isEmpty) throw const FormatException('Missing content URL.');
     final name = filename.trim();
     if (name.isEmpty) throw const FormatException('Missing filename.');
     if (!_looksLikeTarStatic(name)) {
-      throw const FormatException('Selected file is not a supported TAR archive.');
+      throw const FormatException(
+          'Selected file is not a supported TAR archive.');
     }
     final existing = _states[key];
     if (existing != null) return existing;
@@ -734,8 +786,10 @@ class _TarScanCache {
 }
 
 class _TarScanState {
-  _TarScanState({required http.Client client, required this.url, required this.filename})
-      : _tar = createTarStream(openTarStreamReader(_openRemoteTarStreamStatic(client, url, filename)));
+  _TarScanState(
+      {required http.Client client, required this.url, required this.filename})
+      : _tar = createTarStream(openTarStreamReader(
+            _openRemoteTarStreamStatic(client, url, filename)));
 
   final Uri url;
   final String filename;
@@ -747,7 +801,8 @@ class _TarScanState {
   final Queue<String> _mediaLru = ListQueue();
   int _mediaTotal = 0;
 
-  Future<void> ensureScannedForPage(int target, int captureStart, int captureEnd) async {
+  Future<void> ensureScannedForPage(
+      int target, int captureStart, int captureEnd) async {
     while (!done && entries.length < target) {
       final idx = entries.length;
       final capture = idx >= captureStart && idx < captureEnd;
@@ -755,7 +810,9 @@ class _TarScanState {
         if (!capture || meta.isDir) return 0;
         final ext = _extFromFilenameStatic(meta.path) ?? '';
         final isMedia = _isMediaExt(ext);
-        if (isMedia && meta.size > 0 && meta.size <= _tarMediaCacheItemMaxBytes) {
+        if (isMedia &&
+            meta.size > 0 &&
+            meta.size <= _tarMediaCacheItemMaxBytes) {
           return meta.size;
         }
         return _peekBytes;
@@ -777,9 +834,11 @@ class _TarScanState {
 
       if (entry.bytes != null && !entry.meta.isDir) {
         final bytes = entry.bytes!;
-        final previewBytes = bytes.length > _peekBytes ? bytes.sublist(0, _peekBytes) : bytes;
+        final previewBytes =
+            bytes.length > _peekBytes ? bytes.sublist(0, _peekBytes) : bytes;
         final previewText = previewUtf8Text(previewBytes);
-        final guessedExt = _extFromFilenameStatic(entry.meta.path) ?? _inferBasicExtStatic(previewBytes);
+        final guessedExt = _extFromFilenameStatic(entry.meta.path) ??
+            _inferBasicExtStatic(previewBytes);
         final preview = FieldPreview(
           previewText: previewText,
           hexSnippet: hexSnippet(previewBytes),
@@ -789,7 +848,8 @@ class _TarScanState {
         );
         _previews[entry.meta.path] = preview;
 
-        if (bytes.length == entry.meta.size && entry.meta.size <= _tarMediaCacheItemMaxBytes) {
+        if (bytes.length == entry.meta.size &&
+            entry.meta.size <= _tarMediaCacheItemMaxBytes) {
           final ext = _extFromFilenameStatic(entry.meta.path) ?? 'bin';
           final mime = _mimeForExtStatic(ext);
           _cacheMedia(entry.meta.path, ext, mime, bytes);
@@ -810,7 +870,8 @@ class _TarScanState {
 
   void _cacheMedia(String name, String ext, String mime, Uint8List bytes) {
     if (bytes.length > _tarMediaCacheItemMaxBytes) return;
-    while (_mediaTotal + bytes.length > _tarMediaCacheTotalMaxBytes && _mediaLru.isNotEmpty) {
+    while (_mediaTotal + bytes.length > _tarMediaCacheTotalMaxBytes &&
+        _mediaLru.isNotEmpty) {
       final oldest = _mediaLru.removeFirst();
       final removed = _mediaCache.remove(oldest);
       if (removed != null) {
@@ -839,7 +900,8 @@ class _TarScanState {
         request.headers[HttpHeaders.userAgentHeader] = _userAgent;
         final response = await client.send(request).timeout(_requestTimeout);
         if (response.statusCode < 200 || response.statusCode >= 300) {
-          controller.addError(Exception('HTTP ${response.statusCode} from $url'));
+          controller
+              .addError(Exception('HTTP ${response.statusCode} from $url'));
           await controller.close();
           return;
         }
@@ -901,7 +963,10 @@ class _TarScanState {
         data[3] == 0x47) {
       return 'png';
     }
-    if (data.length >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff) {
+    if (data.length >= 3 &&
+        data[0] == 0xff &&
+        data[1] == 0xd8 &&
+        data[2] == 0xff) {
       return 'jpg';
     }
     return null;

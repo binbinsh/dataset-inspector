@@ -49,6 +49,7 @@ class RemoteZipService {
   final String _userAgent;
   final int _previewMaxCompressedBytes;
   final int _inlineMaxCompressedBytes;
+  // In-memory central directory cache keyed by URL.
   final Map<String, _ZipIndex> _cache = {};
 
   Future<List<RemoteZipEntrySummary>> listEntries({
@@ -57,7 +58,9 @@ class RemoteZipService {
   }) async {
     final name = filename.trim();
     if (name.isEmpty) throw const FormatException('Missing filename.');
-    if (!_looksLikeZip(name)) throw const FormatException('Selected file is not a ZIP archive.');
+    if (!_looksLikeZip(name)) {
+      throw const FormatException('Selected file is not a ZIP archive.');
+    }
 
     final index = await _getIndex(contentUrl);
     return index.entries
@@ -146,10 +149,16 @@ class RemoteZipService {
         data[3] == 0x47) {
       return 'png';
     }
-    if (data.length >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff) {
+    if (data.length >= 3 &&
+        data[0] == 0xff &&
+        data[1] == 0xd8 &&
+        data[2] == 0xff) {
       return 'jpg';
     }
-    if (data.length >= 6 && data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46) {
+    if (data.length >= 6 &&
+        data[0] == 0x47 &&
+        data[1] == 0x49 &&
+        data[2] == 0x46) {
       return 'gif';
     }
     return null;
@@ -165,7 +174,8 @@ class RemoteZipService {
     if ((entry.flags & 1) == 1) {
       throw const FormatException('Encrypted ZIP entries are not supported.');
     }
-    final localHeader = await _rangeRequest(url, entry.localHeaderOffset, entry.localHeaderOffset + 64);
+    final localHeader = await _rangeRequest(
+        url, entry.localHeaderOffset, entry.localHeaderOffset + 64);
     final dataOffset = _localHeaderDataOffset(localHeader.$1);
     final dataStart = entry.localHeaderOffset + dataOffset;
 
@@ -173,13 +183,15 @@ class RemoteZipService {
 
     if (entry.method == 0) {
       final end = dataStart + entry.compressedSize - 1;
-      final wantEnd = (dataStart + previewBytes - 1).clamp(dataStart, end).toInt();
+      final wantEnd =
+          (dataStart + previewBytes - 1).clamp(dataStart, end).toInt();
       final data = await _rangeRequest(url, dataStart, wantEnd);
       return data.$1;
     }
 
     if (entry.method != 8) {
-      throw FormatException('Unsupported ZIP compression method: ${entry.method}');
+      throw FormatException(
+          'Unsupported ZIP compression method: ${entry.method}');
     }
 
     if (entry.compressedSize > _previewMaxCompressedBytes) {
@@ -208,25 +220,30 @@ class RemoteZipService {
       throw const FormatException('Encrypted ZIP entries are not supported.');
     }
     if (entry.uncompressedSize > limit) {
-      throw FormatException('ZIP entry expanded beyond the limit (${entry.uncompressedSize} bytes).');
+      throw FormatException(
+          'ZIP entry expanded beyond the limit (${entry.uncompressedSize} bytes).');
     }
-    final localHeader = await _rangeRequest(url, entry.localHeaderOffset, entry.localHeaderOffset + 64);
+    final localHeader = await _rangeRequest(
+        url, entry.localHeaderOffset, entry.localHeaderOffset + 64);
     final dataOffset = _localHeaderDataOffset(localHeader.$1);
     final dataStart = entry.localHeaderOffset + dataOffset;
 
     if (entry.method == 0) {
-      final data = await _rangeRequest(url, dataStart, dataStart + entry.compressedSize - 1);
+      final data = await _rangeRequest(
+          url, dataStart, dataStart + entry.compressedSize - 1);
       return data.$1;
     }
     if (entry.method != 8) {
-      throw FormatException('Unsupported ZIP compression method: ${entry.method}');
+      throw FormatException(
+          'Unsupported ZIP compression method: ${entry.method}');
     }
 
     if (entry.compressedSize > _inlineMaxCompressedBytes) {
       throw const FormatException('ZIP entry is too large to open.');
     }
 
-    final data = await _rangeRequest(url, dataStart, dataStart + entry.compressedSize - 1);
+    final data = await _rangeRequest(
+        url, dataStart, dataStart + entry.compressedSize - 1);
     return _inflateDeflateWithLimit(data.$1, limit);
   }
 
@@ -247,7 +264,8 @@ class RemoteZipService {
     return Uint8List.fromList(decoded);
   }
 
-  Future<Uint8List> _inflateDeflatePreview(Uint8List compressed, int limit) async {
+  Future<Uint8List> _inflateDeflatePreview(
+      Uint8List compressed, int limit) async {
     if (limit <= 0) return Uint8List(0);
     final output = BytesBuilder();
     final completer = Completer<Uint8List>();
@@ -288,7 +306,8 @@ class RemoteZipService {
   Future<_ZipIndex> _buildZipIndex(Uri url) async {
     final cd = await _readZipCentralDirectoryInfo(url);
     if (cd.centralDirSize == 0 || cd.centralDirSize > _zipMaxCentralDirBytes) {
-      throw const FormatException('ZIP central directory is too large to parse.');
+      throw const FormatException(
+          'ZIP central directory is too large to parse.');
     }
     final end = cd.centralDirOffset + cd.centralDirSize - 1;
     final response = await _rangeRequest(url, cd.centralDirOffset, end);
@@ -311,9 +330,11 @@ class RemoteZipService {
         break;
       }
       if (tailLen >= _zipTailMaxBytes) {
-        throw const FormatException('Unable to locate ZIP EOCD (tail too small).');
+        throw const FormatException(
+            'Unable to locate ZIP EOCD (tail too small).');
       }
-      tailLen = (tailLen * 2).clamp(_zipTailInitialBytes, _zipTailMaxBytes).toInt();
+      tailLen =
+          (tailLen * 2).clamp(_zipTailInitialBytes, _zipTailMaxBytes).toInt();
     }
 
     final eocdAbs = tailStart + eocdRel;
@@ -325,7 +346,9 @@ class RemoteZipService {
     final cdSizeU32 = _readU32Le(tail, eocdRel + 12);
     final cdOffsetU32 = _readU32Le(tail, eocdRel + 16);
 
-    final needsZip64 = entriesU16 == 0xFFFF || cdSizeU32 == 0xFFFFFFFF || cdOffsetU32 == 0xFFFFFFFF;
+    final needsZip64 = entriesU16 == 0xFFFF ||
+        cdSizeU32 == 0xFFFFFFFF ||
+        cdOffsetU32 == 0xFFFFFFFF;
     if (!needsZip64) {
       return _ZipCentralDirectory(
         totalEntries: entriesU16,
@@ -372,7 +395,8 @@ class RemoteZipService {
     return null;
   }
 
-  List<_ZipEntryIndex> _parseCentralDirectoryEntries(Uint8List buf, int maxEntriesHint) {
+  List<_ZipEntryIndex> _parseCentralDirectoryEntries(
+      Uint8List buf, int maxEntriesHint) {
     final entries = <_ZipEntryIndex>[];
     var pos = 0;
     while (pos + 46 <= buf.length) {
@@ -393,14 +417,17 @@ class RemoteZipService {
       final extraEnd = extraStart + extraLen;
       final commentEnd = extraEnd + commentLen;
       final nameBytes = buf.sublist(nameStart, nameEnd);
-      final extraBytes = extraStart < buf.length ? buf.sublist(extraStart, extraEnd) : Uint8List(0);
+      final extraBytes = extraStart < buf.length
+          ? buf.sublist(extraStart, extraEnd)
+          : Uint8List(0);
       final name = utf8.decode(nameBytes, allowMalformed: true);
       final isDir = name.endsWith('/');
 
       final needZip64Uncompressed = uncompressedSizeU32 == 0xFFFFFFFF;
       final needZip64Compressed = compressedSizeU32 == 0xFFFFFFFF;
       final needZip64LocalOffset = localHeaderOffsetU32 == 0xFFFFFFFF;
-      final zip64 = _parseZip64Extra(extraBytes, needZip64Uncompressed, needZip64Compressed, needZip64LocalOffset);
+      final zip64 = _parseZip64Extra(extraBytes, needZip64Uncompressed,
+          needZip64Compressed, needZip64LocalOffset);
 
       final compressedSize = zip64.$2 ?? compressedSizeU32;
       final uncompressedSize = zip64.$1 ?? uncompressedSizeU32;
@@ -483,7 +510,10 @@ class RemoteZipService {
   ) async {
     final response = await _client.get(
       url,
-      headers: {HttpHeaders.rangeHeader: 'bytes=$start-$endInclusive', HttpHeaders.userAgentHeader: _userAgent},
+      headers: {
+        HttpHeaders.rangeHeader: 'bytes=$start-$endInclusive',
+        HttpHeaders.userAgentHeader: _userAgent
+      },
     );
     if (response.statusCode != 200 && response.statusCode != 206) {
       throw Exception('HTTP ${response.statusCode} from $url');
@@ -498,7 +528,10 @@ class RemoteZipService {
   ) async {
     final response = await _client.get(
       url,
-      headers: {HttpHeaders.rangeHeader: 'bytes=-$suffixLen', HttpHeaders.userAgentHeader: _userAgent},
+      headers: {
+        HttpHeaders.rangeHeader: 'bytes=-$suffixLen',
+        HttpHeaders.userAgentHeader: _userAgent
+      },
     );
     if (response.statusCode != 200 && response.statusCode != 206) {
       throw Exception('HTTP ${response.statusCode} from $url');

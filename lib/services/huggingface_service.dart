@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -17,6 +19,8 @@ const _defaultRows = 50;
 const _maxRows = 100;
 const _maxInlineText = 10 * 1024 * 1024;
 const _logBodyLimit = 1024;
+const _datasetsServerFailureTtl = Duration(minutes: 10);
+const _hubJsonlReadAheadMinRows = 200;
 
 class HuggingfaceService {
   HuggingfaceService({OpenWithService? openWith, http.Client? client})
@@ -29,6 +33,29 @@ class HuggingfaceService {
   // Lazy-initialized components
   HfParquetApi? _parquetApi;
   DuckDbParquetService? _duckDb;
+  final Map<String, Map<String, Map<String, List<String>>>> _hubDataFilesCache =
+      <String, Map<String, Map<String, List<String>>>>{};
+  final Map<String, DateTime> _parquetUnavailableUntil = <String, DateTime>{};
+  final Map<String, DateTime> _rowsUnavailableUntil = <String, DateTime>{};
+  final Map<String, DateTime> _firstRowsUnavailableUntil = <String, DateTime>{};
+  final Map<String, DateTime> _parquetConfigUnavailableUntil =
+      <String, DateTime>{};
+  final Map<String, DateTime> _rowsConfigUnavailableUntil =
+      <String, DateTime>{};
+  final Map<String, DateTime> _firstRowsConfigUnavailableUntil =
+      <String, DateTime>{};
+  final Map<String, Future<Map<String, Map<String, List<String>>>>>
+      _hubDataFilesInFlight =
+      <String, Future<Map<String, Map<String, List<String>>>>>{};
+  final Map<String, List<Map<String, dynamic>>> _hubJsonlRowsCache =
+      <String, List<Map<String, dynamic>>>{};
+  final Set<String> _hubJsonlRowsComplete = <String>{};
+  final Map<String, Future<void>> _hubJsonlReadInFlight =
+      <String, Future<void>>{};
+  final Map<String, _FirstRowsPayload> _firstRowsCache =
+      <String, _FirstRowsPayload>{};
+  final _HttpRequestLimiter _httpLimiter =
+      _HttpRequestLimiter(maxConcurrent: 16);
 
   HfParquetApi get _getParquetApi =>
       _parquetApi ??= HfParquetApi(client: _client);
@@ -258,8 +285,10 @@ class HuggingfaceService {
   }) async {
     var dataset = _extractRepoId(input);
     final tokenValue = token?.trim();
-    final requestedConfig = config?.trim().isNotEmpty == true ? config!.trim() : null;
-    final requestedSplit = split?.trim().isNotEmpty == true ? split!.trim() : null;
+    final requestedConfig =
+        config?.trim().isNotEmpty == true ? config!.trim() : null;
+    final requestedSplit =
+        split?.trim().isNotEmpty == true ? split!.trim() : null;
 
     final (resolvedDataset, configs) = await _getSplits(dataset, tokenValue);
     dataset = resolvedDataset;
@@ -275,13 +304,14 @@ class HuggingfaceService {
     final resolvedConfig = requestedConfig ?? configs.keys.first;
     final availableSplits = configs[resolvedConfig]!;
     if (availableSplits.isEmpty) {
-      throw FormatException('No splits available for config "$resolvedConfig".');
+      throw FormatException(
+          'No splits available for config "$resolvedConfig".');
     }
 
-    final resolvedSplit = requestedSplit != null &&
-            availableSplits.contains(requestedSplit)
-        ? requestedSplit
-        : _pickDefaultSplit(availableSplits);
+    final resolvedSplit =
+        requestedSplit != null && availableSplits.contains(requestedSplit)
+            ? requestedSplit
+            : _pickDefaultSplit(availableSplits);
 
     final files = await _getParquetApi.getParquetFilesForSplit(
       dataset: dataset,
@@ -305,6 +335,7 @@ class HuggingfaceService {
     required String split,
     required int rowIndex,
     required String fieldName,
+    bool openWithSystem = true,
     String? openerAppPath,
     String? token,
   }) async {
@@ -323,26 +354,25 @@ class HuggingfaceService {
       tag: 'hf',
     );
 
-    final url = Uri.parse(_datasetsServerBase).replace(
-      path: 'rows',
-      queryParameters: {
-        'dataset': dataset,
-        'config': configValue,
-        'split': splitValue,
-        'offset': rowIndex.toString(),
-        'length': '1',
-      },
+    final rowsResp = await _getRows(
+      dataset,
+      configValue,
+      splitValue,
+      rowIndex,
+      1,
+      tokenValue,
     );
-
-    final rowsResp = await _getJson(url, tokenValue);
-    final rows = rowsResp['rows'] as List<dynamic>? ?? [];
+    final rows = rowsResp.rows;
     if (rows.isEmpty) {
       throw const FormatException('No row returned for the requested offset.');
     }
-    final row = rows.first['row'] as Map<String, dynamic>?;
-    if (row == null) {
+    final rawRow = rows.first;
+    if (rawRow is! Map) {
       throw const FormatException('Row is not a JSON object.');
     }
+    final row = Map<String, dynamic>.from(
+      rawRow.map((key, value) => MapEntry(key.toString(), value)),
+    );
     final value = row[field];
     if (value == null) {
       throw FormatException("Field '$field' not found in the requested row.");
@@ -356,20 +386,34 @@ class HuggingfaceService {
           _inferBasicExt(bytes) ??
           'bin';
       final size = bytes.length;
+      final virtualPath =
+          'hf://$dataset/$configValue/$splitValue/r$rowIndex/$field.$ext';
+      final base = '$virtualPath ($size bytes)';
+      if (!openWithSystem) {
+        return OpenLeafResponse(
+          path: virtualPath,
+          size: size,
+          ext: ext,
+          opened: false,
+          needsOpener: false,
+          message: base,
+        );
+      }
       final tempDir = Directory(
           '${Directory.systemTemp.path}/dataset-inspector/huggingface');
       await tempDir.create(recursive: true);
+      final uniqueSuffix = DateTime.now().microsecondsSinceEpoch;
       final baseName =
-          _sanitize('$dataset-$configValue-$splitValue-r$rowIndex-$field');
+          _sanitize('$dataset-$configValue-$splitValue-r$rowIndex-$field-$uniqueSuffix');
       final out = File('${tempDir.path}/$baseName.$ext');
       await out.writeAsBytes(bytes, flush: true);
 
+      final localBase = '${out.path} ($size bytes)';
       final result = await _openWith.openFile(out.path, appPath: openerAppPath);
-      final base = '${out.path} ($size bytes)';
       final needsOpener = !result.opened && result.error != null;
-      var message = base;
+      var message = localBase;
       if (needsOpener) {
-        message = '$base · no default app found, choose an app to open it';
+        message = '$localBase · no default app found, choose an app to open it';
       }
       return OpenLeafResponse(
         path: out.path,
@@ -383,20 +427,34 @@ class HuggingfaceService {
 
     final (bytes, ext) = _serializeValue(value);
     final size = bytes.length;
+    final virtualPath =
+        'hf://$dataset/$configValue/$splitValue/r$rowIndex/$field.$ext';
+    final base = '$virtualPath ($size bytes)';
+    if (!openWithSystem) {
+      return OpenLeafResponse(
+        path: virtualPath,
+        size: size,
+        ext: ext,
+        opened: false,
+        needsOpener: false,
+        message: base,
+      );
+    }
     final tempDir =
         Directory('${Directory.systemTemp.path}/dataset-inspector/huggingface');
     await tempDir.create(recursive: true);
+    final uniqueSuffix = DateTime.now().microsecondsSinceEpoch;
     final baseName =
-        _sanitize('$dataset-$configValue-$splitValue-r$rowIndex-$field');
+        _sanitize('$dataset-$configValue-$splitValue-r$rowIndex-$field-$uniqueSuffix');
     final out = File('${tempDir.path}/$baseName.$ext');
     await out.writeAsBytes(bytes, flush: true);
 
+    final localBase = '${out.path} ($size bytes)';
     final result = await _openWith.openFile(out.path, appPath: openerAppPath);
-    final base = '${out.path} ($size bytes)';
     final needsOpener = !result.opened && result.error != null;
-    var message = base;
+    var message = localBase;
     if (needsOpener) {
-      message = '$base · no default app found, choose an app to open it';
+      message = '$localBase · no default app found, choose an app to open it';
     }
     return OpenLeafResponse(
       path: out.path,
@@ -429,14 +487,30 @@ class HuggingfaceService {
       if (err.isCanonicalCandidate) {
         final canonical = await _resolveCanonicalDatasetId(dataset, token);
         if (canonical != null && canonical != dataset) {
-          body = await _getJson(
-              url.replace(queryParameters: {'dataset': canonical}), token);
-          dataset = canonical;
+          try {
+            body = await _getJson(
+                url.replace(queryParameters: {'dataset': canonical}), token);
+            dataset = canonical;
+          } on _HfException catch (canonicalErr) {
+            AppLogger.warn(
+              'Canonical splits lookup failed, fallback to hub metadata: ${canonicalErr.message}',
+              tag: 'hf',
+            );
+            return _getSplitsViaHubMetadata(canonical, token);
+          }
         } else {
-          rethrow;
+          AppLogger.warn(
+            'Splits API failed, fallback to hub metadata: ${err.message}',
+            tag: 'hf',
+          );
+          return _getSplitsViaHubMetadata(dataset, token);
         }
       } else {
-        rethrow;
+        AppLogger.warn(
+          'Splits API failed, fallback to hub metadata: ${err.message}',
+          tag: 'hf',
+        );
+        return _getSplitsViaHubMetadata(dataset, token);
       }
     }
 
@@ -469,6 +543,20 @@ class HuggingfaceService {
     );
   }
 
+  Future<(String, Map<String, List<String>>)> _getSplitsViaHubMetadata(
+      String dataset, String? token) async {
+    final configSplitPaths = await _getHubConfigSplitDataFiles(dataset, token);
+    final configs = <String, List<String>>{};
+    for (final entry in configSplitPaths.entries) {
+      if (entry.value.isEmpty) continue;
+      configs[entry.key] = entry.value.keys.toList(growable: false);
+    }
+    if (configs.isEmpty) {
+      throw FormatException('No supported splits found for dataset $dataset.');
+    }
+    return (dataset, configs);
+  }
+
   Future<_RowsResponse> _getRows(
     String dataset,
     String config,
@@ -480,9 +568,116 @@ class HuggingfaceService {
     int? maxFeatureCount,
     bool useStreamingApi = false,
   }) async {
+    final splitKey = _splitCacheKey(dataset, config, split);
+    final configKey = _configCacheKey(dataset, config);
+    final parquetUnavailable =
+        _isTemporarilyUnavailable(_parquetUnavailableUntil, splitKey) ||
+            _isTemporarilyUnavailable(_parquetConfigUnavailableUntil, configKey);
+    final rowsUnavailable =
+        _isTemporarilyUnavailable(_rowsUnavailableUntil, splitKey) ||
+            _isTemporarilyUnavailable(_rowsConfigUnavailableUntil, configKey);
+    final firstRowsUnavailable =
+        _isTemporarilyUnavailable(_firstRowsUnavailableUntil, splitKey) ||
+            _isTemporarilyUnavailable(
+                _firstRowsConfigUnavailableUntil, configKey);
+
     if (useStreamingApi) {
+      if (!rowsUnavailable) {
+        try {
+          final rowsResp = await _getRowsViaRowsApi(
+            dataset,
+            config,
+            split,
+            offset,
+            length,
+            token,
+            featureOffset: featureOffset,
+            maxFeatureCount: maxFeatureCount,
+          );
+          _clearUnavailable(_rowsUnavailableUntil, splitKey);
+          _clearUnavailable(_rowsConfigUnavailableUntil, configKey);
+          return rowsResp;
+        } catch (err) {
+          if (_isServerGenerationFailure(err)) {
+            _markTemporarilyUnavailable(_rowsUnavailableUntil, splitKey);
+            _markTemporarilyUnavailable(_rowsConfigUnavailableUntil, configKey);
+          }
+          AppLogger.warn('HF rows API failed, fallback to Parquet: $err',
+              tag: 'hf');
+        }
+      }
+      if (!parquetUnavailable) {
+        try {
+          final rowsResp = await _getRowsViaParquet(
+            dataset,
+            config,
+            split,
+            offset,
+            length,
+            token,
+            featureOffset: featureOffset,
+            maxFeatureCount: maxFeatureCount,
+          );
+          _clearUnavailable(_parquetUnavailableUntil, splitKey);
+          _clearUnavailable(_parquetConfigUnavailableUntil, configKey);
+          return rowsResp;
+        } catch (err) {
+          if (_isServerGenerationFailure(err)) {
+            _markTemporarilyUnavailable(_parquetUnavailableUntil, splitKey);
+            _markTemporarilyUnavailable(
+                _parquetConfigUnavailableUntil, configKey);
+          }
+          AppLogger.warn(
+            'HF parquet fallback failed, fallback to Hub files: $err',
+            tag: 'hf',
+          );
+        }
+      }
+      if (!firstRowsUnavailable) {
+        try {
+          final rowsResp = await _getRowsViaFirstRowsApi(
+            dataset,
+            config,
+            split,
+            offset,
+            length,
+            token,
+            featureOffset: featureOffset,
+            maxFeatureCount: maxFeatureCount,
+          );
+          _clearUnavailable(_firstRowsUnavailableUntil, splitKey);
+          _clearUnavailable(_firstRowsConfigUnavailableUntil, configKey);
+          return rowsResp;
+        } catch (err) {
+          if (_isServerGenerationFailure(err)) {
+            _markTemporarilyUnavailable(_firstRowsUnavailableUntil, splitKey);
+            _markTemporarilyUnavailable(
+                _firstRowsConfigUnavailableUntil, configKey);
+          } else if (_isFirstRowsWindowExhausted(err)) {
+            _markTemporarilyUnavailable(_firstRowsUnavailableUntil, splitKey);
+          }
+          AppLogger.warn(
+            'HF first-rows API failed, fallback to Hub files: $err',
+            tag: 'hf',
+          );
+        }
+      }
+      return _getRowsViaHubDataFiles(
+        dataset,
+        config,
+        split,
+        offset,
+        length,
+        token,
+        featureOffset: featureOffset,
+        maxFeatureCount: maxFeatureCount,
+      );
+    }
+
+    // Default path: prefer Parquet for stable access, but fallback to rows API.
+    if (!parquetUnavailable) {
       try {
-        return await _getRowsViaRowsApi(
+        final rowsResp = await _getRowsViaParquet(
           dataset,
           config,
           split,
@@ -492,19 +687,76 @@ class HuggingfaceService {
           featureOffset: featureOffset,
           maxFeatureCount: maxFeatureCount,
         );
-      } on _HfException catch (err) {
+        _clearUnavailable(_parquetUnavailableUntil, splitKey);
+        _clearUnavailable(_parquetConfigUnavailableUntil, configKey);
+        return rowsResp;
+      } catch (err) {
+        if (_isServerGenerationFailure(err)) {
+          _markTemporarilyUnavailable(_parquetUnavailableUntil, splitKey);
+          _markTemporarilyUnavailable(_parquetConfigUnavailableUntil, configKey);
+        }
         AppLogger.warn(
-          'HF rows API failed, fallback to Parquet: ${err.message}',
+          'HF parquet API failed, fallback to rows API: $err',
           tag: 'hf',
         );
-      } catch (err) {
-        AppLogger.warn('HF rows API failed, fallback to Parquet: $err',
-            tag: 'hf');
       }
     }
-
-    // Fallback to parquet streaming for stable access.
-    return _getRowsViaParquet(
+    if (!rowsUnavailable) {
+      try {
+        final rowsResp = await _getRowsViaRowsApi(
+          dataset,
+          config,
+          split,
+          offset,
+          length,
+          token,
+          featureOffset: featureOffset,
+          maxFeatureCount: maxFeatureCount,
+        );
+        _clearUnavailable(_rowsUnavailableUntil, splitKey);
+        _clearUnavailable(_rowsConfigUnavailableUntil, configKey);
+        return rowsResp;
+      } catch (err) {
+        if (_isServerGenerationFailure(err)) {
+          _markTemporarilyUnavailable(_rowsUnavailableUntil, splitKey);
+          _markTemporarilyUnavailable(_rowsConfigUnavailableUntil, configKey);
+        }
+        AppLogger.warn(
+          'HF rows API failed, fallback to Hub files: $err',
+          tag: 'hf',
+        );
+      }
+    }
+    if (!firstRowsUnavailable) {
+      try {
+        final rowsResp = await _getRowsViaFirstRowsApi(
+          dataset,
+          config,
+          split,
+          offset,
+          length,
+          token,
+          featureOffset: featureOffset,
+          maxFeatureCount: maxFeatureCount,
+        );
+        _clearUnavailable(_firstRowsUnavailableUntil, splitKey);
+        _clearUnavailable(_firstRowsConfigUnavailableUntil, configKey);
+        return rowsResp;
+      } catch (err) {
+        if (_isServerGenerationFailure(err)) {
+          _markTemporarilyUnavailable(_firstRowsUnavailableUntil, splitKey);
+          _markTemporarilyUnavailable(
+              _firstRowsConfigUnavailableUntil, configKey);
+        } else if (_isFirstRowsWindowExhausted(err)) {
+          _markTemporarilyUnavailable(_firstRowsUnavailableUntil, splitKey);
+        }
+        AppLogger.warn(
+          'HF first-rows API failed, fallback to Hub files: $err',
+          tag: 'hf',
+        );
+      }
+    }
+    return _getRowsViaHubDataFiles(
       dataset,
       config,
       split,
@@ -661,6 +913,341 @@ class HuggingfaceService {
     );
   }
 
+  Future<_RowsResponse> _getRowsViaFirstRowsApi(
+    String dataset,
+    String config,
+    String split,
+    int offset,
+    int length,
+    String? token, {
+    int? featureOffset,
+    int? maxFeatureCount,
+  }) async {
+    final splitKey = _splitCacheKey(dataset, config, split);
+    var payload = _firstRowsCache[splitKey];
+    if (payload == null) {
+      final url = Uri.parse(_datasetsServerBase).replace(
+        path: 'first-rows',
+        queryParameters: {
+          'dataset': dataset,
+          'config': config,
+          'split': split,
+        },
+      );
+      final body = await _getJson(url, token);
+      final rowsPayload = body['rows'] as List<dynamic>? ?? const <dynamic>[];
+      final rows = <Map<String, dynamic>>[];
+      for (final entry in rowsPayload) {
+        if (entry is Map) {
+          final rowValue = entry['row'];
+          if (rowValue is Map) {
+            rows.add(Map<String, dynamic>.from(
+              rowValue.map((key, value) => MapEntry(key.toString(), value)),
+            ));
+          }
+        }
+      }
+      final featuresPayload =
+          body['features'] as List<dynamic>? ?? const <dynamic>[];
+      final features = <HfFeature>[];
+      for (final entry in featuresPayload) {
+        if (entry is Map<String, dynamic>) {
+          final name = entry['name']?.toString();
+          if (name == null || name.isEmpty) continue;
+          final rawType = entry['type'] ?? entry['dtype'] ?? entry['_type'];
+          features.add(HfFeature(
+            name: name,
+            dtype: rawType?.toString(),
+            rawType: rawType,
+          ));
+        }
+      }
+      payload = _FirstRowsPayload(
+        features: features,
+        rows: rows,
+        truncated: body['truncated'] == true,
+      );
+      _firstRowsCache[splitKey] = payload;
+    }
+
+    final available = payload.rows.length;
+    if (offset >= available && payload.truncated) {
+      throw _HfException(
+        'first-rows window exhausted for $dataset/$config/$split',
+      );
+    }
+
+    final start = offset.clamp(0, available).toInt();
+    if (payload.truncated && start + length > available) {
+      throw _HfException(
+        'first-rows window exhausted for $dataset/$config/$split',
+      );
+    }
+    final end = (start + length).clamp(start, available).toInt();
+    final rows = start >= end
+        ? const <Map<String, dynamic>>[]
+        : List<Map<String, dynamic>>.from(payload.rows.sublist(start, end));
+
+    final allFeatures = payload.features;
+    final featureStart =
+        featureOffset != null && featureOffset > 0 ? featureOffset : 0;
+    final featureTake = maxFeatureCount != null && maxFeatureCount > 0
+        ? maxFeatureCount
+        : allFeatures.length;
+    final featureEnd =
+        (featureStart + featureTake).clamp(0, allFeatures.length);
+    final features = featureStart >= featureEnd
+        ? const <HfFeature>[]
+        : allFeatures.sublist(featureStart, featureEnd);
+    final knownTotal = payload.truncated ? 0 : available;
+    final partial =
+        payload.truncated || (knownTotal > 0 && end < knownTotal);
+
+    return _RowsResponse(
+      features: features,
+      rows: rows,
+      numRowsTotal: knownTotal,
+      partial: partial,
+      featureOffset: featureOffset ?? 0,
+      featureCount: features.length,
+      totalFeatureCount: allFeatures.length,
+    );
+  }
+
+  Future<_RowsResponse> _getRowsViaHubDataFiles(
+    String dataset,
+    String config,
+    String split,
+    int offset,
+    int length,
+    String? token, {
+    int? featureOffset,
+    int? maxFeatureCount,
+  }) async {
+    AppLogger.info(
+      'Fallback to Hub files for $dataset/$config/$split (offset=$offset length=$length)',
+      tag: 'hf',
+    );
+    final configSplitPaths = await _getHubConfigSplitDataFiles(dataset, token);
+    final splitPaths = configSplitPaths[config]?[split];
+    if (splitPaths == null || splitPaths.isEmpty) {
+      throw _HfException(
+        'No hub data files found for $dataset/$config/$split',
+        isNotFound: true,
+      );
+    }
+
+    final parquetPaths = <String>[];
+    final jsonlPaths = <String>[];
+    for (final path in splitPaths) {
+      final ext = _pathExt(path);
+      if (ext == 'parquet') {
+        parquetPaths.add(path);
+        continue;
+      }
+      if (ext == 'jsonl' || ext == 'ndjson') {
+        jsonlPaths.add(path);
+      }
+    }
+
+    if (parquetPaths.isNotEmpty) {
+      final parquetUrls = parquetPaths
+          .map((path) => _buildHubResolveUri(dataset, path).toString())
+          .toList(growable: false);
+      final result = await _getDuckDb.readParquetFilesRows(
+        urls: parquetUrls,
+        offset: offset,
+        length: length,
+        token: token,
+        knownTotalRows: null,
+        featureOffset: featureOffset,
+        maxFeatureCount: maxFeatureCount,
+      );
+      return _RowsResponse(
+        features: result.features,
+        rows: result.rows,
+        numRowsTotal: result.totalRows,
+        partial: result.partial,
+        featureOffset: result.featureOffset,
+        featureCount: result.featureCount,
+        totalFeatureCount: result.totalFeatureCount,
+      );
+    }
+
+    if (jsonlPaths.isNotEmpty) {
+      final splitKey = _splitCacheKey(dataset, config, split);
+      final rows = await _readRowsFromHubJsonlFiles(
+        splitKey: splitKey,
+        dataset: dataset,
+        paths: jsonlPaths,
+        offset: offset,
+        length: length,
+        token: token,
+      );
+      final cachedRows = _hubJsonlRowsCache[splitKey] ?? const [];
+      final isComplete = _hubJsonlRowsComplete.contains(splitKey);
+      final parsedFeatures = _parseRowsApiFeatures(
+        const <dynamic>[],
+        rows,
+        featureOffset: featureOffset,
+        maxFeatureCount: maxFeatureCount,
+      );
+      final totalFeatureCount = cachedRows.isNotEmpty
+          ? cachedRows.first.length
+          : (rows.isNotEmpty ? rows.first.length : parsedFeatures.length);
+      final knownTotalRows = isComplete ? cachedRows.length : 0;
+      final partial = isComplete
+          ? (offset + rows.length) < knownTotalRows
+          : (length > 0 && rows.length >= length);
+      return _RowsResponse(
+        features: parsedFeatures,
+        rows: rows,
+        numRowsTotal: knownTotalRows,
+        partial: partial,
+        featureOffset: featureOffset ?? 0,
+        featureCount: parsedFeatures.length,
+        totalFeatureCount: totalFeatureCount,
+      );
+    }
+
+    throw _HfException(
+      'Hub fallback supports parquet/jsonl/ndjson only for now.',
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> _readRowsFromHubJsonlFiles({
+    required String splitKey,
+    required String dataset,
+    required List<String> paths,
+    required int offset,
+    required int length,
+    required String? token,
+  }) async {
+    final cachedRows = _hubJsonlRowsCache[splitKey];
+    final needed = offset + length;
+    if (cachedRows != null && cachedRows.length >= needed) {
+      return _sliceRows(cachedRows, offset, length);
+    }
+    if (_hubJsonlRowsComplete.contains(splitKey)) {
+      return _sliceRows(cachedRows ?? const [], offset, length);
+    }
+
+    final targetRows = offset +
+        (length > _hubJsonlReadAheadMinRows
+            ? length
+            : _hubJsonlReadAheadMinRows);
+    await _ensureHubJsonlRows(
+      splitKey: splitKey,
+      dataset: dataset,
+      paths: paths,
+      token: token,
+      targetRows: targetRows,
+    );
+    return _sliceRows(_hubJsonlRowsCache[splitKey] ?? const [], offset, length);
+  }
+
+  Future<void> _ensureHubJsonlRows({
+    required String splitKey,
+    required String dataset,
+    required List<String> paths,
+    required String? token,
+    required int targetRows,
+  }) async {
+    while (true) {
+      if (_hubJsonlRowsComplete.contains(splitKey)) return;
+      final current = _hubJsonlRowsCache[splitKey]?.length ?? 0;
+      if (current >= targetRows) return;
+
+      final inFlight = _hubJsonlReadInFlight[splitKey];
+      if (inFlight != null) {
+        await inFlight;
+        continue;
+      }
+
+      final future = _fetchHubJsonlRowsToTarget(
+        splitKey: splitKey,
+        dataset: dataset,
+        paths: paths,
+        token: token,
+        targetRows: targetRows,
+      );
+      _hubJsonlReadInFlight[splitKey] = future;
+      try {
+        await future;
+      } finally {
+        _hubJsonlReadInFlight.remove(splitKey);
+      }
+    }
+  }
+
+  Future<void> _fetchHubJsonlRowsToTarget({
+    required String splitKey,
+    required String dataset,
+    required List<String> paths,
+    required String? token,
+    required int targetRows,
+  }) async {
+    final existing = _hubJsonlRowsCache[splitKey] == null
+        ? <Map<String, dynamic>>[]
+        : List<Map<String, dynamic>>.from(_hubJsonlRowsCache[splitKey]!);
+    final existingCount = existing.length;
+    var validRowIndex = 0;
+    var reachedTarget = false;
+
+    for (final path in paths) {
+      if (reachedTarget) break;
+      final url = _buildHubResolveUri(dataset, path);
+      final request = http.Request('GET', url);
+      if (token != null && token.isNotEmpty) {
+        request.headers[HttpHeaders.authorizationHeader] = 'Bearer $token';
+      }
+      AppLogger.info('GET $url (hub stream)', tag: 'hf-http');
+      final response = await _httpLimiter.run(
+        () => _client.send(request),
+      );
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        final body = await response.stream.bytesToString();
+        throw _HfException(
+          'HTTP ${response.statusCode} from $url: ${body.trim().isEmpty ? 'failed to stream hub data file' : body.trim()}',
+        );
+      }
+      final lines =
+          response.stream.transform(utf8.decoder).transform(const LineSplitter());
+      await for (final line in lines) {
+        final trimmed = line.trim();
+        if (trimmed.isEmpty) continue;
+        dynamic value;
+        try {
+          value = jsonDecode(trimmed);
+        } catch (_) {
+          continue;
+        }
+        validRowIndex += 1;
+        if (validRowIndex <= existingCount) {
+          continue;
+        }
+        if (value is Map) {
+          existing.add(
+            Map<String, dynamic>.from(
+              value.map((key, val) => MapEntry(key.toString(), val)),
+            ),
+          );
+        } else {
+          existing.add(<String, dynamic>{'value': value});
+        }
+        if (existing.length >= targetRows) {
+          reachedTarget = true;
+          break;
+        }
+      }
+    }
+
+    _hubJsonlRowsCache[splitKey] = existing;
+    if (!reachedTarget) {
+      _hubJsonlRowsComplete.add(splitKey);
+    }
+  }
+
   List<HfFeature> _parseRowsApiFeatures(
     dynamic rawFeatures,
     List<Map<String, dynamic>> rows, {
@@ -720,13 +1307,248 @@ class HuggingfaceService {
     return null;
   }
 
+  String _splitCacheKey(String dataset, String config, String split) {
+    return '$dataset/$config/$split';
+  }
+
+  String _configCacheKey(String dataset, String config) {
+    return '$dataset/$config';
+  }
+
+  bool _isTemporarilyUnavailable(
+      Map<String, DateTime> cache, String splitKey) {
+    final expires = cache[splitKey];
+    if (expires == null) return false;
+    if (DateTime.now().isBefore(expires)) return true;
+    cache.remove(splitKey);
+    return false;
+  }
+
+  void _markTemporarilyUnavailable(
+      Map<String, DateTime> cache, String splitKey) {
+    cache[splitKey] = DateTime.now().add(_datasetsServerFailureTtl);
+  }
+
+  void _clearUnavailable(Map<String, DateTime> cache, String splitKey) {
+    cache.remove(splitKey);
+  }
+
+  bool _isServerGenerationFailure(Object err) {
+    if (err is HfParquetException) {
+      final status = err.statusCode ?? 0;
+      if (status >= 500) return true;
+      final message = (err.serverError ?? err.message).toLowerCase();
+      return message.contains('dataset generation failed');
+    }
+    if (err is _HfException) {
+      final message = err.message.toLowerCase();
+      return message.contains('dataset generation failed') ||
+          message.contains('http 5');
+    }
+    return false;
+  }
+
+  bool _isFirstRowsWindowExhausted(Object err) {
+    if (err is _HfException) {
+      return err.message.toLowerCase().contains('first-rows window exhausted');
+    }
+    return false;
+  }
+
+  List<Map<String, dynamic>> _sliceRows(
+      List<Map<String, dynamic>> rows, int offset, int length) {
+    if (offset < 0 || length <= 0) return const <Map<String, dynamic>>[];
+    if (offset >= rows.length) return const <Map<String, dynamic>>[];
+    final end = (offset + length).clamp(offset, rows.length);
+    return List<Map<String, dynamic>>.from(rows.sublist(offset, end));
+  }
+
+  Future<Map<String, Map<String, List<String>>>> _getHubConfigSplitDataFiles(
+      String dataset, String? token) async {
+    final cached = _hubDataFilesCache[dataset];
+    if (cached != null) return cached;
+
+    final inFlight = _hubDataFilesInFlight[dataset];
+    if (inFlight != null) {
+      return inFlight;
+    }
+
+    final future = _fetchHubConfigSplitDataFiles(dataset, token);
+    _hubDataFilesInFlight[dataset] = future;
+    try {
+      final parsed = await future;
+      _hubDataFilesCache[dataset] = parsed;
+      return parsed;
+    } finally {
+      _hubDataFilesInFlight.remove(dataset);
+    }
+  }
+
+  Future<Map<String, Map<String, List<String>>>> _fetchHubConfigSplitDataFiles(
+      String dataset, String? token) async {
+    final url = Uri.parse('https://huggingface.co/api/datasets/$dataset');
+    final headers = <String, String>{};
+    if (token != null && token.isNotEmpty) {
+      headers[HttpHeaders.authorizationHeader] = 'Bearer $token';
+    }
+    AppLogger.info('GET $url', tag: 'hf-http');
+    final response = await _httpLimiter.run(
+      () => _client.get(url, headers: headers),
+    );
+    final status = response.statusCode;
+    final text = response.body;
+    AppLogger.info('GET $url -> $status (${text.length} bytes)',
+        tag: 'hf-http');
+    if (status < 200 || status >= 300) {
+      throw _HfException('HTTP $status from $url');
+    }
+
+    Map<String, dynamic> body;
+    try {
+      body = jsonDecode(text) as Map<String, dynamic>;
+    } catch (err) {
+      throw _HfException('Invalid JSON from $url: $err');
+    }
+
+    final parsed = _extractHubConfigSplitDataFiles(body);
+    if (parsed.isEmpty) {
+      throw _HfException(
+        'Hub metadata has no usable cardData.data_files for dataset $dataset',
+      );
+    }
+    return parsed;
+  }
+
+  Map<String, Map<String, List<String>>> _extractHubConfigSplitDataFiles(
+      Map<String, dynamic> body) {
+    final result = <String, Map<String, List<String>>>{};
+    final cardData = body['cardData'];
+    if (cardData is! Map) return result;
+    final card = Map<String, dynamic>.from(
+      cardData.map((key, value) => MapEntry(key.toString(), value)),
+    );
+
+    final configs = card['configs'];
+    if (configs is List) {
+      for (final entry in configs) {
+        if (entry is! Map) continue;
+        final configMap = Map<String, dynamic>.from(
+          entry.map((key, value) => MapEntry(key.toString(), value)),
+        );
+        final rawConfig = configMap['config_name']?.toString().trim();
+        final config =
+            (rawConfig == null || rawConfig.isEmpty) ? 'default' : rawConfig;
+        final splitMap =
+            result.putIfAbsent(config, () => <String, List<String>>{});
+        _collectHubDataFiles(splitMap, configMap['data_files']);
+      }
+    }
+
+    if (result.isEmpty) {
+      final splitMap = <String, List<String>>{};
+      _collectHubDataFiles(splitMap, card['data_files']);
+      if (splitMap.isNotEmpty) {
+        result['default'] = splitMap;
+      }
+    }
+
+    return result;
+  }
+
+  void _collectHubDataFiles(Map<String, List<String>> splitMap, dynamic value) {
+    if (value is List) {
+      for (final entry in value) {
+        if (entry is String) {
+          _addHubDataFilePath(splitMap, 'train', entry);
+          continue;
+        }
+        if (entry is Map) {
+          final map = Map<String, dynamic>.from(
+            entry.map((key, val) => MapEntry(key.toString(), val)),
+          );
+          final rawSplit = map['split']?.toString().trim();
+          final split =
+              (rawSplit == null || rawSplit.isEmpty) ? 'train' : rawSplit;
+          final rawPath = map['path'] ?? map['paths'] ?? map['files'];
+          _collectHubDataFilePaths(splitMap, split, rawPath);
+        }
+      }
+      return;
+    }
+
+    if (value is Map) {
+      for (final entry in value.entries) {
+        final rawSplit = entry.key.toString().trim();
+        final split = rawSplit.isEmpty ? 'train' : rawSplit;
+        _collectHubDataFilePaths(splitMap, split, entry.value);
+      }
+    }
+  }
+
+  void _collectHubDataFilePaths(
+    Map<String, List<String>> splitMap,
+    String split,
+    dynamic value,
+  ) {
+    if (value is String) {
+      _addHubDataFilePath(splitMap, split, value);
+      return;
+    }
+    if (value is List) {
+      for (final entry in value) {
+        if (entry is String) {
+          _addHubDataFilePath(splitMap, split, entry);
+        }
+      }
+    }
+  }
+
+  void _addHubDataFilePath(
+      Map<String, List<String>> splitMap, String split, String rawPath) {
+    final path = rawPath.trim();
+    if (path.isEmpty) return;
+    final paths = splitMap.putIfAbsent(split, () => <String>[]);
+    if (!paths.contains(path)) {
+      paths.add(path);
+    }
+  }
+
+  String _pathExt(String path) {
+    final slash = path.lastIndexOf('/');
+    final fileName = slash >= 0 ? path.substring(slash + 1) : path;
+    final dot = fileName.lastIndexOf('.');
+    if (dot < 0) return '';
+    return fileName.substring(dot + 1).toLowerCase();
+  }
+
+  Uri _buildHubResolveUri(String dataset, String path) {
+    final datasetSegments =
+        dataset.split('/').where((segment) => segment.isNotEmpty).toList();
+    final pathSegments =
+        path.split('/').where((segment) => segment.isNotEmpty).toList();
+    return Uri(
+      scheme: 'https',
+      host: 'huggingface.co',
+      pathSegments: <String>[
+        'datasets',
+        ...datasetSegments,
+        'resolve',
+        'main',
+        ...pathSegments,
+      ],
+      queryParameters: const <String, String>{'download': 'true'},
+    );
+  }
+
   Future<Map<String, dynamic>> _getJson(Uri url, String? token) async {
     final headers = <String, String>{};
     if (token != null && token.isNotEmpty) {
       headers[HttpHeaders.authorizationHeader] = 'Bearer $token';
     }
     AppLogger.info('GET $url', tag: 'hf-http');
-    final response = await _client.get(url, headers: headers);
+    final response = await _httpLimiter.run(
+      () => _client.get(url, headers: headers),
+    );
     final status = response.statusCode;
     final text = response.body;
     AppLogger.info('GET $url -> $status (${text.length} bytes)',
@@ -858,7 +1680,9 @@ class HuggingfaceService {
     if (token != null && token.isNotEmpty) {
       headers[HttpHeaders.authorizationHeader] = 'Bearer $token';
     }
-    final response = await _client.get(base, headers: headers);
+    final response = await _httpLimiter.run(
+      () => _client.get(base, headers: headers),
+    );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       return null;
     }
@@ -951,7 +1775,9 @@ class HuggingfaceService {
       headers[HttpHeaders.authorizationHeader] = 'Bearer $token';
     }
     AppLogger.info('GET $url (asset)', tag: 'hf-http');
-    final res = await _client.get(url, headers: headers);
+    final res = await _httpLimiter.run(
+      () => _client.get(url, headers: headers),
+    );
     AppLogger.info(
         'GET $url -> ${res.statusCode} (${res.bodyBytes.length} bytes)',
         tag: 'hf-http');
@@ -1044,6 +1870,47 @@ class _RowsResponse {
   final int featureOffset;
   final int featureCount;
   final int totalFeatureCount;
+}
+
+class _HttpRequestLimiter {
+  _HttpRequestLimiter({required int maxConcurrent})
+      : _maxConcurrent = maxConcurrent <= 0 ? 1 : maxConcurrent;
+
+  final int _maxConcurrent;
+  int _active = 0;
+  final Queue<Completer<void>> _waiters = Queue<Completer<void>>();
+
+  Future<T> run<T>(Future<T> Function() task) async {
+    if (_active >= _maxConcurrent) {
+      final waiter = Completer<void>();
+      _waiters.add(waiter);
+      await waiter.future;
+    }
+    _active += 1;
+    try {
+      return await task();
+    } finally {
+      _active -= 1;
+      if (_waiters.isNotEmpty) {
+        final waiter = _waiters.removeFirst();
+        if (!waiter.isCompleted) {
+          waiter.complete();
+        }
+      }
+    }
+  }
+}
+
+class _FirstRowsPayload {
+  _FirstRowsPayload({
+    required this.features,
+    required this.rows,
+    required this.truncated,
+  });
+
+  final List<HfFeature> features;
+  final List<Map<String, dynamic>> rows;
+  final bool truncated;
 }
 
 class _Asset {
